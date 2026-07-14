@@ -1,0 +1,138 @@
+schema_version: '1.0'
+world_id: fragile-small-cap-lab-liquidity_withdrawal
+seed: 42
+clock:
+  start: '2026-01-05T14:30:00Z'
+  end: '2026-01-05T15:30:00Z'
+  step_seconds: 30
+  step_or_event_mode: step
+macro:
+  growth_regime: trend
+  rate_shock_bps: 0
+  volatility_regime: elevated
+  risk_aversion: 1.35
+  common_factor_strength: 0.45
+assets:
+- ticker: NOVA
+  company_name: Novara Systems
+  sector: Software
+  initial_price_ticks: 10000
+  shares_outstanding: 48000000
+  initial_fundamental_value_ticks: 10100
+  macro_beta: 1.25
+  idiosyncratic_volatility: 0.0028
+  liquidity_profile: thin
+  event_sensitivity: 1.25
+  mean_reversion: 0.02
+- ticker: ORBT
+  company_name: Orbiton Industrial
+  sector: Industrials
+  initial_price_ticks: 7500
+  shares_outstanding: 72000000
+  initial_fundamental_value_ticks: 7480
+  macro_beta: 0.75
+  idiosyncratic_volatility: 0.0018
+  liquidity_profile: normal
+  event_sensitivity: 1.0
+  mean_reversion: 0.02
+- ticker: VYNE
+  company_name: Veyna Therapeutics
+  sector: Biotechnology
+  initial_price_ticks: 12500
+  shares_outstanding: 31000000
+  initial_fundamental_value_ticks: 12300
+  macro_beta: 1.1
+  idiosyncratic_volatility: 0.0035
+  liquidity_profile: thin
+  event_sensitivity: 1.5
+  mean_reversion: 0.02
+exchange:
+  mechanism: continuous_double_auction
+  price_time_priority: true
+  tick_size_cents: 1
+  lot_size: 1
+  maker_fee_bps: -0.1
+  taker_fee_bps: 0.3
+  latency_profile: normal
+  circuit_breaker_pct: 12.0
+  halt_steps: 4
+  book_depth_levels: 5
+  baseline_depth: 500
+agents:
+  populations:
+  - type: market_maker
+    count: 3
+    capital_cents: 500000000
+    latency_ms: 2
+    risk_limit_shares: 80000
+    parameters:
+      spread_ticks: 4
+      levels: 5
+      inventory_skew: 0.002
+  - type: fundamental
+    count: 6
+    capital_cents: 120000000
+    latency_ms: 20
+    risk_limit_shares: 25000
+    parameters: {}
+  - type: momentum
+    count: 5
+    capital_cents: 90000000
+    latency_ms: 12
+    risk_limit_shares: 20000
+    parameters:
+      lookback: 4
+      crowding: 1.0
+  - type: mean_reversion
+    count: 4
+    capital_cents: 80000000
+    latency_ms: 25
+    risk_limit_shares: 18000
+    parameters: {}
+  - type: noise
+    count: 18
+    capital_cents: 30000000
+    latency_ms: 40
+    risk_limit_shares: 6000
+    parameters: {}
+  - type: forced_liquidator
+    count: 1
+    capital_cents: 100000000
+    latency_ms: 8
+    risk_limit_shares: 150000
+    parameters:
+      start_step: 62
+      total_quantity: 12000
+  - type: execution
+    count: 1
+    capital_cents: 800000000
+    latency_ms: 5
+    risk_limit_shares: 250000
+    parameters: {}
+events:
+- event_id: market-liquidity-withdrawal
+  simulation_step: 45
+  scope: market
+  asset: null
+  type: liquidity_withdrawal
+  public_or_private: public
+  fundamental_effect_pct: 0.0
+  liquidity_effect: 0.35
+  narrative: Synthetic market makers reduce displayed size after a risk-limit shock.
+experiment:
+  strategy: twap
+  parent_order:
+    side: buy
+    quantity: 6000
+    limit_price_ticks: null
+  participation_rate: 0.08
+  urgency: 0.5
+  latency_ms: 5
+  target_asset: NOVA
+  counterfactual_mutations:
+  - normal
+  - liquidity_withdrawal
+  - earnings_shock
+  - crowded_unwind
+  repetitions: 2
+

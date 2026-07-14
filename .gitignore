@@ -1,6 +1,10 @@
 .venv/
 __pycache__/
 .pytest_cache/
+*.egg-info/
 *.py[cod]
 .DS_Store
 
+# Experiment outputs are reproducible and can be large. Keep the directory contract only.
+artifacts/*
+!artifacts/README.md

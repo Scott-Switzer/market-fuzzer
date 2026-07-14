@@ -44,13 +44,18 @@ class Exchange:
 
     def cancel(self, request: CancelRequest, symbol: str) -> None:
         order = self.books[symbol].cancel(request.order_id, request.agent_id)
-        self.cancel_log.append({"order_id": order.order_id, "agent_id": request.agent_id, "step": request.submitted_step})
+        self.cancel_log.append(
+            {"order_id": order.order_id, "agent_id": request.agent_id, "step": request.submitted_step}
+        )
 
     def _settle(self, trade: Trade) -> Trade:
         buyer, seller = self.accounts[trade.buyer_id], self.accounts[trade.seller_id]
         notional = trade.price_ticks * self.spec.tick_size_cents * trade.quantity
         maker_id = self.books[trade.symbol].seen_ids and trade.maker_order_id
-        maker_agent = next((row["agent_id"] for row in reversed(self.order_log) if row["order_id"] == maker_id), trade.seller_id)
+        maker_agent = next(
+            (row["agent_id"] for row in reversed(self.order_log) if row["order_id"] == maker_id),
+            trade.seller_id,
+        )
         buyer_is_maker = maker_agent == trade.buyer_id
         buyer_bps = self.spec.maker_fee_bps if buyer_is_maker else self.spec.taker_fee_bps
         seller_bps = self.spec.taker_fee_bps if buyer_is_maker else self.spec.maker_fee_bps
@@ -61,8 +66,11 @@ class Exchange:
         buyer.inventory[trade.symbol] = buyer.inventory.get(trade.symbol, 0) + trade.quantity
         seller.inventory[trade.symbol] = seller.inventory.get(trade.symbol, 0) - trade.quantity
         self.fee_account_cents += buyer_fee + seller_fee
-        return replace(trade, maker_fee_cents=round(notional * self.spec.maker_fee_bps / 10_000),
-                       taker_fee_cents=round(notional * self.spec.taker_fee_bps / 10_000))
+        return replace(
+            trade,
+            maker_fee_cents=round(notional * self.spec.maker_fee_bps / 10_000),
+            taker_fee_cents=round(notional * self.spec.taker_fee_bps / 10_000),
+        )
 
     def total_cash_cents(self) -> int:
         return sum(account.cash_cents for account in self.accounts.values()) + self.fee_account_cents

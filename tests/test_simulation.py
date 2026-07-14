@@ -29,7 +29,9 @@ def test_scenario_mutations_use_common_seed_and_produce_expected_effects():
     before = thin_result.timeline[30]["asset_states"]["NOVA"]["ask_depth"]
     after = thin_result.timeline[80]["asset_states"]["NOVA"]["ask_depth"]
     assert after < before
-    forced_sales = [trade for trade in stressed_result.trades if trade["seller_id"].startswith("forced_liquidator")]
+    forced_sales = [
+        trade for trade in stressed_result.trades if trade["seller_id"].startswith("forced_liquidator")
+    ]
     assert forced_sales
 
 
@@ -39,6 +41,7 @@ def test_larger_order_changes_execution_outcome_in_controlled_world():
     small_data["experiment"]["parent_order"]["quantity"] = 1_000
     large_data["experiment"]["parent_order"]["quantity"] = 12_000
     from app.schemas import WorldSpec
+
     small = run_simulation(WorldSpec.model_validate(small_data))
     large = run_simulation(WorldSpec.model_validate(large_data))
     assert large.summary["filled_quantity"] > small.summary["filled_quantity"]

@@ -30,4 +30,3 @@ def test_world_rejects_non_lot_parent_quantity():
     data["experiment"]["parent_order"]["quantity"] = 101
     with pytest.raises(ValidationError, match="lot_size"):
         WorldSpec.model_validate(data)
-

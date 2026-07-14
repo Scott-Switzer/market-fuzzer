@@ -1,0 +1,6 @@
+services:
+  synthetic-market-world:
+    build: .
+    ports: ["8000:8000"]
+    environment:
+      OPENAI_MODEL: gpt-5.6

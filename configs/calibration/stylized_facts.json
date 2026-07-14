@@ -1,0 +1,12 @@
+{
+  "status": "directional prototype targets, not institutional calibration",
+  "targets": [
+    {"metric": "excess_kurtosis", "direction": "positive", "source": "Cont 2001"},
+    {"metric": "return_autocorrelation_lag_1", "direction": "near_zero", "source": "Cont 2001"},
+    {"metric": "absolute_return_autocorrelation_lag_1", "direction": "positive", "source": "Cont 2001"},
+    {"metric": "spread", "direction": "positive", "source": "ABIDES arXiv:1904.12066"},
+    {"metric": "displayed_depth", "direction": "positive", "source": "JAX-LOB arXiv:2308.13289"},
+    {"metric": "signed_flow_price_response", "direction": "concave", "source": "Bouchaud et al. 2009"},
+    {"metric": "impact_decay", "direction": "partial_reversion", "source": "MarS arXiv:2409.07486"}
+  ]
+}

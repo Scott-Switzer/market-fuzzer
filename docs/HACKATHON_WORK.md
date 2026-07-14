@@ -1,13 +1,31 @@
-# Hackathon work log
+# OpenAI Build Week work boundary
 
-This repository was initialized for OpenAI Build Week on 2026-07-14.
+Repository baseline established on 2026-07-14 in commit `577cc54` on branch `codex/build-week-synthetic-market-world`.
 
-## First MVP increment
+## Newly written during the hackathon
 
-- Original typed synthetic-world schema and deterministic prompt compiler
-- Seeded aggregate-depth execution simulation
-- Four scenario battery: normal, liquidity withdrawal, earnings shock, and crowded unwind
-- Local browser interface and deterministic replay tests
+- Strict versioned world specification, canonical serialization, and SHA-256 hashing
+- Exact integer-tick price-time-priority order book with limit, market, cancel, partial-fill, fee, accounting, latency, and halt behavior
+- Three synthetic issuers, macro factor, scheduled information events, and seven heterogeneous agent roles
+- TWAP and participation-of-volume execution behavior
+- Four common-seed counterfactual scenarios and 24-run quick experiment battery
+- JSON/YAML/Parquet artifact bundle, manifest hashes, component realism report, and evidence-gated failure surface
+- Offline compiler, optional GPT-5.6 structured compiler, CLI, FastAPI service, and browser laboratory
+- Tests, reproducibility checks, CI, Docker setup, documentation, and Devpost draft
 
-No third-party simulator source code has been copied into this repository. ABIDES, JAX-LOB, TRADES/DeepMarket, and MarS are research references for future adapter and validation work only.
+## Adapted open-source code
+
+None. No simulator code was copied, adapted, or vendored.
+
+## Architectural inspiration
+
+ABIDES, ABIDES-JPMC, JAX-LOB, DeepMarket/TRADES, and MarS were inspected at the exact revisions recorded in `THIRD_PARTY_NOTICES.md`. Their concepts informed boundaries and evaluation; the implementation is original.
+
+## Pre-existing personal work
+
+None was imported. Private financial data, FENRIX collaboration assets, MIT research assets, Bloomberg data, and unpublished work are outside this repository.
+
+## Deferred work
+
+Institutional order-flow calibration, learned responsive flow, optional ABIDES backend, accelerator/vectorized books, multiple venues, and production controls remain roadmap items.
 

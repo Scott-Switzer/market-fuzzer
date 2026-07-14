@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 import yaml
@@ -14,8 +14,8 @@ class StrictModel(BaseModel):
 
 
 class ClockSpec(StrictModel):
-    start: datetime = Field(default_factory=lambda: datetime(2026, 1, 5, 14, 30, tzinfo=timezone.utc))
-    end: datetime = Field(default_factory=lambda: datetime(2026, 1, 5, 15, 30, tzinfo=timezone.utc))
+    start: datetime = Field(default_factory=lambda: datetime(2026, 1, 5, 14, 30, tzinfo=UTC))
+    end: datetime = Field(default_factory=lambda: datetime(2026, 1, 5, 15, 30, tzinfo=UTC))
     step_seconds: int = Field(default=30, ge=1, le=300)
     step_or_event_mode: Literal["step", "event"] = "step"
 
@@ -70,8 +70,13 @@ class ExchangeSpec(StrictModel):
 
 class AgentPopulation(StrictModel):
     type: Literal[
-        "market_maker", "fundamental", "momentum", "mean_reversion", "noise",
-        "forced_liquidator", "execution",
+        "market_maker",
+        "fundamental",
+        "momentum",
+        "mean_reversion",
+        "noise",
+        "forced_liquidator",
+        "execution",
     ]
     count: int = Field(default=1, ge=1, le=500)
     capital_cents: int = Field(default=10_000_000_00, gt=0)
@@ -86,7 +91,15 @@ class AgentsSpec(StrictModel):
     @model_validator(mode="after")
     def required_types(self) -> AgentsSpec:
         present = {population.type for population in self.populations}
-        required = {"market_maker", "fundamental", "momentum", "mean_reversion", "noise", "forced_liquidator", "execution"}
+        required = {
+            "market_maker",
+            "fundamental",
+            "momentum",
+            "mean_reversion",
+            "noise",
+            "forced_liquidator",
+            "execution",
+        }
         missing = required - present
         if missing:
             raise ValueError(f"agents.populations missing required types: {sorted(missing)}")
@@ -118,9 +131,14 @@ class ExperimentSpec(StrictModel):
     urgency: float = Field(default=0.5, ge=0.0, le=1.0)
     latency_ms: int = Field(default=5, ge=0, le=10_000)
     target_asset: str
-    counterfactual_mutations: list[str] = Field(default_factory=lambda: [
-        "normal", "liquidity_withdrawal", "earnings_shock", "crowded_unwind",
-    ])
+    counterfactual_mutations: list[str] = Field(
+        default_factory=lambda: [
+            "normal",
+            "liquidity_withdrawal",
+            "earnings_shock",
+            "crowded_unwind",
+        ]
+    )
     repetitions: int = Field(default=2, ge=1, le=20)
 
 
@@ -175,5 +193,7 @@ class CompileResult(StrictModel):
 
 
 def demo_clock(steps: int = 120, step_seconds: int = 30) -> ClockSpec:
-    start = datetime(2026, 1, 5, 14, 30, tzinfo=timezone.utc)
-    return ClockSpec(start=start, end=start + timedelta(seconds=steps * step_seconds), step_seconds=step_seconds)
+    start = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    return ClockSpec(
+        start=start, end=start + timedelta(seconds=steps * step_seconds), step_seconds=step_seconds
+    )

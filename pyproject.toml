@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "synthetic-market-world"
 version = "0.1.0"
 description = "Counterfactual synthetic exchange and strategy stress-testing laboratory"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115,<1",
   "httpx>=0.27,<1",
@@ -42,9 +42,8 @@ select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 packages = ["app"]
 ignore_missing_imports = true
 warn_unused_ignores = false
 disable_error_code = ["import-untyped"]
-

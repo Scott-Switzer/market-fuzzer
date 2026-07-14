@@ -36,7 +36,9 @@ class BaseAgent:
     def market(self, context: AgentContext, side: Side, quantity: int) -> Order | None:
         if quantity <= 0:
             return None
-        return Order(self.next_id(), self.agent_id, context.symbol, side, OrderType.MARKET, quantity, context.step)
+        return Order(
+            self.next_id(), self.agent_id, context.symbol, side, OrderType.MARKET, quantity, context.step
+        )
 
     def decide(self, context: AgentContext, rng: random.Random, inventory: int) -> list[Order]:
         return []
@@ -48,16 +50,39 @@ class MarketMaker(BaseAgent):
         levels = int(self.parameters.get("levels", 5))
         skew = float(self.parameters.get("inventory_skew", 0.002))
         reservation = round(0.7 * context.mid_ticks + 0.3 * context.fundamental_ticks - inventory * skew)
-        size = max(10, int(160 * context.liquidity_multiplier * max(0.2, 1 - abs(inventory) / self.risk_limit_shares)))
+        size = max(
+            10,
+            int(160 * context.liquidity_multiplier * max(0.2, 1 - abs(inventory) / self.risk_limit_shares)),
+        )
         orders: list[Order] = []
         for level in range(1, levels + 1):
             bid = max(1, reservation - spread * level)
             ask = reservation + spread * level
             quantity = max(10, size // level)
-            orders.extend([
-                Order(self.next_id(), self.agent_id, context.symbol, Side.BUY, OrderType.LIMIT, quantity, context.step, bid),
-                Order(self.next_id(), self.agent_id, context.symbol, Side.SELL, OrderType.LIMIT, quantity, context.step, ask),
-            ])
+            orders.extend(
+                [
+                    Order(
+                        self.next_id(),
+                        self.agent_id,
+                        context.symbol,
+                        Side.BUY,
+                        OrderType.LIMIT,
+                        quantity,
+                        context.step,
+                        bid,
+                    ),
+                    Order(
+                        self.next_id(),
+                        self.agent_id,
+                        context.symbol,
+                        Side.SELL,
+                        OrderType.LIMIT,
+                        quantity,
+                        context.step,
+                        ask,
+                    ),
+                ]
+            )
         return orders
 
 
@@ -100,7 +125,9 @@ class NoiseTrader(BaseAgent):
     def decide(self, context: AgentContext, rng: random.Random, inventory: int) -> list[Order]:
         if rng.random() > 0.22 or abs(inventory) >= self.risk_limit_shares:
             return []
-        order = self.market(context, Side.BUY if rng.random() > 0.5 else Side.SELL, rng.choice((10, 20, 30, 40)))
+        order = self.market(
+            context, Side.BUY if rng.random() > 0.5 else Side.SELL, rng.choice((10, 20, 30, 40))
+        )
         return [order] if order else []
 
 
@@ -141,15 +168,29 @@ class ExecutionAgent(BaseAgent):
             quantity = max(10, self.target_quantity // 80)
         quantity = min(remaining, quantity)
         if self.limit_price_ticks is not None:
-            return [Order(self.next_id(), self.agent_id, context.symbol, self.side, OrderType.LIMIT, quantity,
-                          context.step, self.limit_price_ticks)]
+            return [
+                Order(
+                    self.next_id(),
+                    self.agent_id,
+                    context.symbol,
+                    self.side,
+                    OrderType.LIMIT,
+                    quantity,
+                    context.step,
+                    self.limit_price_ticks,
+                )
+            ]
         order = self.market(context, self.side, quantity)
         return [order] if order else []
 
 
 AGENT_CLASS = {
-    "market_maker": MarketMaker, "fundamental": FundamentalTrader, "momentum": MomentumTrader,
-    "mean_reversion": MeanReversionTrader, "noise": NoiseTrader, "forced_liquidator": ForcedLiquidator,
+    "market_maker": MarketMaker,
+    "fundamental": FundamentalTrader,
+    "momentum": MomentumTrader,
+    "mean_reversion": MeanReversionTrader,
+    "noise": NoiseTrader,
+    "forced_liquidator": ForcedLiquidator,
     "execution": ExecutionAgent,
 }
 
@@ -159,8 +200,14 @@ def build_agents(populations: list[AgentPopulation], spec: WorldSpec) -> list[Ba
     for population in populations:
         cls = AGENT_CLASS[population.type]
         for index in range(population.count):
-            agent = cls(f"{population.type}-{index + 1:02d}", population.type, population.latency_ms,
-                        population.capital_cents, population.risk_limit_shares, dict(population.parameters))
+            agent = cls(
+                f"{population.type}-{index + 1:02d}",
+                population.type,
+                population.latency_ms,
+                population.capital_cents,
+                population.risk_limit_shares,
+                dict(population.parameters),
+            )
             if isinstance(agent, ExecutionAgent):
                 agent.configure(spec)
             agents.append(agent)

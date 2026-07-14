@@ -53,10 +53,11 @@ class OrderBook:
         if order.agent_id != agent_id:
             raise PermissionError("cannot cancel another agent's order")
         levels = self.bid_levels if order.side == Side.BUY else self.ask_levels
-        queue = levels[order.price_ticks]  # type: ignore[index]
+        assert order.price_ticks is not None
+        queue = levels[order.price_ticks]
         queue.remove(order_id)
         if not queue:
-            del levels[order.price_ticks]  # type: ignore[index]
+            del levels[order.price_ticks]
         del self.orders[order_id]
         return order
 
@@ -76,7 +77,12 @@ class OrderBook:
             return False
         if incoming.order_type == OrderType.MARKET:
             return True
-        return incoming.price_ticks >= opposite if incoming.side == Side.BUY else incoming.price_ticks <= opposite  # type: ignore[operator]
+        assert incoming.price_ticks is not None
+        return (
+            incoming.price_ticks >= opposite
+            if incoming.side == Side.BUY
+            else incoming.price_ticks <= opposite
+        )
 
     def _match(self, incoming: Order, step: int) -> list[Trade]:
         trades: list[Trade] = []
@@ -92,8 +98,17 @@ class OrderBook:
             self.trade_sequence += 1
             buyer = incoming.agent_id if incoming.side == Side.BUY else maker.agent_id
             seller = maker.agent_id if incoming.side == Side.BUY else incoming.agent_id
-            trade = Trade(f"{self.symbol}-T{self.trade_sequence:08d}", self.symbol, price, executed, buyer, seller,
-                          maker.order_id, incoming.order_id, step)
+            trade = Trade(
+                f"{self.symbol}-T{self.trade_sequence:08d}",
+                self.symbol,
+                price,
+                executed,
+                buyer,
+                seller,
+                maker.order_id,
+                incoming.order_id,
+                step,
+            )
             trades.append(trade)
             self.last_price_ticks = price
             if maker.remaining == 0:
@@ -107,10 +122,24 @@ class OrderBook:
         bids = sorted(self.bid_levels, reverse=True)[:levels]
         asks = sorted(self.ask_levels)[:levels]
         return {
-            "symbol": self.symbol, "best_bid_ticks": self.best_bid, "best_ask_ticks": self.best_ask,
+            "symbol": self.symbol,
+            "best_bid_ticks": self.best_bid,
+            "best_ask_ticks": self.best_ask,
             "last_price_ticks": self.last_price_ticks,
-            "bids": [{"price_ticks": price, "quantity": sum(self.orders[oid].remaining or 0 for oid in self.bid_levels[price])} for price in bids],
-            "asks": [{"price_ticks": price, "quantity": sum(self.orders[oid].remaining or 0 for oid in self.ask_levels[price])} for price in asks],
+            "bids": [
+                {
+                    "price_ticks": price,
+                    "quantity": sum(self.orders[oid].remaining or 0 for oid in self.bid_levels[price]),
+                }
+                for price in bids
+            ],
+            "asks": [
+                {
+                    "price_ticks": price,
+                    "quantity": sum(self.orders[oid].remaining or 0 for oid in self.ask_levels[price]),
+                }
+                for price in asks
+            ],
         }
 
     def assert_valid(self) -> None:
@@ -118,4 +147,3 @@ class OrderBook:
             raise AssertionError("crossed resting book")
         if any((order.remaining or 0) <= 0 for order in self.orders.values()):
             raise AssertionError("resting orders must have positive remaining quantity")
-
