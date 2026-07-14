@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Counterfactual Markets</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main>
+    <header><p class="eyebrow">SYNTHETIC MARKET WORLD ENGINE</p><h1>Counterfactual Markets</h1><p>Test tomorrow’s strategy in markets that never happened.</p></header>
+    <section class="panel"><h2>1. Compile a world</h2><textarea id="prompt">Create a fragile small-cap market with thin liquidity, crowded momentum, and an earnings shock after 20 simulated minutes.</textarea><div class="actions"><button id="compile">Compile world</button><button id="battery" class="secondary">Run four-world battery</button></div><pre id="spec"></pre></section>
+    <section class="panel"><h2>2. Synthetic world</h2><div id="world" class="world"><p>Run a world to inspect its synthetic companies, macro regime, agent ecology, events, and live order book.</p></div></section>
+    <section class="panel"><h2>3. Counterfactual experiment results</h2><div id="summary" class="metrics"><p>Compile a world, then run the scenario battery.</p></div><div id="chart" class="chart"></div><pre id="finding"></pre></section>
+    <footer>Deterministic synthetic prototype · Seeded replay · Not calibrated for production trading</footer>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
