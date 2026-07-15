@@ -78,6 +78,35 @@ def test_illegal_phase_transition_is_rejected(tmp_path) -> None:
         store.transition(CHALLENGE_ID, "instructor", "released", "skip evaluation")
 
 
+def test_transition_rejects_failed_compare_and_set_without_audit_or_history(tmp_path) -> None:
+    store = ArenaStore(tmp_path / "transition-conflict.sqlite3")
+    store.ensure_default_challenge(CHALLENGE_ID, list(HIDDEN_VARIANTS))
+    with store.connection() as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER ignore_submission_lock
+            BEFORE UPDATE OF phase ON challenges
+            WHEN OLD.challenge_id = 'trade-the-shock'
+                 AND NEW.phase = 'submission_locked'
+            BEGIN
+                SELECT RAISE(IGNORE);
+            END
+            """
+        )
+
+    with pytest.raises(ArenaPhaseError, match="phase changed during transition"):
+        store.transition(CHALLENGE_ID, "instructor", "submission_locked", "deadline")
+
+    assert store.challenge(CHALLENGE_ID)["phase"] == "public_practice"
+    with store.connection() as connection:
+        history_count = connection.execute(
+            "SELECT COUNT(*) FROM challenge_phases WHERE challenge_id = ?",
+            (CHALLENGE_ID,),
+        ).fetchone()[0]
+    assert history_count == 1
+    assert not any(event["action"] == "phase_transition" for event in store.audit_events(CHALLENGE_ID))
+
+
 def test_practice_and_submission_writes_recheck_committed_phase(tmp_path) -> None:
     store = ArenaStore(tmp_path / "post-lock.sqlite3")
     store.ensure_default_challenge(CHALLENGE_ID, list(HIDDEN_VARIANTS))

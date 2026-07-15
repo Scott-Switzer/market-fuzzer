@@ -21,7 +21,9 @@
 ## Authentication and deployment
 
 - `ARENA_DEMO_AUTH=1` enables signed, HttpOnly demo sessions with server-generated, resumable local identities. Instructor issuance requires a server-configured local code, but this is still not OAuth/OIDC, institutional SSO, LMS identity, verified account recovery, multi-factor authentication, or public multi-tenant authorization. A resumed demo identity proves possession of its cookie, not a real person's identity.
-- The local cookie is `Secure=False` so HTTP localhost works. A public deployment would require HTTPS-only secure cookies, CSRF protection, managed secrets, session rotation/revocation, rate limiting, user administration, backup/restore, and security review.
+- Demo cookies are `Secure` by default. The server omits `Secure` automatically only when both the peer and URL host are verified loopback (or in Starlette's in-process test scope). `ARENA_COOKIE_SECURE=0` is valid only with demo auth and cannot disable `Secure` for a non-loopback peer; other override values fail closed. Production must keep HTTPS-only secure cookies.
+- Without `ARENA_SESSION_SECRET`, demo mode uses a process-random signing secret, so a restart invalidates otherwise persisted cookies. A configured secret must contain at least 32 bytes. A public deployment would additionally require managed secret rotation, CSRF protection, session rotation/revocation, rate limiting, user administration, backup/restore, and security review.
+- `ARENA_TEST_AUTH=1` cannot authorize network requests: test-role headers are accepted only when the ASGI peer is exactly Starlette's in-process `testclient`. This hardens an accidental flag leak but is not a substitute for removing test settings from deployment configuration.
 - SQLite immediate transactions enforce local practice/final quotas and atomic lifecycle/audit updates for the supported single-database demo. This does not claim distributed multi-instance scheduling, high availability, migrations across released schema versions, disaster recovery, or production observability.
 - Docker and GitHub Actions prove repeatable build and smoke behavior, not a public hosted service or an SLA.
 

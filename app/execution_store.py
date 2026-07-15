@@ -281,10 +281,12 @@ class ArenaStore:
             previous = str(row["phase"])
             if new_state not in PHASES or ALLOWED_TRANSITIONS.get(previous) != new_state:
                 raise ValueError(f"illegal challenge transition: {previous} -> {new_state}")
-            connection.execute(
+            updated = connection.execute(
                 "UPDATE challenges SET phase = ?, updated_at = ? WHERE challenge_id = ? AND phase = ?",
                 (new_state, now, challenge_id, previous),
             )
+            if updated.rowcount != 1:
+                raise ArenaPhaseError("challenge phase changed during transition")
             connection.execute(
                 "INSERT INTO challenge_phases(challenge_id, actor, occurred_at, previous_state, new_state, reason) VALUES (?, ?, ?, ?, ?, ?)",
                 (challenge_id, actor, now, previous, new_state, reason),

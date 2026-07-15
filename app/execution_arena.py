@@ -520,12 +520,6 @@ def _public_score(metrics: dict[str, Any]) -> float:
     )
 
 
-def _robustness_score(metrics_by_world: list[dict[str, Any]]) -> float:
-    total = _robustness_decomposition(metrics_by_world)["total"]
-    assert total is not None
-    return total
-
-
 def _robustness_decomposition(metrics_by_world: list[dict[str, Any]]) -> dict[str, float | None]:
     shortfalls = [max(0.0, _number(row, "implementation_shortfall_bps")) for row in metrics_by_world]
     completions = [_number(row, "completion_pct") for row in metrics_by_world]

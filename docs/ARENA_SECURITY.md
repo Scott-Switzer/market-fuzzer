@@ -7,10 +7,11 @@ The primary Execution Challenge uses signed demo sessions, persisted identities,
 - Demo sessions exist only when `ARENA_DEMO_AUTH=1`.
 - Instructor issuance additionally requires the server-only `ARENA_DEMO_INSTRUCTOR_CODE` using a constant-time comparison.
 - The request supplies only the desired role and, for an instructor, the code. It cannot choose a user ID; the server generates that identity.
-- The server returns signed, HttpOnly, SameSite=Lax generic and role-specific cookies. Their hash, generated user ID, role, issue time, and expiry are recorded in SQLite.
-- Reissuing a role while its role-specific cookie is valid resumes the same persisted identity. This preserves practice limits, drafts, final submission ownership, and released-report recovery across reload and process restart.
+- The server returns signed, HttpOnly, SameSite=Lax generic and role-specific cookies. Their hash, generated user ID, role, issue time, and expiry are recorded in SQLite. Cookies are `Secure` by default. Only a request whose peer and URL host are both loopback (plus Starlette's exact in-process test scope) gets the HTTP-local exception automatically.
+- `ARENA_COOKIE_SECURE=1` forces `Secure`. `ARENA_COOKIE_SECURE=0` is valid only while `ARENA_DEMO_AUTH=1` and is effective only after the same loopback/test-scope check; it cannot disable `Secure` for a network peer. Other values fail closed.
+- Reissuing a role while its role-specific cookie is valid resumes the same persisted identity. This preserves practice limits, drafts, final submission ownership, and released-report recovery across reload. If `ARENA_SESSION_SECRET` is omitted, demo mode generates a process-random secret and deliberately invalidates cookies after restart. A stable restart-resumable deployment must supply a secret of at least 32 bytes.
 - The instructor code is neither stored in a cookie nor returned to the browser.
-- `X-Role` has no authority. `X-Test-Role` and `X-Test-User` work only when the separately scoped `ARENA_TEST_AUTH=1` flag is set in isolated tests.
+- `X-Role` has no authority. `X-Test-Role` and `X-Test-User` work only when `ARENA_TEST_AUTH=1` **and** the ASGI request peer is exactly Starlette's in-process `testclient`; the bypass is unreachable to real network clients even if the environment flag is accidentally set.
 
 This is local prototype authentication, not production identity. See `docs/LIMITATIONS.md` for the deployment hardening still required.
 
@@ -32,7 +33,7 @@ After release, students receive only declared aggregate rank/score fields and co
 
 ## Transaction boundary
 
-State-changing lifecycle operations and their audit rows commit in one SQLite transaction. Practice and final-submission quota checks use `BEGIN IMMEDIATE` around both count and insert, preventing two concurrent requests from both passing the same stale count in the supported single-database deployment. Release likewise commits evaluation visibility, challenge phase, phase history, and audit evidence as one state change.
+State-changing lifecycle operations and their audit rows commit in one SQLite transaction. Practice and final-submission quota checks use `BEGIN IMMEDIATE` around both count and insert, preventing two concurrent requests from both passing the same stale count in the supported single-database deployment. Release likewise commits evaluation visibility, challenge phase, phase history, and audit evidence as one state change. API store objects use a bounded process cache keyed by the fully resolved `ARENA_DB_PATH`; each cached store seeds the default challenge once, and changing the path cannot silently reuse the previous database.
 
 ## Challenge-design boundary
 

@@ -10,6 +10,8 @@ import sqlite3
 import time
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import uuid4
@@ -78,6 +80,8 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 JOBS: dict[str, dict] = {}
 PRODUCT_PROJECTS: dict[str, dict] = {}
 PRODUCT_FAILURES: dict[str, dict] = {}
+_LOCAL_DEMO_SESSION_SECRET = os.urandom(32)
+_EXECUTION_STORE_CACHE_SIZE = 8
 
 DESIGN_INTERVENTION_LABELS = {
     "liquidity_withdrawal": "Liquidity withdrawal",
@@ -283,6 +287,7 @@ def arena_demo_session(payload: DemoSessionRequest, request: Request, response: 
     """Issue a deliberately scoped demo cookie; this is not institutional auth."""
     if os.getenv("ARENA_DEMO_AUTH") != "1":
         raise HTTPException(404, "demo sessions are disabled")
+    secure_cookie = _arena_cookie_secure(request)
     if payload.role == "instructor":
         expected_code = os.getenv("ARENA_DEMO_INSTRUCTOR_CODE")
         if not expected_code:
@@ -313,9 +318,21 @@ def arena_demo_session(payload: DemoSessionRequest, request: Request, response: 
         action = "demo_session_issued"
     _execution_store().audit(CHALLENGE_ID, user_id, action, {"role": payload.role})
     response.set_cookie(
-        "arena_demo_session", token, httponly=True, samesite="lax", secure=False, max_age=43_200
+        "arena_demo_session",
+        token,
+        httponly=True,
+        samesite="lax",
+        secure=secure_cookie,
+        max_age=43_200,
     )
-    response.set_cookie(role_cookie, token, httponly=True, samesite="lax", secure=False, max_age=43_200)
+    response.set_cookie(
+        role_cookie,
+        token,
+        httponly=True,
+        samesite="lax",
+        secure=secure_cookie,
+        max_age=43_200,
+    )
     return {
         "status": "ok",
         "role": payload.role,
@@ -1217,15 +1234,64 @@ def artifact_download(experiment_id: str, filename: str) -> FileResponse:
 
 
 def _arena_session_secret() -> bytes:
-    # A deployment must set this; the development fallback intentionally makes
-    # sessions non-portable and is documented as demo-only authentication.
-    return os.getenv("ARENA_SESSION_SECRET", "local-demo-not-for-production").encode()
+    configured = os.getenv("ARENA_SESSION_SECRET")
+    if configured:
+        encoded = configured.encode()
+        if len(encoded) < 32:
+            raise RuntimeError("ARENA_SESSION_SECRET must contain at least 32 bytes")
+        return encoded
+    if os.getenv("ARENA_DEMO_AUTH") == "1":
+        # Local demo sessions remain usable without shipping a shared fallback
+        # secret. They intentionally stop validating after a process restart.
+        return _LOCAL_DEMO_SESSION_SECRET
+    raise RuntimeError("ARENA_SESSION_SECRET is required outside local demo mode")
+
+
+def _loopback_host(host: str | None) -> bool:
+    if not host:
+        return False
+    normalized = host.strip().lower().strip("[]")
+    if normalized == "localhost":
+        return True
+    try:
+        return ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
+def _arena_cookie_secure(request: Request) -> bool:
+    """Default to Secure unless this is an explicit or verified local demo."""
+    override = os.getenv("ARENA_COOKIE_SECURE")
+    if override not in {None, "0", "1"}:
+        raise RuntimeError("ARENA_COOKIE_SECURE must be either 0 or 1")
+    client_host = request.client.host if request.client is not None else None
+    request_host = request.url.hostname
+    local_request = (client_host == "testclient" and request_host == "testserver") or (
+        _loopback_host(client_host) and _loopback_host(request_host)
+    )
+    if override == "1":
+        return True
+    if override == "0" and os.getenv("ARENA_DEMO_AUTH") != "1":
+        raise RuntimeError("ARENA_COOKIE_SECURE=0 is allowed only in local demo mode")
+    # A false override never weakens the network boundary: non-loopback peers
+    # still receive Secure cookies.
+    return not local_request
+
+
+def _resolved_arena_db_path() -> str:
+    configured = os.getenv("ARENA_DB_PATH", "artifacts/arena.sqlite3")
+    return str(Path(configured).expanduser().resolve())
+
+
+@lru_cache(maxsize=_EXECUTION_STORE_CACHE_SIZE)
+def _cached_execution_store(resolved_path: str) -> ArenaStore:
+    store = ArenaStore(resolved_path)
+    store.ensure_default_challenge(CHALLENGE_ID, list(HIDDEN_VARIANTS))
+    return store
 
 
 def _execution_store() -> ArenaStore:
-    store = ArenaStore()
-    store.ensure_default_challenge(CHALLENGE_ID, list(HIDDEN_VARIANTS))
-    return store
+    return _cached_execution_store(_resolved_arena_db_path())
 
 
 def _execution_challenge_record(challenge_id: str) -> dict[str, Any]:
@@ -1261,13 +1327,17 @@ def _arena_identity_from_token(token: str) -> tuple[str, str] | None:
         ):
             return None
         return role, user_id
-    except (binascii.Error, ValueError, UnicodeDecodeError, sqlite3.Error):
+    except (binascii.Error, RuntimeError, ValueError, UnicodeDecodeError, sqlite3.Error):
         return None
 
 
 def _arena_identity(request: Request) -> tuple[str, str]:
     """Resolve role from a signed cookie, never a normal client header."""
-    if os.getenv("ARENA_TEST_AUTH") == "1":
+    if (
+        os.getenv("ARENA_TEST_AUTH") == "1"
+        and request.client is not None
+        and request.client.host == "testclient"
+    ):
         role = request.headers.get("X-Test-Role", "student").strip().lower()
         user_id = request.headers.get("X-Test-User", f"test-{role}").strip()
         return (role if role in {"student", "instructor"} else "student", user_id)

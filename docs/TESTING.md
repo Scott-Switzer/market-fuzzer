@@ -45,16 +45,16 @@ API calls in this test use Playwright’s browser context, so they share the sam
 
 ## Test groups
 
-- Security: server-generated/resumable identity, instructor-code enforcement, direct hidden-world/seed attacks, normal role-header rejection, public payload leak scans, pre-release replay/hash denial, released-field allow-listing, and permanent instructor-only raw world evidence.
+- Security: server-generated/resumable identity, instructor-code enforcement, real-client rejection of the in-process test-auth bypass, loopback-versus-network cookie flags, fail-closed session-secret configuration, direct hidden-world/seed attacks, normal role-header rejection, public payload leak scans, pre-release replay/hash denial, released-field allow-listing, and permanent instructor-only raw world evidence.
 - Metrics and lifecycle: fill-derived participation, order/ack/fill/cancel timestamp ordering, inventory identity, order hygiene, queue-ahead evidence, and deterministic replay.
 - Submission: strict schema bounds, extra-field rejection, immutable final policy, shared engine adapter for built-ins and learner policies, practice/final limits.
 - Ranking: exact public seed `42`, persisted hidden-world manifest plus protected `SEEDS`, and three fixed groups—`(41,)`, `(42,)`, and the production pair `(41, 42)`—with metric-derived rank, score decomposition, and deterministic matrix hash.
 - Worlds and metamorphic relations: liquidity depth, latency ordering, crowded flow, event activation, transaction costs, same-input equality, and visibility-only release.
-- Persistence: server-generated identity/session, challenge manifest, submission, phase, evaluation, feedback, challenge-design draft, release, and audit history survive `ArenaStore` reconstruction from the same SQLite file. Concurrent limit tests prove that quota count and insert are one immediate transaction, and release tests prove phase, visibility, and audit update together.
+- Persistence: server-generated identity/session, challenge manifest, submission, phase, evaluation, feedback, challenge-design draft, release, and audit history survive `ArenaStore` reconstruction from the same SQLite file. Concurrent limit tests prove that quota count and insert are one immediate transaction, release tests prove phase, visibility, and audit update together, and cache tests prove that fully resolved `ARENA_DB_PATH` values select distinct bounded store instances.
 - GPT: frozen structured-output corpus built from the same release-safe overall and educational-intent aggregate schema used in production, instructor-only qualitative design drafts, numeric-world rejection, stable public-trace evidence, allowed evidence IDs and values, hidden-release boundary, persisted-report recovery, score/rank immutability, refusal/incomplete handling, unsafe-claim rejection, and explicit no-key fallback.
 - Browser: complete two-role lifecycle, visible ranking reversal and replay, stale-state clearing, responsive controls, clean console, and Market Fuzzer route.
 
-Tests that use role headers must set `ARENA_TEST_AUTH=1` and use `X-Test-Role`; production/demo requests never trust `X-Role`.
+Tests that use role headers must set `ARENA_TEST_AUTH=1`, use `X-Test-Role`, and run through Starlette's default in-process `testclient` peer. The same headers sent from any real or remote-like client scope are ignored even if the environment flag is present; production/demo requests never trust `X-Role`.
 
 ## Docker smoke
 
@@ -76,6 +76,7 @@ It always removes the smoke container and volume. Override only the host port wi
 ```bash
 .venv/bin/python -m pytest -q tests/test_execution_arena.py
 .venv/bin/python -m pytest -q tests/test_execution_persistence.py
+.venv/bin/python -m pytest -q tests/test_execution_auth_hardening.py
 .venv/bin/python -m pytest -q tests/test_execution_challenge_designer.py
 .venv/bin/python -m pytest -q tests/test_execution_feedback.py
 .venv/bin/python scripts/browser_e2e.py
