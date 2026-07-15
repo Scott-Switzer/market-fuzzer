@@ -9,3 +9,6 @@
 - No commercial or proprietary order-book data is included.
 - A `FIT` component does not establish profitability, safety, production capacity, or fitness for live trading.
 - This is research and testing infrastructure, not investment advice.
+# Market Fuzzer scope boundary
+
+Counterexamples are valid software regressions only within the configured synthetic environment. They are not forecasts, production capacity estimates, alpha evidence, live-trading approval, or regulatory-compliance evidence.

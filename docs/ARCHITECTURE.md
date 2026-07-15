@@ -25,3 +25,6 @@ Key boundaries:
 - `app/validation/`: fit-for-use and confidentiality/derivation reports
 - `app/compiler.py`: offline/GPT compilation
 - `app/api/`, `app/cli.py`, `app/static/`: product surfaces
+# Market Fuzzer product layer
+
+`app/product.py` adds a compact deterministic product adapter above the existing exchange, calibration, experiment, and artifact infrastructure. It provides built-in strategy definitions, property evaluation, bounded search, minimization, replay rows, and fixture export without replacing the exchange as accounting authority.

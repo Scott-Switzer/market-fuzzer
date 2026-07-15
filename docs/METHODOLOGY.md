@@ -34,3 +34,6 @@ Directional literature targets draw from:
 - Li et al., MarS, arXiv:2409.07486.
 
 The release report separately checks exact-row leakage, nearest source-window similarity, source-trajectory correlation, license eligibility, and public/private boundaries. Membership inference is `NOT_APPLICABLE` because no provider is trained on source records.
+# Market Fuzzer note
+
+Safety verdicts are calculated deterministically from recorded scenario parameters and seeds. Structured AI suggestions are advisory only; they cannot determine a fill, property result, confidence, or verdict.

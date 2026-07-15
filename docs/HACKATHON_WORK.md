@@ -33,3 +33,6 @@ None was imported. Private financial data, FENRIX collaboration assets, MIT rese
 ## Deferred work
 
 Institutional order-flow calibration, learned responsive flow, optional ABIDES backend, accelerator/vectorized books, multiple venues, and production controls remain roadmap items.
+# Market Fuzzer rebuild
+
+The primary browser route now leads with the developer workflow rather than calibration objects: strategy, safety requirements, baseline, adverse search, counterexample, replay, and regression export.

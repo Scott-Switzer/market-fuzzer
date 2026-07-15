@@ -15,3 +15,6 @@
 **2:45–2:55 — OpenAI role.** “GPT-5.6 compiles intent into strict, editable assumptions. Codex built, tested, repaired, and documented the engine and evidence system. Neither model determines fills or accounting.”
 
 **2:55–3:00 — Close.** “We do not claim every synthetic market is realistic. We prove which decisions each market is fit to support.”
+# Market Fuzzer demo
+
+Open the app, start the POV tutorial, run its baseline, then click **Break My Strategy**. Read the failing participation property, open replay, export the fixture, and run its displayed CLI command.

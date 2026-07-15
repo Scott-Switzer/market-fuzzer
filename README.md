@@ -1,4 +1,8 @@
-# Synthetic Market World Engine
+# Market Fuzzer
+
+Market Fuzzer finds the market conditions that break a trading algorithm, reduces each failure to a reproducible counterexample, and turns it into a regression test.
+
+It tests built-in TWAP, POV, and market-maker strategy behavior against explicit safety properties within a bounded synthetic market environment. It does not forecast markets, prove alpha, estimate production capacity, or validate live trading. Run `smw demo --serve` and select **Start with POV example** for a no-key tutorial. GPT hypotheses are optional, structured, and never decide deterministic results. See `docs/PRODUCT_WORKFLOW.md` and `docs/REGRESSION_FIXTURES.md`.
 
 > A calibrated counterfactual market-validation platform for execution stress testing and governed synthetic-data release.
 

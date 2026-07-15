@@ -35,4 +35,7 @@ Codex implemented, tested, repaired, and documented the product; coordinated lic
 ## Limitations and attribution
 
 The prototype is not calibrated to institutional order-book data and is not suitable for live trading. ABIDES, JAX-LOB, TRADES/DeepMarket, and MarS were studied, but no source, weights, or datasets were copied. Exact revisions and licenses are in `THIRD_PARTY_NOTICES.md`.
+# Market Fuzzer
+
+Market Fuzzer is a developer product for discovering bounded synthetic market conditions that violate declared execution safety properties, minimizing the counterexample, and preserving it as a regression fixture.
 

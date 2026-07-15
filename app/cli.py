@@ -10,6 +10,7 @@ import yaml
 from app.calibration import build_demo_calibration_pack, calibrate_bootstrap, compile_canonical_csv
 from app.compiler import compile_world
 from app.experiments import run_batch, run_single, run_validation_campaign
+from app.product import DEFAULT_PROPERTIES, STRATEGIES, evaluate
 from app.schemas import WorldSpec
 from app.world import build_demo_world
 
@@ -103,6 +104,19 @@ def report(experiment_id: str) -> None:
     if not path.exists():
         raise typer.BadParameter("experiment report not found")
     typer.echo(path.read_text())
+
+
+@cli.command("test")
+def test_fixture(path: Path) -> None:
+    """Run a Market Fuzzer YAML/JSON regression fixture."""
+    data = yaml.safe_load(path.read_text()) if path.suffix in {".yaml", ".yml"} else json.loads(path.read_text())
+    strategy_type = str(data["strategy"]["type"]).lower().replace(" ", "_")
+    strategy_id = "pov_fragile" if strategy_type == "pov" else strategy_type
+    strategy = {"id": strategy_id, **STRATEGIES.get(strategy_id, STRATEGIES["pov_fragile"]), "parameters": data["strategy"]["parameters"]}
+    props = [{"id": x["type"], "name": x["type"], "description": "fixture property", "units": x["units"], "threshold": x["threshold"], "operator": ">=" if x["type"] == "completion" else "<="} for x in data["safety_properties"]]
+    result = evaluate(strategy, data["market"], props or DEFAULT_PROPERTIES, int(data["market"]["seed"]))
+    actual = "pass" if result["passed"] else "fail"
+    typer.echo(json.dumps({"result": actual, "expected": data["expected"]["result"], "matches_expected_outcome": actual == data["expected"]["result"]}, indent=2))
 
 
 @cli.command()
