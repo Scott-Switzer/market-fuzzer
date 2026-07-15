@@ -11,7 +11,9 @@ from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha256
 from statistics import mean
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.simulation import SimulationResult, run_simulation
 from app.world.scenarios import build_demo_world, mutate_scenario
@@ -37,6 +39,49 @@ class Policy:
     pause_during_halt: bool = True
 
 
+class ExecutionPolicySubmission(BaseModel):
+    """Versioned, declarative student policy.  No submitted code is executed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["1.0"] = "1.0"
+    strategy_type: Literal["twap", "pov", "adaptive_pov"]
+    target_participation: float = Field(ge=0.01, le=0.20)
+    max_participation: float = Field(ge=0.01, le=0.30)
+    max_spread_bps: float = Field(ge=1, le=50)
+    urgency_curve: Literal["uniform", "front_loaded", "back_loaded", "adaptive"]
+    feed_latency_tolerance_ms: int = Field(ge=0, le=10_000)
+    cancel_after_ms: int = Field(ge=10, le=10_000)
+    completion_buffer_steps: int = Field(ge=0, le=20)
+    pause_during_halt: bool
+    pause_above_spread_limit: bool
+    include_pending_in_budget: bool
+    rationale: str = Field(min_length=50, max_length=2_000)
+
+    @model_validator(mode="after")
+    def _valid_combination(self) -> ExecutionPolicySubmission:
+        if self.max_participation < self.target_participation:
+            raise ValueError("max_participation must be at least target_participation")
+        if self.strategy_type == "twap" and self.urgency_curve == "adaptive":
+            raise ValueError("TWAP does not support an adaptive urgency curve")
+        return self
+
+
+def policy_from_submission(submission: ExecutionPolicySubmission, submission_id: str) -> Policy:
+    """Map only supported declarative controls onto the deterministic engine."""
+    strategy = "twap" if submission.strategy_type == "twap" else "pov"
+    return Policy(
+        policy_id=submission_id,
+        name="Student policy",
+        description="Student-authored declarative execution policy.",
+        strategy=strategy,
+        participation_rate=submission.target_participation,
+        latency_ms=submission.feed_latency_tolerance_ms,
+        max_spread_bps=submission.max_spread_bps,
+        pause_during_halt=submission.pause_during_halt,
+    )
+
+
 POLICIES: dict[str, Policy] = {
     "twap": Policy(
         "twap", "TWAP benchmark", "Evenly schedules the order across the horizon.", "twap", 0.08, 5
@@ -44,7 +89,7 @@ POLICIES: dict[str, Policy] = {
     "aggressive_pov": Policy(
         "aggressive_pov",
         "Aggressive POV",
-        "Completes quickly in public practice, but takes more flow when conditions deteriorate.",
+        "Completes quickly in public practice, but accepts more flow under adverse conditions.",
         "pov",
         0.12,
         4,
@@ -52,7 +97,7 @@ POLICIES: dict[str, Policy] = {
     "guarded_pov": Policy(
         "guarded_pov",
         "Guarded adaptive POV",
-        "Uses a lower participation cap and preserves room for hidden liquidity shocks.",
+        "Uses a lower participation cap and preserves room for adverse conditions.",
         "pov",
         0.08,
         8,
@@ -111,13 +156,19 @@ def _execution_metrics(result: SimulationResult, policy: Policy) -> dict[str, fl
     target = policy.parent_quantity
     executed = int(summary["filled_quantity"])
     market_volume = max(1, int(summary["total_market_volume"]))
-    fills_by_step: list[int] = []
-    # Timeline contains market volume by step.  Its aggregate is a defensible
-    # proxy for participation without inventing individual fill timestamps.
-    for frame in result.timeline:
-        fills_by_step.append(int(frame["asset_states"]["NOVA"]["volume"]))
+    strategy_fills_by_step: dict[int, int] = {}
+    market_volume_by_step: dict[int, int] = {}
+    for trade in result.trades:
+        step = int(trade["step"])
+        market_volume_by_step[step] = market_volume_by_step.get(step, 0) + int(trade["quantity"])
+        if trade["buyer_id"] == "execution-01" or trade["seller_id"] == "execution-01":
+            strategy_fills_by_step[step] = strategy_fills_by_step.get(step, 0) + int(trade["quantity"])
+    participation_by_step = [
+        strategy_fills_by_step.get(step, 0) / volume
+        for step, volume in market_volume_by_step.items()
+        if volume > 0
+    ]
     average_participation = min(1.0, executed / market_volume)
-    max_participation = min(1.0, max(fills_by_step, default=0) / max(1, market_volume))
     inventory_path = []
     for row in result.agent_states:
         if row["agent_id"] == "execution-01":
@@ -133,14 +184,14 @@ def _execution_metrics(result: SimulationResult, policy: Policy) -> dict[str, fl
         "remaining_inventory": int(summary["remaining_inventory"]),
         "terminal_inventory_penalty": round(100 * (target - executed) / target, 3),
         "average_participation_pct": round(100 * average_participation, 3),
-        "max_participation_pct": round(100 * max_participation, 3),
+        "max_participation_pct": round(100 * max(participation_by_step, default=0.0), 3),
         "time_weighted_inventory": round(mean(inventory_path), 3) if inventory_path else 0.0,
         "fill_ratio": round(executed / target, 5),
-        "cancel_fill_ratio": 0.0,
         "adverse_selection_bps": round(float(summary["adverse_selection_bps"]), 3),
         "spread_paid_bps": round(float(summary["spread_paid_bps"]), 3),
         "market_disruption": round(float(summary["market_disruption"]), 3),
         "strategy_trade_count": len(trades),
+        "inventory_accounting_ties": target == executed + int(summary["remaining_inventory"]),
     }
 
 
@@ -172,7 +223,6 @@ def _robustness_score(metrics_by_world: list[dict[str, float | int | None]]) -> 
         + 10 * max(0.0, 1 - mean(impacts) / 450)
         + 5 * max(0.0, 1 - mean(inventory_penalties) / 100)
         + 15 * max(0.0, 1 - max(shortfalls) / 250)
-        + 5
     )
     return round(score, 3)
 
@@ -206,6 +256,34 @@ def run_execution_challenge(policy_id: str, world_variant: str = "normal", seed:
             "real_market_calibration": "NOT_CLAIMED",
             "result_hash": result.result_hash,
         },
+    }
+
+
+def run_policy_submission(
+    submission: ExecutionPolicySubmission, submission_id: str, seed: int = 42
+) -> dict[str, Any]:
+    """Run a student submission in the public world only.
+
+    Hidden-world selection deliberately remains private to the evaluation service.
+    """
+    policy = policy_from_submission(submission, submission_id)
+    spec, changes = _world_for(policy, "normal", seed)
+    result = run_simulation(spec)
+    metrics = _execution_metrics(result, policy)
+    return {
+        "challenge_id": CHALLENGE_ID,
+        "phase": "public_practice",
+        "policy": submission.model_dump(mode="json"),
+        "world": {
+            "variant": "normal",
+            "seed": seed,
+            "changes": changes,
+            "specification_hash": result.spec_hash,
+        },
+        "metrics": metrics,
+        "public_score": _public_score(metrics),
+        "replay": {"timeline": result.timeline, "events": result.events, "trades": result.trades},
+        "evidence": {"mechanical_validity": "PASS", "result_hash": result.result_hash},
     }
 
 
@@ -289,12 +367,7 @@ def challenge_overview() -> dict[str, Any]:
         "phase": "public_practice",
         "objective": "Buy 6,000 shares of fictional NOVA inside one session while controlling implementation shortfall, participation, and terminal inventory.",
         "public_world": "Normal liquidity, stable background flow, low exchange latency, and no forced seller.",
-        "hidden_worlds": [
-            {"id": "liquidity_withdrawal", "label": "Liquidity withdrawal", "released": False},
-            {"id": "crowded_unwind", "label": "Forced seller and crowded unwind", "released": False},
-            {"id": "earnings_shock", "label": "Earnings shock", "released": False},
-            {"id": "latency_shock", "label": "Feed and exchange latency shock", "released": False},
-        ],
+        "hidden_worlds": {"count": len(HIDDEN_VARIANTS), "status": "withheld_until_release"},
         "policies": [policy.__dict__ for policy in POLICIES.values()],
         "quality": {
             "mechanical_validity": "PASS",

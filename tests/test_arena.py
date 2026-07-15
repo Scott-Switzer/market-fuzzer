@@ -138,19 +138,20 @@ def test_gpt_feedback_path_is_structured_and_grounded() -> None:
     assert result["feedback"]["limitations"]
 
 
-def test_arena_api_keeps_hidden_data_and_rankings_role_scoped() -> None:
+def test_arena_api_keeps_hidden_data_and_rankings_role_scoped(monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_TEST_AUTH", "1")
     client = TestClient(app)
     challenge_id = "api-arena-test"
     created = client.post(
         "/api/arena/challenges",
-        headers={"X-Role": "instructor"},
+        headers={"X-Test-Role": "instructor"},
         json={"challenge_id": challenge_id, "mode": "offline", "prompt": "Create a quant challenge."},
     )
     assert created.status_code == 200
     assert client.get(f"/api/arena/challenges/{challenge_id}").status_code == 200
     assert (
         client.post(
-            f"/api/arena/challenges/{challenge_id}/approve", headers={"X-Role": "instructor"}
+            f"/api/arena/challenges/{challenge_id}/approve", headers={"X-Test-Role": "instructor"}
         ).status_code
         == 200
     )
@@ -159,7 +160,7 @@ def test_arena_api_keeps_hidden_data_and_rankings_role_scoped() -> None:
     assert all("regime" not in row for row in public["rows"])
     assert client.get(f"/api/arena/challenges/{challenge_id}/instructor-report").status_code == 403
     report = client.get(
-        f"/api/arena/challenges/{challenge_id}/instructor-report", headers={"X-Role": "instructor"}
+        f"/api/arena/challenges/{challenge_id}/instructor-report", headers={"X-Test-Role": "instructor"}
     )
     assert report.status_code == 200
     assert report.json()["hidden_regime_manifest"]
@@ -180,6 +181,6 @@ def test_arena_api_keeps_hidden_data_and_rankings_role_scoped() -> None:
     assert student_board["rows"][0]["public_score"] >= student_board["rows"][1]["public_score"]
     assert "robustness_score" not in student_board["rows"][0]
     instructor_board = client.get(
-        f"/api/arena/challenges/{challenge_id}/leaderboard", headers={"X-Role": "instructor"}
+        f"/api/arena/challenges/{challenge_id}/leaderboard", headers={"X-Test-Role": "instructor"}
     ).json()
     assert instructor_board["rows"][0]["robustness_score"] >= instructor_board["rows"][1]["robustness_score"]

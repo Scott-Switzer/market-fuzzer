@@ -1,0 +1,18 @@
+# Research references and bounded use
+
+This project is a fictional, deterministic education prototype. The references below
+informed interfaces and safeguards; no substantial third-party code was copied and no
+reference implementation is a runtime dependency.
+
+| Source | What we learned and design used | Implemented in | Deliberately not integrated | Attribution / license |
+| --- | --- | --- | --- | --- |
+| [ABIDES](https://github.com/abides-sim/abides-jpmc), [paper](https://arxiv.org/abs/1904.12066) | Separate exchange actions from agent observations and model latency as an exchange concern. | `app/simulation.py`, `app/exchange/`, `app/execution_arena.py` | ABIDES kernel, protocols, agents, or datasets. | Cite in documentation; no code copied. |
+| [ABIDES-Gym](https://arxiv.org/abs/2110.14771) | A strategy-facing environment needs bounded observations and an action/result boundary. | `app/execution_arena.py`, `app/api/app.py` | Gym dependency and RL interface. | Paper attribution only. |
+| [HftBacktest](https://github.com/nkaz001/hftbacktest) | Latency, partial fills, queue assumptions, and acknowledgements must be explicit rather than optimistic. | `app/simulation.py`, `app/exchange/` | Market replay, Rust engine, and detailed queue-model claims. | Cite repository; no code copied. |
+| [JAX-LOB](https://arxiv.org/abs/2308.13289) | Treat policy × worlds × seeds as a deterministic evaluation matrix. | `app/execution_arena.py` | JAX, GPU execution, or an order-book migration. | Paper attribution only. |
+| [Stylized-fact realism metrics](https://arxiv.org/abs/1912.04941) | Mechanical checks do not establish real-market calibration. | `app/execution_arena.py`, `docs/LIMITATIONS.md` | Claims of calibration from a small diagnostic subset. | Paper attribution only. |
+| [Implementation shortfall](https://arxiv.org/abs/1205.3482), [constant participation](https://arxiv.org/abs/1210.7608), [liquidity-aware tactics](https://arxiv.org/abs/1803.05690) | Separate completion, shortfall, participation, and liquidity-aware behavior. | `app/simulation.py`, `app/execution_arena.py` | Investment advice, real execution estimates, or optimization claims. | Paper attribution only. |
+| [EvalAI](https://github.com/Cloud-CV/EvalAI), [Codabench](https://github.com/codalab/codabench) | Use phase-aware evaluation, public/private leaderboard separation, immutable result provenance, and declarative submissions. | `app/api/app.py`, `app/execution_arena.py` | Docker/code submission execution, remote workers, or platform dependencies. | Cite projects; no code copied. |
+| [Reliable hidden leaderboards](https://arxiv.org/abs/1502.04585) | Public practice and protected final evaluation must be separate to reduce adaptation to hidden tests. | `app/api/app.py`, `tests/test_execution_arena.py` | Statistical guarantees beyond this prototype's explicit limits. | Paper attribution only. |
+| [Metamorphic testing](https://arxiv.org/abs/2211.12003) | For simulations, paired relations and determinism are stronger than a single golden output. | `tests/test_simulation.py`, `tests/test_execution_arena.py` | A claim of exhaustive verification. | Paper attribution only. |
+| [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs) and [Evals](https://developers.openai.com/api/docs/guides/evals) | AI feedback must use a strict schema, validate evidence IDs, handle refusals, and never change deterministic scoring. | `app/arena.py`, `app/analyst.py`, `tests/test_analyst.py` | Unvalidated prose parsing or an LLM-owned score. | OpenAI documentation attribution; use subject to OpenAI terms. |

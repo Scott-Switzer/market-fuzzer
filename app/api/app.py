@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, cast
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
@@ -32,9 +36,11 @@ from app.execution_arena import (
     POLICIES as EXECUTION_POLICIES,
 )
 from app.execution_arena import (
+    ExecutionPolicySubmission,
     benchmark_matrix,
     challenge_overview,
     run_execution_challenge,
+    run_policy_submission,
 )
 from app.experiments import run_batch, run_single, run_validation_campaign
 from app.product import (
@@ -56,6 +62,7 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 JOBS: dict[str, dict] = {}
 PRODUCT_PROJECTS: dict[str, dict] = {}
 PRODUCT_FAILURES: dict[str, dict] = {}
+EXECUTION_SUBMISSIONS: dict[str, dict[str, Any]] = {}
 
 
 def _seed_arena_challenge() -> ChallengeSpec:
@@ -133,18 +140,27 @@ class ArenaFeedbackRequest(BaseModel):
 
 
 class ExecutionChallengeRunRequest(BaseModel):
-    """Safe declarative policy request; arbitrary strategy code is never accepted."""
+    """Legacy practice request. Hidden variants are intentionally absent."""
 
     model_config = ConfigDict(extra="forbid")
 
     policy_id: str = Field(
         default="aggressive_pov", pattern=r"^(twap|aggressive_pov|guarded_pov|completion_first)$"
     )
-    world_variant: str = Field(
-        default="normal",
-        pattern=r"^(normal|liquidity_withdrawal|crowded_unwind|earnings_shock|latency_shock)$",
-    )
     seed: int = Field(default=42, ge=0, le=2_147_483_647)
+
+
+class ExecutionSubmissionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    policy: ExecutionPolicySubmission
+
+
+class DemoSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: str = Field(pattern="^(student|instructor)$")
+    user_id: str = Field(default="demo-user", min_length=1, max_length=80)
 
 
 @app.get("/")
@@ -179,8 +195,9 @@ def execution_challenge() -> dict[str, Any]:
 
 @app.post("/api/execution-challenge/run")
 def execution_challenge_run(request: ExecutionChallengeRunRequest) -> dict[str, Any]:
+    """Compatibility alias: always runs the public world."""
     try:
-        return run_execution_challenge(request.policy_id, request.world_variant, request.seed)
+        return run_execution_challenge(request.policy_id, "normal", request.seed)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
 
@@ -196,6 +213,79 @@ def execution_challenge_benchmarks(request: Request) -> dict[str, Any]:
 @app.get("/api/execution-challenge/policies")
 def execution_challenge_policies() -> dict[str, Any]:
     return {"policies": [policy.__dict__ for policy in EXECUTION_POLICIES.values()]}
+
+
+@app.post("/api/arena/demo-session")
+def arena_demo_session(payload: DemoSessionRequest, response: Response) -> dict[str, str]:
+    """Issue a deliberately scoped demo cookie; this is not institutional auth."""
+    if os.getenv("ARENA_DEMO_AUTH") != "1":
+        raise HTTPException(404, "demo sessions are disabled")
+    issued_at = str(int(time.time()))
+    value = f"{payload.role}|{payload.user_id}|{issued_at}"
+    signature = hmac.new(_arena_session_secret(), value.encode(), hashlib.sha256).hexdigest()
+    token = base64.urlsafe_b64encode(f"{value}|{signature}".encode()).decode()
+    response.set_cookie("arena_demo_session", token, httponly=True, samesite="lax", secure=False)
+    return {"status": "ok", "role": payload.role, "authentication": "demo_session"}
+
+
+@app.get("/api/arena/execution/challenges/{challenge_id}")
+def execution_public_challenge(challenge_id: str) -> dict[str, Any]:
+    if challenge_id != "trade-the-shock":
+        raise HTTPException(404, "execution challenge not found")
+    return challenge_overview()
+
+
+@app.get("/api/arena/execution/challenges/{challenge_id}/policies")
+def execution_policies(challenge_id: str) -> dict[str, Any]:
+    if challenge_id != "trade-the-shock":
+        raise HTTPException(404, "execution challenge not found")
+    return execution_challenge_policies()
+
+
+@app.post("/api/arena/execution/challenges/{challenge_id}/practice")
+def execution_practice(challenge_id: str, request: ExecutionChallengeRunRequest) -> dict[str, Any]:
+    if challenge_id != "trade-the-shock":
+        raise HTTPException(404, "execution challenge not found")
+    return execution_challenge_run(request)
+
+
+@app.post("/api/arena/execution/challenges/{challenge_id}/submissions")
+def execution_submit(challenge_id: str, payload: ExecutionSubmissionRequest) -> dict[str, Any]:
+    if challenge_id != "trade-the-shock":
+        raise HTTPException(404, "execution challenge not found")
+    submission_id = f"execution-submission-{len(EXECUTION_SUBMISSIONS) + 1:04d}"
+    result = run_policy_submission(payload.policy, submission_id)
+    EXECUTION_SUBMISSIONS[submission_id] = {"policy": payload.policy, "result": result, "released": False}
+    return {"submission_id": submission_id, "public_score": result["public_score"], "status": "submitted"}
+
+
+@app.post("/api/arena/execution/challenges/{challenge_id}/evaluate")
+def execution_evaluate(challenge_id: str, request: Request) -> dict[str, Any]:
+    if challenge_id != "trade-the-shock":
+        raise HTTPException(404, "execution challenge not found")
+    _require_instructor(request)
+    return benchmark_matrix()
+
+
+@app.get("/api/arena/execution/challenges/{challenge_id}/leaderboard/public")
+def execution_public_leaderboard(challenge_id: str) -> dict[str, Any]:
+    if challenge_id != "trade-the-shock":
+        raise HTTPException(404, "execution challenge not found")
+    matrix = benchmark_matrix()
+    return {
+        "rows": [
+            {key: row[key] for key in ("policy_id", "name", "public_score", "public_rank")}
+            for row in matrix["rows"]
+        ]
+    }
+
+
+@app.get("/api/arena/execution/challenges/{challenge_id}/leaderboard/hidden")
+def execution_hidden_leaderboard(challenge_id: str, request: Request) -> dict[str, Any]:
+    if challenge_id != "trade-the-shock":
+        raise HTTPException(404, "execution challenge not found")
+    _require_instructor(request)
+    return benchmark_matrix()
 
 
 def product_strategy(request: ProductRunRequest) -> dict:
@@ -557,8 +647,29 @@ def artifact_download(experiment_id: str, filename: str) -> FileResponse:
 # ---------------------------------------------------------------------------
 
 
+def _arena_session_secret() -> bytes:
+    # A deployment must set this; the development fallback intentionally makes
+    # sessions non-portable and is documented as demo-only authentication.
+    return os.getenv("ARENA_SESSION_SECRET", "local-demo-not-for-production").encode()
+
+
 def _arena_role(request: Request) -> str:
-    return request.headers.get("X-Role", "student").strip().lower()
+    """Resolve role from a signed cookie, never a normal client header."""
+    if os.getenv("ARENA_TEST_AUTH") == "1":
+        return request.headers.get("X-Test-Role", "student").strip().lower()
+    token = request.cookies.get("arena_demo_session")
+    if not token:
+        return "student"
+    try:
+        decoded = base64.urlsafe_b64decode(token.encode()).decode()
+        role, user_id, issued_at, signature = decoded.split("|", 3)
+        value = f"{role}|{user_id}|{issued_at}"
+        expected = hmac.new(_arena_session_secret(), value.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected) or role not in {"student", "instructor"}:
+            return "student"
+        return role
+    except (ValueError, UnicodeDecodeError):
+        return "student"
 
 
 def _require_instructor(request: Request) -> None:
