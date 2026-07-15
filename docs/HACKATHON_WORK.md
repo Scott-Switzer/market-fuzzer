@@ -36,13 +36,28 @@ Institutional order-flow calibration, learned responsive flow, optional ABIDES b
 
 ## Market Fuzzer product rebuild
 
-The primary product is now the compact deterministic Market Fuzzer harness. Earlier exact-exchange, synthetic-world, calibration, and validation work remains secondary research infrastructure and is documented separately from the product acceptance path.
+The protected Market Fuzzer product milestone is commit `496fcc1` and is tagged locally as `market-fuzzer-milestone-1`. It remains available at `/market-fuzzer` as a secondary Execution Robustness Challenge. Earlier exact-exchange, synthetic-world, calibration, and validation work remains secondary research infrastructure.
 
 - Deterministic fragile/corrected POV execution state machine with delayed observations and pending-order accounting
 - Participation-targeted bounded search, seed reproduction, minimization trace, and verified passing neighbor
 - Exact same-scenario corrected comparison with scenario/seed/parent-order contract
 - Schema-validated YAML/JSON fixtures, CLI replay, and real API regression-suite execution
 - Browser workflow rebuilt around Strategy → Safety Properties → Baseline → Break My Strategy → Replay → Retest → Regression
-# Market Fuzzer rebuild
 
-The primary browser route now leads with the developer workflow rather than calibration objects: strategy, safety requirements, baseline, adverse search, counterexample, replay, and regression export.
+## Quant Challenge Arena redirect
+
+The primary product direction is now Quant Challenge Arena for the Education track. The Arena is a module-level extension in `app/arena.py` and `/api/arena/*`; it does not import or rewrite the protected Market Fuzzer state machine.
+
+New Arena work includes:
+
+- Versioned challenge and hidden-scenario schemas with deterministic no-key generation
+- Public/instructor dataset separation and strict `date,asset,position` submission validation
+- Public and hidden metrics for structural break, one-day delay, liquidity/cost shock, and false-feature collapse
+- Integrity indicators and a robustness-adjusted ranking with the intentional public-winner/hidden-winner reversal
+- Instructor approval, bundle, release, hidden report, and role-scoped leaderboard endpoints
+- Student submission, public leaderboard, and feedback endpoints
+- Quant Challenge Arena instructor/student browser workflow with the Market Fuzzer route preserved as secondary
+- Arena methodology, security, submission contract, integration ADR, and provenance documentation
+- Deterministic and structured-output tests covering hidden separation, scoring, ranking, feedback, and API roles
+
+The referenced `/Users/scottthomasswitzer/Documents/FenrixQuant` and `/Users/scottthomasswitzer/Documents/zion-terminal` paths were not present during the redirect audit. No files, data, or collaboration assets from those projects were imported. See `docs/decisions/ADR_QUANT_CHALLENGE_ARENA_INTEGRATION.md`.

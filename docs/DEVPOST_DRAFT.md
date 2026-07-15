@@ -1,18 +1,18 @@
-# Devpost draft
+# Quant Challenge Arena — Devpost draft
 
 ## Tagline
 
-Find the market conditions that break your trading algorithm before the market does.
+The public backtest winner is not always the robust winner.
 
 ## Short description
 
-Market Fuzzer is a Developer Tools product that runs execution strategies against bounded synthetic market conditions, finds a reproducible safety-property violation, minimizes the counterexample, and exports it as a regression test.
+Quant Challenge Arena is an Education-track challenge platform where students build quantitative strategies against a public synthetic market, submit strict position files, and receive deterministic evaluation across hidden regimes. Instructors create the challenge, release only the public panel, and reveal robustness evidence after the submission window.
 
 ## Full write-up
 
-Historical backtests show one realized market path. Market Fuzzer gives a quant developer a different workflow: choose a built-in POV strategy, define what safe behavior means, run a normal baseline, search adverse but deterministic conditions, inspect the failure replay, retest a corrected implementation on the exact same scenario, and preserve the result as a fixture.
+Many quant competitions reward the highest public Sharpe ratio. Quant Challenge Arena makes that objective incomplete. A student receives a fictional three-asset panel with a visible momentum regime, submits one position per date and asset, and explains the mechanism. The server then evaluates the same submission against hidden structural-break, one-day-delay, liquidity-shock, and false-feature regimes that the student never received.
 
-The Build Week product slice is deliberately a compact deterministic market test harness. It models discrete steps, actual and delayed observed volume, latency, pending orders, fills, parent-order remainder, realized participation, completion, a deterministic shortfall proxy, and replay evidence. The fragile POV intentionally ignores pending orders and stale volume contraction; the corrected POV applies a pending-order budget and fill-time participation guard. The search targets participation and never lets GPT decide a verdict.
+The deterministic engine owns dataset generation, CSV validation, public/hidden metrics, transaction-cost sensitivity, one-day delay sensitivity, regime decomposition, integrity indicators, and scoring. Example A is designed to win the public leaderboard through concentration and then collapse in hidden regimes. Example B has a lower public score but wins the robustness-adjusted ranking. The result is a reproducible teaching exercise about out-of-sample evidence, not an investment recommendation or misconduct detector.
 
 ## Built with
 
@@ -20,15 +20,15 @@ Python, FastAPI, Pydantic, NumPy, Typer, OpenAI Responses API/GPT-5.6 (optional)
 
 ## Installation and judge testing
 
-Follow `docs/TESTING.md`. The offline browser workflow needs no API key. Start the POV tutorial, run baseline, break the strategy, inspect replay, retest corrected POV, export a fixture, and run the regression suite.
+Follow `docs/TESTING.md`. Start the server, open the instructor console, approve the seeded challenge, bundle the public data, run the two included fixtures, then switch to Student to validate or submit a `date,asset,position` CSV. Release hidden results from the instructor console to show the ranking reversal. The `/market-fuzzer` route preserves the earlier execution-testing workflow.
 
 ## GPT-5.6 and Codex
 
-GPT-5.6 may produce schema-constrained failure hypotheses and explanations grounded in measured simulation evidence. It never determines prices, fills, property values, reproduction confidence, or PASS/FAIL. Codex implemented and repaired the deterministic harness, search/minimization workflow, fixture contract, API, CLI, tests, and product UI. Add the final `/feedback` session ID before submission.
+GPT-5.6 may generate a schema-constrained challenge brief and grounded feedback. It never generates the panel, sees hidden data through student routes, scores, ranks, or decides an integrity verdict. Codex implemented and repaired the deterministic Arena engine, role-scoped API, submission contract, public/hidden leaderboard, UI, tests, and documentation. Add the final `/feedback` session ID before submission.
 
 ## Limitations
 
-The product proves software behavior only within its declared compact synthetic environment. It is not institutional calibration, a production capacity estimate, a profitability claim, a live-trading recommendation, or regulatory approval. The repository’s broader synthetic-world research modules are retained as secondary infrastructure and are not silently represented as the Market Fuzzer backend.
+The product evaluates strategies only within its declared fictional deterministic environment. It does not prove alpha, future profitability, real-market generalization, student intent, institutional fidelity, or regulatory compliance. Hidden-data role checks use a demo header rather than production authentication. The earlier Market Fuzzer workflow remains secondary infrastructure and is not silently represented as the Arena.
 
 ## License
 

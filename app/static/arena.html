@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Quant Challenge Arena</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/arena.css">
+</head>
+<body>
+  <header>
+    <a class="brand" href="/">QUANT <i>CHALLENGE ARENA</i></a>
+    <nav>
+      <button id="instructor-tab" class="active">Instructor</button>
+      <button id="student-tab">Student</button>
+      <a class="legacy-link" href="/market-fuzzer">Execution Robustness Challenge ↗</a>
+    </nav>
+    <span class="pill">Education · deterministic hidden regimes</span>
+  </header>
+
+  <main>
+    <section class="arena-hero">
+      <p class="eyebrow">QUANT RESEARCH EDUCATION</p>
+      <h1>Build a strategy that survives the market you <em>didn’t see.</em></h1>
+      <p>Quant Challenge Arena makes robustness visible: students submit positions, the engine tests hidden regimes, and instructors reward evidence—not just a lucky public leaderboard score.</p>
+      <div class="hero-actions">
+        <button id="hero-instructor" class="primary big">Open instructor console →</button>
+        <button id="hero-student" class="big">Join as a student →</button>
+      </div>
+    </section>
+
+    <section class="workflow-strip" aria-label="Challenge workflow">
+      <div><b>01</b><span>Generate</span><small>AI-assisted brief</small></div>
+      <div><b>02</b><span>Publish</span><small>Public data only</small></div>
+      <div><b>03</b><span>Submit</span><small>Strict position CSV</small></div>
+      <div><b>04</b><span>Reveal</span><small>Hidden robustness</small></div>
+    </section>
+
+    <section id="instructor-view" class="arena-view active">
+      <div class="section-heading"><div><p class="eyebrow">INSTRUCTOR CONSOLE</p><h2>Design the challenge. Keep the test hidden.</h2></div><span id="arena-mode" class="mode-badge">NO-KEY MODE</span></div>
+      <div class="arena-grid">
+        <article class="panel challenge-card">
+          <div class="card-label">CURRENT CHALLENGE</div>
+          <h3 id="challenge-title">Loading challenge…</h3>
+          <p id="challenge-narrative" class="muted">Loading the deterministic challenge bundle.</p>
+          <div class="status-row"><span id="approval-status" class="status neutral">Checking approval</span><span id="release-status" class="status neutral">Hidden results withheld</span></div>
+          <div class="button-row">
+            <button id="generate-challenge" class="primary">Generate challenge</button>
+            <button id="approve-challenge">Approve &amp; publish</button>
+            <button id="release-challenge">Release results</button>
+          </div>
+        </article>
+        <article class="panel explain-card">
+          <div class="card-label">WHAT STUDENTS LEARN</div>
+          <ul id="learning-objectives" class="clean-list"></ul>
+          <div class="callout"><b>Public winner ≠ robust winner</b><span>The hidden market changes the rules without exposing the answer.</span></div>
+        </article>
+      </div>
+      <div class="arena-grid lower-grid">
+        <article class="panel">
+          <div class="panel-heading"><div><div class="card-label">INSTRUCTOR TOOLS</div><h3>Prepare and inspect</h3></div><button id="bundle-challenge">Bundle datasets</button></div>
+          <div id="bundle-summary" class="empty-state">The public panel is safe to distribute. Hidden regimes stay server-side until you open the instructor report.</div>
+          <details id="technical-evidence" class="technical hidden"><summary>View technical evidence</summary><pre id="bundle-evidence"></pre></details>
+        </article>
+        <article class="panel">
+          <div class="panel-heading"><div><div class="card-label">DEMO FIXTURES</div><h3>Two strategies, one lesson</h3></div><button id="load-examples" class="secondary">Run examples</button></div>
+          <div id="example-results" class="empty-state">Run the included fixtures to see a public leaderboard reversal.</div>
+        </article>
+      </div>
+      <article class="panel leaderboard-panel">
+        <div class="panel-heading"><div><div class="card-label">INSTRUCTOR LEADERBOARD</div><h3>Reward robustness, not overfitting</h3></div><button id="refresh-leaderboard">Refresh</button></div>
+        <div id="leaderboard" class="empty-state">No submissions yet.</div>
+      </article>
+    </section>
+
+    <section id="student-view" class="arena-view">
+      <div class="section-heading"><div><p class="eyebrow">STUDENT WORKSPACE</p><h2>Make a claim. Submit evidence.</h2></div><span class="mode-badge">HIDDEN DATA PROTECTED</span></div>
+      <div class="arena-grid">
+        <article class="panel challenge-card">
+          <div class="card-label">YOUR BRIEF</div>
+          <h3 id="student-title">Loading challenge…</h3>
+          <p id="student-brief" class="muted">Loading challenge instructions.</p>
+          <div class="data-summary"><b>Public panel</b><span id="public-data-summary">Loading…</span></div>
+          <button id="download-public" class="secondary">Download public dataset</button>
+        </article>
+        <article class="panel rubric-card">
+          <div class="card-label">SUBMISSION CONTRACT</div>
+          <h3>One row per asset and date</h3>
+          <p class="muted">Submit exactly three columns. The hidden period is never included in the download.</p>
+          <code>date,asset,position</code>
+          <ul class="clean-list compact"><li>Positions are bounded to ±1.0.</li><li>Gross exposure ≤ 1.5 and net exposure ≤ 1.0.</li><li>Explain your economic mechanism and its limits.</li></ul>
+          <button id="load-practice" class="secondary">Load practice submission</button>
+        </article>
+      </div>
+      <article class="panel submission-panel">
+        <div class="panel-heading"><div><div class="card-label">SUBMIT STRATEGY</div><h3>What would you trade?</h3></div><span class="hint">Hidden results are released by the instructor.</span></div>
+        <label>Student name<input id="student-name" value="Student 01" maxlength="120"></label>
+        <label>Position CSV<textarea id="submission-csv" rows="9" spellcheck="false" placeholder="date,asset,position"></textarea></label>
+        <label>Research explanation<textarea id="submission-explanation" rows="4" placeholder="What mechanism are you testing? What could make it fail?"></textarea></label>
+        <div class="button-row"><button id="validate-submission">Validate CSV</button><button id="submit-strategy" class="primary">Submit for grading</button></div>
+        <div id="submission-result" class="result empty">Your public score will appear here. Hidden performance stays withheld until release.</div>
+        <button id="request-feedback" class="secondary hidden">Request feedback</button>
+        <div id="feedback-result" class="feedback hidden"></div>
+      </article>
+      <article class="panel leaderboard-panel"><div class="panel-heading"><div><div class="card-label">PUBLIC LEADERBOARD</div><h3>What everyone can see</h3></div><button id="refresh-student-leaderboard">Refresh</button></div><div id="student-leaderboard" class="empty-state">No submissions yet.</div></article>
+    </section>
+  </main>
+  <footer>Quant Challenge Arena evaluates strategies inside a fictional, reproducible challenge market. It does not provide investment advice or prove live-market profitability.</footer>
+  <script src="/static/arena.js"></script>
+</body>
+</html>

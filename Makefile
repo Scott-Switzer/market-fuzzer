@@ -1,4 +1,4 @@
-.PHONY: install verify test demo run run-example regression judge-demo docker-smoke clean-artifacts
+.PHONY: install verify test demo run run-example arena-demo regression judge-demo docker-smoke clean-artifacts
 
 PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 
@@ -16,8 +16,10 @@ verify:
 	$(PYTHON) scripts/determinism_check.py
 	$(PYTHON) scripts/provenance_check.py
 	$(PYTHON) scripts/demo_smoke.py
+	$(PYTHON) scripts/arena_smoke.py
 	bash -n scripts/judge_demo.sh
 	node --check app/static/app.js
+	node --check app/static/arena.js
 	git diff --check
 
 run:
@@ -28,6 +30,9 @@ demo:
 
 run-example:
 	$(PYTHON) -m app.cli run-example
+
+arena-demo:
+	$(PYTHON) scripts/arena_smoke.py
 
 regression:
 	$(PYTHON) -m app.cli test artifacts/market_fuzzer

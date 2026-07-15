@@ -14,7 +14,7 @@ git diff --check
 make verify
 ```
 
-The product tests cover baseline PASS, targeted participation failure, deterministic reproduction, minimized evidence, verified neighbor PASS, exact corrected comparison, YAML/JSON export, CLI replay, invalid/mismatched fixtures, and regression-suite execution.
+The product tests cover the protected Market Fuzzer workflow plus Quant Challenge Arena determinism, public/hidden separation, strict CSV validation, structural-break/delay/cost/false-feature metrics, public-versus-robust ranking reversal, structured GPT boundaries, role-scoped API responses, and feedback grounding.
 
 ## Judge path
 
@@ -24,7 +24,9 @@ python3 -m venv .venv
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open `http://127.0.0.1:8000`, choose **Start with POV example**, inspect the strategy and safety properties, run the baseline, click **Break My Strategy**, open replay, retest corrected POV, export a fixture, and run the regression suite. No API key or financial-data subscription is required.
+Open `http://127.0.0.1:8000`, choose **Instructor**, approve the seeded Arena challenge, bundle public data, run the two included examples, then switch to **Student** to load a practice submission, validate it, submit it, and inspect the public leaderboard. Release hidden results from the instructor console to show the robustness ranking reversal. No API key or financial-data subscription is required.
+
+The protected Market Fuzzer workflow remains at `http://127.0.0.1:8000/market-fuzzer`: choose **Start with POV example**, run the baseline, break the strategy, open replay, retest corrected POV, export a fixture, and run the regression suite.
 
 ## CLI smoke path
 
@@ -33,4 +35,4 @@ Open `http://127.0.0.1:8000`, choose **Start with POV example**, inspect the str
 .venv/bin/python -m app.cli test artifacts/market_fuzzer/failure_<id>.json
 ```
 
-The broader synthetic-world and calibration commands remain available, but they are secondary research infrastructure rather than the primary Market Fuzzer path.
+The broader synthetic-world and calibration commands remain available, but they are secondary research infrastructure rather than the primary Arena or Market Fuzzer path.
