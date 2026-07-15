@@ -8,7 +8,7 @@ from app.world import build_demo_world
 
 def test_health_schema_compile_validate_and_run():
     client = TestClient(app)
-    assert client.get("/api/health").json()["engine"] == "internal_exact_clob"
+    assert client.get("/api/health").json()["engine"] == "compact_deterministic_pov_harness"
     assert "properties" in client.get("/api/schema").json()
     calibration = client.get("/api/calibration/demo")
     assert calibration.status_code == 200

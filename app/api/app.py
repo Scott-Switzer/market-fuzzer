@@ -16,7 +16,7 @@ from app.schemas import WorldSpec
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT_ROOT = Path("artifacts").resolve()
-app = FastAPI(title="Synthetic Market World Engine", version="0.1.0")
+app = FastAPI(title="Market Fuzzer", version="0.2.0")
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 JOBS: dict[str, dict] = {}
 PRODUCT_PROJECTS: dict[str, dict] = {}
@@ -53,7 +53,7 @@ def index() -> FileResponse:
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok", "product": "Synthetic Market World Engine", "engine": "internal_exact_clob"}
+    return {"status": "ok", "product": "Market Fuzzer", "engine": "compact_deterministic_pov_harness"}
 
 
 def product_strategy(request: ProductRunRequest) -> dict:

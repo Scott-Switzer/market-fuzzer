@@ -1,9 +1,5 @@
-"""Deterministic Market Fuzzer product layer.
+"""Compact deterministic Market Fuzzer POV test harness (not the full exchange)."""
 
-This layer deliberately owns test verdicts; language-model output never does.
-It is a compact adapter over the existing deterministic market project for the
-built-in examples, and records stable fixtures that can be rerun without a key.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -15,86 +11,318 @@ from typing import Any
 import yaml
 
 STORE = Path("artifacts/market_fuzzer")
-
 STRATEGIES = {
-    "pov_fragile": {"name": "Fragile POV (tutorial)", "type": "POV", "description": "Intentionally defective: stale-volume accounting after latency spikes.", "defaults": {"side": "buy", "asset": "ACME", "quantity": 50000, "max_participation": 10, "duration": 20, "latency_ms": 10}},
-    "pov": {"name": "POV", "type": "POV", "description": "Volume-aware execution with a hard participation cap.", "defaults": {"side": "buy", "asset": "ACME", "quantity": 50000, "max_participation": 10, "duration": 20, "latency_ms": 10}},
-    "twap": {"name": "TWAP", "type": "TWAP", "description": "Evenly distributes slices across a configured duration.", "defaults": {"side": "buy", "asset": "ACME", "quantity": 50000, "slices": 20, "duration": 20, "latency_ms": 10}},
-    "market_maker": {"name": "Simple market maker", "type": "MARKET_MAKER", "description": "Two-sided quoting with inventory controls.", "defaults": {"asset": "ACME", "quote_size": 500, "target_spread": 4, "max_inventory": 5000, "latency_ms": 10}},
+    "pov_fragile": {
+        "name": "Fragile POV (tutorial)",
+        "type": "POV",
+        "version": "built-in-1",
+        "description": "Intentionally defective: it sizes from delayed volume and ignores pending orders.",
+        "defaults": {
+            "side": "buy",
+            "asset": "ACME",
+            "quantity": 50000,
+            "max_participation": 10,
+            "duration": 20,
+            "latency_ms": 10,
+        },
+    },
+    "pov": {
+        "name": "Corrected POV",
+        "type": "POV",
+        "version": "built-in-2",
+        "description": "Conservatively caps submitted and pending quantity against current volume.",
+        "defaults": {
+            "side": "buy",
+            "asset": "ACME",
+            "quantity": 50000,
+            "max_participation": 10,
+            "duration": 20,
+            "latency_ms": 10,
+        },
+    },
 }
-
 DEFAULT_PROPERTIES = [
-    {"id": "completion", "name": "Minimum completion", "description": "Percent of the parent order filled by completion.", "units": "%", "threshold": 95, "operator": ">="},
-    {"id": "shortfall", "name": "Maximum implementation shortfall", "description": "Execution cost relative to arrival price.", "units": "bps", "threshold": 20, "operator": "<="},
-    {"id": "participation", "name": "Maximum participation", "description": "Largest share of observed market volume.", "units": "%", "threshold": 12, "operator": "<="},
-    {"id": "halt", "name": "No orders during a halt", "description": "No strategy instruction may be emitted while halted.", "units": "orders", "threshold": 0, "operator": "<="},
-    {"id": "remaining", "name": "Maximum remaining inventory", "description": "Unfilled parent order at completion.", "units": "%", "threshold": 5, "operator": "<="},
+    {
+        "id": "completion",
+        "name": "Minimum completion",
+        "description": "Percent filled by completion.",
+        "units": "%",
+        "threshold": 95,
+        "operator": ">=",
+    },
+    {
+        "id": "shortfall",
+        "name": "Maximum implementation shortfall",
+        "description": "Deterministic execution-cost proxy.",
+        "units": "bps",
+        "threshold": 20,
+        "operator": "<=",
+    },
+    {
+        "id": "participation",
+        "name": "Maximum participation",
+        "description": "Largest realized market-volume share.",
+        "units": "%",
+        "threshold": 12,
+        "operator": "<=",
+    },
+    {
+        "id": "halt",
+        "name": "No orders during a halt",
+        "description": "Orders while halted.",
+        "units": "orders",
+        "threshold": 0,
+        "operator": "<=",
+    },
+    {
+        "id": "remaining",
+        "name": "Maximum remaining inventory",
+        "description": "Unfilled parent order.",
+        "units": "%",
+        "threshold": 5,
+        "operator": "<=",
+    },
 ]
 
+
 def stable_id(prefix: str, data: Any) -> str:
-    value = json.dumps(data, sort_keys=True, default=str).encode()
-    return f"{prefix}_{hashlib.sha256(value).hexdigest()[:10]}"
+    return (
+        f"{prefix}_{hashlib.sha256(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()[:10]}"
+    )
 
-def evaluate(strategy: dict, scenario: dict, properties: list[dict], seed: int) -> dict:
-    """Deterministic bounded execution model used for product-level safety tests."""
-    p = strategy.get("parameters", strategy.get("defaults", {}))
-    liquidity = float(scenario.get("liquidity", 1))
-    volatility = float(scenario.get("volatility", 1))
-    latency = float(scenario.get("latency_ms", p.get("latency_ms", 10)))
-    forced = float(scenario.get("forced_seller", 0))
-    spread = float(scenario.get("spread", 1))
-    fragile = strategy.get("id") == "pov_fragile" or strategy.get("strategy_id") == "pov_fragile"
-    stress = (1 - liquidity) * 42 + (volatility - 1) * 8 + max(0, latency - 10) * .08 + forced / 4500 + (spread - 1) * 7
-    wobble = ((seed * 17) % 11 - 5) * .18
-    completion = max(0, min(100, 100 - stress * .42 + wobble))
-    shortfall = max(0, 4 + stress * .64 + wobble)
-    participation = float(p.get("max_participation", 10)) + max(0, stress - 15) * .07
-    if fragile and latency >= 25 and liquidity <= .7:
-        participation += 4 + (latency - 25) * .05
-    remaining = 100 - completion
-    observed = {"completion": round(completion, 2), "shortfall": round(shortfall, 2), "participation": round(participation, 2), "halt": 0, "remaining": round(remaining, 2)}
-    results = []
-    for prop in properties:
-        value = observed.get(prop["id"], 0)
-        passed = value >= prop["threshold"] if prop["operator"] == ">=" else value <= prop["threshold"]
-        margin = value - prop["threshold"] if prop["operator"] == "<=" else prop["threshold"] - value
-        results.append({**prop, "observed": value, "passed": passed, "margin": round(margin, 2), "first_violation_time": None if passed else "00:01:32", "evidence": ["deterministic-run", f"seed-{seed}"]})
-    return {"seed": seed, "metrics": observed, "properties": results, "passed": all(x["passed"] for x in results), "timeline": replay_timeline(scenario, observed)}
 
-def replay_timeline(scenario: dict, metrics: dict) -> list[dict]:
-    return [{"step": n, "price": round(100 + n * .03 - max(0, n - 9) * (1 - scenario.get("liquidity", 1)) * .8, 2), "spread_bps": round(4 * scenario.get("spread", 1), 1), "depth": round(10000 * scenario.get("liquidity", 1)), "progress": round(metrics["completion"] * n / 20, 1), "forced_flow": scenario.get("forced_seller", 0) if n >= 10 else 0, "failure": n == 15} for n in range(21)]
+def scenario_hash(s: dict) -> str:
+    return stable_id("scenario", s)
+
 
 def severity(s: dict) -> dict:
-    components = {"liquidity": round(1 - s.get("liquidity", 1), 3), "volatility": round((s.get("volatility", 1) - 1) / 3, 3), "latency": round(s.get("latency_ms", 10) / 100, 3), "forced_flow": round(s.get("forced_seller", 0) / 50000, 3), "spread": round((s.get("spread", 1) - 1) / 3, 3), "replenishment": round(1 - s.get("replenishment", 1), 3)}
-    return {"policy_version": "severity-1.0", "weights": {k: 1 for k in components}, "components": components, "score": round(sum(components.values()), 3)}
+    c = {
+        "liquidity": 1 - s.get("liquidity", 1),
+        "volatility": (s.get("volatility", 1) - 1) / 3,
+        "latency": max(0, s.get("latency_ms", 10) - 10) / 90,
+        "forced_flow": s.get("forced_seller", 0) / 50000,
+        "spread": (s.get("spread", 1) - 1) / 3,
+        "replenishment": 1 - s.get("replenishment", 1),
+    }
+    return {
+        "policy_version": "severity-2.0",
+        "weights": {k: 1 for k in c},
+        "components": {k: round(v, 3) for k, v in c.items()},
+        "score": round(sum(c.values()), 3),
+    }
 
-def run_search(strategy: dict, properties: list[dict], mode: str = "quick") -> dict:
+
+def _strategy(strategy):
+    return strategy.get("parameters", strategy.get("defaults", {})), strategy.get("id") == "pov_fragile"
+
+
+def evaluate(strategy: dict, scenario: dict, properties: list[dict], seed: int) -> dict:
+    p, fragile = _strategy(strategy)
+    qty = p.get("quantity", 50000)
+    cap = p.get("max_participation", 10) / 100
+    remaining = float(qty)
+    pending = []
+    max_part = 0
+    filled = 0.0
+    cost = 0.0
+    timeline = []
+    latency = max(1, round(scenario.get("latency_ms", p.get("latency_ms", 10)) / 10))
+    for t in range(20):
+        base = 30000 + (seed % 7) * 300
+        contraction = scenario.get("liquidity", 1) * (
+            0.75 if t >= 9 and scenario.get("forced_seller", 0) else 1
+        )
+        volume = max(1000, base * contraction)
+        forced = scenario.get("forced_seller", 0) / 8 if 9 <= t < 17 else 0
+        due = [x for x in pending if x[0] <= t]
+        pending = [x for x in pending if x[0] > t]
+        submitted = sum(x[1] for x in due)
+        executable = max(0, volume - forced) * (0.8 if fragile else 1.0)
+        # Corrected POV applies its hard cap at fill time too, so delayed orders
+        # cannot consume more than the contemporaneous market-volume budget.
+        if not fragile:
+            executable = min(executable, cap * volume)
+        fill = min(submitted, executable, remaining)
+        remaining -= fill
+        filled += fill
+        part = fill / volume
+        max_part = max(max_part, part)
+        cost += part * scenario.get("spread", 1) * 2 + max(0, scenario.get("volatility", 1) - 1) * 0.4
+        observed = volume if not fragile else max(1000, base * scenario.get("liquidity", 1))
+        budget = max(0, cap * observed - (0 if fragile else sum(x[1] for x in pending)))
+        target = min(remaining, budget)
+        pending.append((t + latency, target))
+        timeline.append(
+            {
+                "step": t,
+                "market_volume": round(volume),
+                "observed_volume": round(observed),
+                "submitted": round(target),
+                "filled": round(fill),
+                "pending": round(sum(x[1] for x in pending)),
+                "participation": round(part * 100, 2),
+                "depth": round(volume),
+                "spread_bps": round(4 * scenario.get("spread", 1), 1),
+                "price": round(100 + cost * 0.01, 3),
+                "progress": round(filled / qty * 100, 2),
+                "forced_flow": round(forced),
+                "failure": part > cap,
+            }
+        )
+    metrics = {
+        "completion": round(filled / qty * 100, 2),
+        "shortfall": round(cost, 2),
+        "participation": round(max_part * 100, 2),
+        "halt": 0,
+        "remaining": round(remaining / qty * 100, 2),
+    }
+    rows = []
+    for prop in properties:
+        value = metrics[prop["id"]]
+        passed = value >= prop["threshold"] if prop["operator"] == ">=" else value <= prop["threshold"]
+        rows.append(
+            {
+                **prop,
+                "observed": value,
+                "passed": passed,
+                "margin": round(
+                    (prop["threshold"] - value) if prop["operator"] == ">=" else (value - prop["threshold"]),
+                    2,
+                ),
+                "first_violation_time": None
+                if passed
+                else next(
+                    (
+                        f"00:00:{x['step'] * 3:02d}"
+                        for x in timeline
+                        if (prop["id"] == "participation" and x["participation"] > prop["threshold"])
+                    ),
+                    "00:01:00",
+                ),
+                "evidence": ["deterministic-pov-harness", f"seed-{seed}"],
+            }
+        )
+    return {
+        "seed": seed,
+        "scenario_hash": scenario_hash(scenario),
+        "metrics": metrics,
+        "properties": rows,
+        "passed": all(x["passed"] for x in rows),
+        "timeline": timeline,
+    }
+
+
+def _target_fail(runs):
+    return sum(any(p["id"] == "participation" and not p["passed"] for p in r["properties"]) for r in runs)
+
+
+def _runs(strategy, s, p, seeds):
+    return [evaluate(strategy, s, p, x) for x in seeds]
+
+
+def run_search(strategy, properties, mode="quick"):
     seeds = [41, 42, 43] if mode == "quick" else list(range(41, 49))
-    candidates = [{"liquidity": x, "volatility": v, "latency_ms": latency, "forced_seller": f, "spread": sp, "replenishment": .7} for x in (.9, .7, .55, .44) for v in (1.2, 2.1) for latency in (12, 38) for f in (0, 18000) for sp in (1.0, 1.5)]
-    observations = []
-    for scenario in candidates:
-        runs = [evaluate(strategy, scenario, properties, seed) for seed in seeds]
-        failures = [r for r in runs if not r["passed"]]
-        if len(failures) >= (2 if mode == "quick" else 6):
-            observations.append((severity(scenario)["score"], scenario, runs))
-    if not observations:
-        return {"status": "complete", "found": False, "tested": len(candidates), "message": "No reproducible failure within the selected bounds."}
-    _, scenario, runs = min(observations, key=lambda x: x[0])
-    failing = next(p for p in runs[0]["properties"] if not p["passed"])
-    neighbor = {**scenario, "liquidity": min(1, scenario["liquidity"] + .05)}
-    minimized = dict(scenario)
-    for key, target in (("liquidity", .44), ("volatility", 1.0), ("latency_ms", 10), ("forced_seller", 0), ("spread", 1.0)):
-        trial = {**minimized, key: target}
-        if sum(not evaluate(strategy, trial, properties, seed)["passed"] for seed in seeds) >= 2:
-            minimized = trial
-    failure_id = stable_id("failure", {"strategy": strategy, "scenario": minimized, "properties": properties})
-    failed = sum(not r["passed"] for r in runs)
-    return {"id": failure_id, "status": "complete", "found": True, "tested": len(candidates), "scenario": scenario, "minimized": minimized, "passing_neighbor": neighbor, "severity": severity(minimized), "violated_property": failing, "reproduction": {"seeds_tested": seeds, "seeds_failed": failed, "failure_rate": failed / len(seeds), "calibration_sets_tested": 3, "calibration_sets_failed": 3, "mean_violation_magnitude": abs(failing["margin"]), "median_violation_magnitude": abs(failing["margin"]), "bootstrap_interval": [round(abs(failing["margin"]) * .8, 2), round(abs(failing["margin"]) * 1.2, 2)]}, "runs": runs}
+    candidates = [
+        {
+            "liquidity": liquidity,
+            "volatility": 1,
+            "latency_ms": lat,
+            "forced_seller": f,
+            "spread": 1,
+            "replenishment": 1,
+        }
+        for liquidity in (0.9, 0.7, 0.55, 0.44)
+        for lat in (20, 30, 40)
+        for f in (0, 5000)
+    ]
+    qualifying = [
+        (severity(s)["score"], s, _runs(strategy, s, properties, seeds))
+        for s in candidates
+        if _target_fail(_runs(strategy, s, properties, seeds)) >= (2 if mode == "quick" else 6)
+    ]
+    if not qualifying:
+        return {
+            "status": "complete",
+            "found": False,
+            "tested": len(candidates),
+            "message": "No reproducible participation failure within bounds.",
+        }
+    _, original, runs = min(qualifying, key=lambda x: (x[0], json.dumps(x[1], sort_keys=True)))
+    minimized = dict(original)
+    trace = []
+    for key, levels in (
+        ("liquidity", (0.55, 0.7, 0.9, 1)),
+        ("latency_ms", (30, 20, 10)),
+        ("forced_seller", (0,)),
+    ):
+        for value in levels:
+            trial = {**minimized, key: value}
+            rr = _runs(strategy, trial, properties, seeds)
+            ok = _target_fail(rr) >= 2 and severity(trial)["score"] <= severity(minimized)["score"]
+            trace.append({"dimension": key, "trial": value, "accepted": ok})
+            if ok:
+                minimized = trial
+    final_runs = _runs(strategy, minimized, properties, seeds)
+    neighbor = {**minimized, "liquidity": min(1, minimized["liquidity"] + 0.15)}
+    neighbor_runs = _runs(strategy, neighbor, properties, seeds)
+    # Only call it a passing neighbor when verified; otherwise use the next latency improvement.
+    if not all(r["passed"] for r in neighbor_runs):
+        neighbor = {**minimized, "latency_ms": max(10, minimized["latency_ms"] - 10)}
+        neighbor_runs = _runs(strategy, neighbor, properties, seeds)
+    if not all(r["passed"] for r in neighbor_runs):
+        neighbor = {**minimized, "forced_seller": 0}
+        neighbor_runs = _runs(strategy, neighbor, properties, seeds)
+    target = next(p for p in final_runs[0]["properties"] if p["id"] == "participation")
+    fid = stable_id(
+        "failure", {"strategy": strategy.get("id"), "scenario": minimized, "properties": properties}
+    )
+    return {
+        "id": fid,
+        "status": "complete",
+        "found": True,
+        "tested": len(candidates),
+        "scenario": original,
+        "original_runs": runs,
+        "minimized": minimized,
+        "runs": final_runs,
+        "minimization_trace": trace,
+        "passing_neighbor": neighbor,
+        "passing_neighbor_runs": neighbor_runs,
+        "severity": severity(minimized),
+        "violated_property": target,
+        "reproduction": {
+            "seeds_tested": seeds,
+            "seeds_failed": _target_fail(final_runs),
+            "failure_rate": _target_fail(final_runs) / len(seeds),
+        },
+        "scenario_hash": scenario_hash(minimized),
+    }
 
-def export_fixture(failure: dict, strategy: dict, properties: list[dict]) -> dict:
+
+def export_fixture(failure, strategy, properties):
     STORE.mkdir(parents=True, exist_ok=True)
-    fixture = {"schema_version": "1.0", "case": {"id": failure["id"], "name": "thin_liquidity_forced_seller", "created_at": datetime.now(UTC).isoformat(), "source_failure_id": failure["id"]}, "strategy": {"type": strategy.get("type"), "version": "built-in-1", "parameters": strategy.get("parameters", strategy.get("defaults", {}))}, "market": {"calibration_pack_id": "demo", "calibration_set_id": "accepted-1", "seed": 42, **failure["minimized"]}, "events": [{"type": "forced_seller", "start_time": 92, "quantity": failure["minimized"].get("forced_seller", 0), "parameters": {}}], "safety_properties": [{"type": p["id"], "threshold": p["threshold"], "units": p["units"]} for p in properties], "expected": {"result": "fail", "violated_property": failure["violated_property"]["id"], "minimum_violation_margin": abs(failure["violated_property"]["margin"])}, "reproduction": {"command": "smw test tests/market_scenarios/thin_liquidity_forced_seller.yaml", "tested_seeds": failure["reproduction"]["seeds_tested"], "failure_rate": failure["reproduction"]["failure_rate"]}, "provenance": {"code_commit": "working-tree", "policy_versions": ["severity-1.0"], "source_hashes": []}}
+    fixture = {
+        "schema_version": "1.1",
+        "case": {
+            "id": failure["id"],
+            "name": "stale_volume_participation",
+            "created_at": datetime.now(UTC).isoformat(),
+            "source_failure_id": failure["id"],
+        },
+        "scenario_hash": failure["scenario_hash"],
+        "strategy": {
+            "id": strategy["id"],
+            "type": strategy["type"],
+            "version": strategy.get("version", "built-in"),
+            "parameters": strategy.get("parameters", strategy["defaults"]),
+        },
+        "market": {**failure["minimized"]},
+        "seeds": failure["reproduction"]["seeds_tested"],
+        "safety_properties": properties,
+        "expected": {"result": "fail", "targeted_property": "participation"},
+        "provenance": {"policy_versions": ["severity-2.0"]},
+    }
     path = STORE / f"{failure['id']}.yaml"
     path.write_text(yaml.safe_dump(fixture, sort_keys=False))
     path.with_suffix(".json").write_text(json.dumps(fixture, indent=2))
-    return {"fixture": fixture, "yaml": str(path), "json": str(path.with_suffix('.json'))}
+    return {"fixture": fixture, "yaml": str(path), "json": str(path.with_suffix(".json"))}

@@ -109,14 +109,31 @@ def report(experiment_id: str) -> None:
 @cli.command("test")
 def test_fixture(path: Path) -> None:
     """Run a Market Fuzzer YAML/JSON regression fixture."""
-    data = yaml.safe_load(path.read_text()) if path.suffix in {".yaml", ".yml"} else json.loads(path.read_text())
-    strategy_type = str(data["strategy"]["type"]).lower().replace(" ", "_")
-    strategy_id = "pov_fragile" if strategy_type == "pov" else strategy_type
-    strategy = {"id": strategy_id, **STRATEGIES.get(strategy_id, STRATEGIES["pov_fragile"]), "parameters": data["strategy"]["parameters"]}
-    props = [{"id": x["type"], "name": x["type"], "description": "fixture property", "units": x["units"], "threshold": x["threshold"], "operator": ">=" if x["type"] == "completion" else "<="} for x in data["safety_properties"]]
-    result = evaluate(strategy, data["market"], props or DEFAULT_PROPERTIES, int(data["market"]["seed"]))
-    actual = "pass" if result["passed"] else "fail"
-    typer.echo(json.dumps({"result": actual, "expected": data["expected"]["result"], "matches_expected_outcome": actual == data["expected"]["result"]}, indent=2))
+    data = (
+        yaml.safe_load(path.read_text()) if path.suffix in {".yaml", ".yml"} else json.loads(path.read_text())
+    )
+    strategy_id = data["strategy"].get("id")
+    if strategy_id not in STRATEGIES:
+        raise typer.BadParameter("fixture has an unknown strategy id")
+    strategy = {"id": strategy_id, **STRATEGIES[strategy_id], "parameters": data["strategy"]["parameters"]}
+    props = data.get("safety_properties", DEFAULT_PROPERTIES)
+    seeds = data.get("seeds", [42])
+    results = [evaluate(strategy, data["market"], props, int(seed)) for seed in seeds]
+    actual = "pass" if all(result["passed"] for result in results) else "fail"
+    matches = actual == data["expected"]["result"]
+    typer.echo(
+        json.dumps(
+            {
+                "result": actual,
+                "expected": data["expected"]["result"],
+                "seeds": seeds,
+                "matches_expected_outcome": matches,
+            },
+            indent=2,
+        )
+    )
+    if not matches:
+        raise typer.Exit(1)
 
 
 @cli.command()
