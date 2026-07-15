@@ -1,20 +1,20 @@
 # Quant Challenge Arena
 
-Quant Challenge Arena is an Education-track platform where students submit quantitative strategies to a public synthetic market and are evaluated against hidden, deterministic regimes. It teaches the difference between a leaderboard backtest and evidence that generalizes.
+Quant Challenge Arena is an education-oriented execution-strategy assessment platform. Students configure a safe, declarative policy for a fictional limit-order-book exchange, practice in a public market, and are evaluated against hidden, deterministic liquidity, latency, event, and crowding regimes. It teaches the difference between optimizing a visible leaderboard and understanding execution robustness.
 
-The current challenge, **When the Backtest Winner Loses**, is intentionally small and truthful: three fictional assets, a public momentum regime, and hidden structural-break, one-day-delay, liquidity-shock, and false-feature tests. The deterministic engine owns data generation, validation, scoring, integrity checks, and ranking. GPT-5.6 may generate challenge content and grounded feedback, but never scores or ranks a submission.
+The current challenge, **Trade the Shock**, is intentionally small and truthful: three fictional issuers, a continuous price-time-priority exchange, seven background-agent roles, a 6,000-share parent order, and hidden liquidity-withdrawal, forced-seller, earnings, and latency worlds. The deterministic exchange owns every order, fill, metric, and rank. GPT-5.6 may design a lesson or explain measured evidence, but never scores, ranks, or alters execution.
 
 ## Arena workflow
 
 ```text
-Instructor generates → Approves public panel → Student submits CSV
-→ Deterministic public score → Instructor reveals hidden regimes
-→ Robustness-adjusted ranking → Grounded feedback
+Choose declarative policy → Run public exchange world → Submit final policy
+→ Instructor evaluates hidden worlds → Robustness-adjusted ranking
+→ Evidence-backed feedback and replay
 ```
 
-Open <http://127.0.0.1:8000> after starting the server. The primary UI is the Arena. Use the instructor console to approve the seeded challenge, bundle the public data, run the two included strategy fixtures, and release the hidden results. Switch to Student to validate or submit a strict `date,asset,position` CSV.
+Open <http://127.0.0.1:8000> after starting the server. The primary UI is the exchange-backed Arena. Select one of four included declarative policies, run the visible exchange, then use the instructor control to evaluate the protected benchmark matrix. The verified demonstration shows **Aggressive POV** rank first in public practice while **Guarded Adaptive POV** ranks first across the hidden worlds.
 
-The public leaderboard is deliberately allowed to disagree with the hidden robustness ranking. Example A is designed to win publicly and collapse in hidden regimes; Example B is designed to rank lower publicly and win on robustness.
+The public score deliberately differs from the hidden robustness rubric: public practice prioritizes completion and then shortfall; hidden evaluation balances shortfall, completion, impact, terminal inventory, stability, and order hygiene. The reversal is calculated from engine runs, never hardcoded.
 
 ## Secondary developer tool: Market Fuzzer
 
@@ -35,7 +35,7 @@ python3 -m venv .venv
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open <http://127.0.0.1:8000>, choose **Instructor**, and follow the Arena workflow. No financial data subscription or OpenAI API key is required. The deterministic no-key path is complete; an OpenAI key only adds optional structured challenge prose and feedback.
+Open <http://127.0.0.1:8000>, choose a policy, and run the public world. No financial data subscription or OpenAI API key is required. The deterministic no-key path is complete; an OpenAI key only adds optional structured lesson prose and evidence explanations.
 
 To exercise the secondary Market Fuzzer, open `/market-fuzzer`, choose **Start with POV example**, run the baseline, click **Break My Strategy**, open replay, retest corrected POV, and export the regression fixture.
 
@@ -121,7 +121,7 @@ The result is a software-testing conclusion within the declared synthetic enviro
 make verify
 ```
 
-See [judge instructions](docs/JUDGE_GUIDE.md), [testing and judge instructions](docs/TESTING.md), [product workflow](docs/PRODUCT_WORKFLOW.md), [fixture contract](docs/REGRESSION_FIXTURES.md), [performance notes](docs/PERFORMANCE.md), and [limitations](docs/LIMITATIONS.md).
+See [execution challenge contract](docs/EXECUTION_CHALLENGE.md), [judge instructions](docs/JUDGE_GUIDE.md), [testing and judge instructions](docs/TESTING.md), [product workflow](docs/PRODUCT_WORKFLOW.md), [fixture contract](docs/REGRESSION_FIXTURES.md), [performance notes](docs/PERFORMANCE.md), and [limitations](docs/LIMITATIONS.md).
 
 ## Build Week and provenance
 

@@ -28,6 +28,14 @@ from app.arena import (
 )
 from app.calibration import build_demo_calibration_pack, calibrate_bootstrap
 from app.compiler import compile_world
+from app.execution_arena import (
+    POLICIES as EXECUTION_POLICIES,
+)
+from app.execution_arena import (
+    benchmark_matrix,
+    challenge_overview,
+    run_execution_challenge,
+)
 from app.experiments import run_batch, run_single, run_validation_campaign
 from app.product import (
     DEFAULT_PROPERTIES,
@@ -124,6 +132,21 @@ class ArenaFeedbackRequest(BaseModel):
     model: str | None = Field(default=None, max_length=120, pattern=r"^gpt-[A-Za-z0-9._-]{1,100}$")
 
 
+class ExecutionChallengeRunRequest(BaseModel):
+    """Safe declarative policy request; arbitrary strategy code is never accepted."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    policy_id: str = Field(
+        default="aggressive_pov", pattern=r"^(twap|aggressive_pov|guarded_pov|completion_first)$"
+    )
+    world_variant: str = Field(
+        default="normal",
+        pattern=r"^(normal|liquidity_withdrawal|crowded_unwind|earnings_shock|latency_shock)$",
+    )
+    seed: int = Field(default=42, ge=0, le=2_147_483_647)
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(ROOT / "static" / "arena.html")
@@ -146,6 +169,33 @@ def health() -> dict:
         "arena_engine": "deterministic_synthetic_regime_engine",
         "arena_schema_version": ARENA_SCHEMA_VERSION,
     }
+
+
+@app.get("/api/execution-challenge")
+def execution_challenge() -> dict[str, Any]:
+    """The public brief. Hidden-world parameters never appear on this route."""
+    return challenge_overview()
+
+
+@app.post("/api/execution-challenge/run")
+def execution_challenge_run(request: ExecutionChallengeRunRequest) -> dict[str, Any]:
+    try:
+        return run_execution_challenge(request.policy_id, request.world_variant, request.seed)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.get("/api/execution-challenge/benchmarks")
+def execution_challenge_benchmarks(request: Request) -> dict[str, Any]:
+    """The full hidden matrix is instructor-only until an explicit release path exists."""
+    if _arena_role(request) != "instructor":
+        raise HTTPException(403, "hidden benchmark matrix is instructor-only")
+    return benchmark_matrix()
+
+
+@app.get("/api/execution-challenge/policies")
+def execution_challenge_policies() -> dict[str, Any]:
+    return {"policies": [policy.__dict__ for policy in EXECUTION_POLICIES.values()]}
 
 
 def product_strategy(request: ProductRunRequest) -> dict:
