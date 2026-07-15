@@ -33,6 +33,16 @@ None was imported. Private financial data, FENRIX collaboration assets, MIT rese
 ## Deferred work
 
 Institutional order-flow calibration, learned responsive flow, optional ABIDES backend, accelerator/vectorized books, multiple venues, and production controls remain roadmap items.
+
+## Market Fuzzer product rebuild
+
+The primary product is now the compact deterministic Market Fuzzer harness. Earlier exact-exchange, synthetic-world, calibration, and validation work remains secondary research infrastructure and is documented separately from the product acceptance path.
+
+- Deterministic fragile/corrected POV execution state machine with delayed observations and pending-order accounting
+- Participation-targeted bounded search, seed reproduction, minimization trace, and verified passing neighbor
+- Exact same-scenario corrected comparison with scenario/seed/parent-order contract
+- Schema-validated YAML/JSON fixtures, CLI replay, and real API regression-suite execution
+- Browser workflow rebuilt around Strategy → Safety Properties → Baseline → Break My Strategy → Replay → Retest → Regression
 # Market Fuzzer rebuild
 
 The primary browser route now leads with the developer workflow rather than calibration objects: strategy, safety requirements, baseline, adverse search, counterexample, replay, and regression export.

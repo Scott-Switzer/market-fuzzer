@@ -212,7 +212,11 @@ def evaluate(strategy: dict, scenario: dict, properties: list[dict], seed: int) 
     }
 
 
-def _target_fail(runs):
+def _target_fail(runs, properties=None):
+    """Count runs that violate the enabled participation property."""
+    enabled = {p["id"] for p in (properties or DEFAULT_PROPERTIES)}
+    if "participation" not in enabled:
+        return 0
     return sum(any(p["id"] == "participation" and not p["passed"] for p in r["properties"]) for r in runs)
 
 
@@ -222,6 +226,13 @@ def _runs(strategy, s, p, seeds):
 
 def run_search(strategy, properties, mode="quick"):
     seeds = [41, 42, 43] if mode == "quick" else list(range(41, 49))
+    if "participation" not in {p["id"] for p in properties}:
+        return {
+            "status": "complete",
+            "found": False,
+            "tested": 0,
+            "message": "Enable the participation property to search for the POV tutorial defect.",
+        }
     candidates = [
         {
             "liquidity": liquidity,
@@ -233,13 +244,15 @@ def run_search(strategy, properties, mode="quick"):
         }
         for liquidity in (0.9, 0.7, 0.55, 0.44)
         for lat in (20, 30, 40)
-        for f in (0, 5000)
+        for f in (0, 500, 5000)
     ]
-    qualifying = [
-        (severity(s)["score"], s, _runs(strategy, s, properties, seeds))
-        for s in candidates
-        if _target_fail(_runs(strategy, s, properties, seeds)) >= (2 if mode == "quick" else 6)
-    ]
+    required_failures = 2 if mode == "quick" else 6
+    qualifying = []
+    for candidate in candidates:
+        candidate_runs = _runs(strategy, candidate, properties, seeds)
+        target_failures = _target_fail(candidate_runs, properties)
+        if target_failures >= required_failures:
+            qualifying.append((severity(candidate)["score"], candidate, candidate_runs))
     if not qualifying:
         return {
             "status": "complete",
@@ -250,16 +263,38 @@ def run_search(strategy, properties, mode="quick"):
     _, original, runs = min(qualifying, key=lambda x: (x[0], json.dumps(x[1], sort_keys=True)))
     minimized = dict(original)
     trace = []
+    step = 0
     for key, levels in (
         ("liquidity", (0.55, 0.7, 0.9, 1)),
         ("latency_ms", (30, 20, 10)),
         ("forced_seller", (0,)),
     ):
         for value in levels:
+            step += 1
             trial = {**minimized, key: value}
             rr = _runs(strategy, trial, properties, seeds)
-            ok = _target_fail(rr) >= 2 and severity(trial)["score"] <= severity(minimized)["score"]
-            trace.append({"dimension": key, "trial": value, "accepted": ok})
+            before = severity(minimized)
+            after = severity(trial)
+            target_failures = _target_fail(rr, properties)
+            severity_ok = after["score"] <= before["score"]
+            reproduction_ok = target_failures >= required_failures
+            ok = reproduction_ok and severity_ok
+            trace.append(
+                {
+                    "step": step,
+                    "dimension": key,
+                    "old_value": minimized[key],
+                    "trial_value": value,
+                    "accepted": ok,
+                    "reason": "target failure reproduced and severity moved toward baseline"
+                    if ok
+                    else "target failure or severity condition not met",
+                    "severity_before": before,
+                    "severity_after": after,
+                    "seeds_failed": target_failures,
+                    "seeds_tested": seeds,
+                }
+            )
             if ok:
                 minimized = trial
     final_runs = _runs(strategy, minimized, properties, seeds)
@@ -272,6 +307,13 @@ def run_search(strategy, properties, mode="quick"):
     if not all(r["passed"] for r in neighbor_runs):
         neighbor = {**minimized, "forced_seller": 0}
         neighbor_runs = _runs(strategy, neighbor, properties, seeds)
+    if not all(r["passed"] for r in neighbor_runs):
+        return {
+            "status": "complete",
+            "found": False,
+            "tested": len(candidates),
+            "message": "A participation failure was found, but no verified passing neighbor exists within the search grid.",
+        }
     target = next(p for p in final_runs[0]["properties"] if p["id"] == "participation")
     fid = stable_id(
         "failure", {"strategy": strategy.get("id"), "scenario": minimized, "properties": properties}
@@ -292,10 +334,13 @@ def run_search(strategy, properties, mode="quick"):
         "violated_property": target,
         "reproduction": {
             "seeds_tested": seeds,
-            "seeds_failed": _target_fail(final_runs),
-            "failure_rate": _target_fail(final_runs) / len(seeds),
+            "seeds_failed": _target_fail(final_runs, properties),
+            "failure_rate": _target_fail(final_runs, properties) / len(seeds),
+            "calibration_sets_tested": 1,
+            "calibration_sets_failed": 1 if _target_fail(final_runs, properties) else 0,
         },
         "scenario_hash": scenario_hash(minimized),
+        "passing_neighbor_scenario_hash": scenario_hash(neighbor),
     }
 
 
@@ -319,10 +364,16 @@ def export_fixture(failure, strategy, properties):
         "market": {**failure["minimized"]},
         "seeds": failure["reproduction"]["seeds_tested"],
         "safety_properties": properties,
-        "expected": {"result": "fail", "targeted_property": "participation"},
-        "provenance": {"policy_versions": ["severity-2.0"]},
+        "expected": {
+            "result": "fail",
+            "targeted_property": "participation",
+            "targeted_result": "fail",
+            "minimum_violation_margin": failure["violated_property"]["margin"],
+        },
+        "provenance": {"policy_versions": ["severity-2.0", "minimization-1.0"]},
     }
     path = STORE / f"{failure['id']}.yaml"
+    fixture["provenance"]["reproduction_command"] = f"smw test {path}"
     path.write_text(yaml.safe_dump(fixture, sort_keys=False))
     path.with_suffix(".json").write_text(json.dumps(fixture, indent=2))
     return {"fixture": fixture, "yaml": str(path), "json": str(path.with_suffix(".json"))}

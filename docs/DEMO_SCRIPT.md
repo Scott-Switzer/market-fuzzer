@@ -1,20 +1,19 @@
-# Demo script — 2:55 target
+# Market Fuzzer demo script — 2:55 target
 
-**0:00–0:25 — Problem.** “Historical replay cannot respond to a new execution strategy, and unvalidated synthetic data cannot support real decisions.”
+**0:00–0:20 — Problem.** “A strategy can pass a normal backtest and still violate its execution requirements when liquidity and observations change. Market Fuzzer searches for the smallest reproducible synthetic condition that breaks it.”
 
-**0:25–0:50 — Calibrate.** Load the aggregate-only calibration pack. Show the source hash, chronological holdout, accepted parameter sets, and rejected candidate. State that no source rows are committed.
+**0:20–0:40 — Strategy and safety.** Start the fragile POV tutorial. Show the parent order and requirements: completion, shortfall, participation, halt behavior, and remaining inventory.
 
-**0:50–1:20 — Intervene.** Compile the world, reduce displayed depth by 50%, add the forced seller, and sweep participation from 2% to 20%.
+**0:40–0:55 — Baseline.** Run the normal market. Show `Baseline PASS` and the measured metrics.
 
-**1:20–1:55 — Run paired worlds.** Launch the quick campaign across eight common seeds and three accepted calibration sets. State that the deterministic exchange—not GPT—creates fills and accounting.
+**0:55–1:25 — Break.** Click **Break My Strategy**. The deterministic bounded search targets participation, not an arbitrary failed metric.
 
-**1:55–2:25 — Validate.** Show the five vectors, the exact participation claim gate, calibration agreement, permitted claims, and blocked production-capacity claim.
+**1:25–1:50 — Counterexample.** Show the minimized scenario, targeted threshold/observed value, seed reproduction, and the separately verified passing neighbor.
 
-**2:25–2:45 — Governed release.** Export the package. Show the manifest, hashes, source-row boundary, confidentiality/derivation report, and membership-inference `NOT_APPLICABLE` status.
+**1:50–2:10 — Replay.** Open the synchronized replay and point to stale observed volume, forced flow, depth, fills, and the first violation step.
 
-**2:45–2:55 — OpenAI role.** “GPT-5.6 compiles intent into strict, editable assumptions. Codex built, tested, repaired, and documented the engine and evidence system. Neither model determines fills or accounting.”
+**2:10–2:30 — Fix and retest.** Click **Retest with corrected POV**. Show the exact scenario hash, identical seeds and parent order, fragile `FAIL`, and corrected `PASS`.
 
-**2:55–3:00 — Close.** “We do not claim every synthetic market is realistic. We prove which decisions each market is fit to support.”
-# Market Fuzzer demo
+**2:30–2:45 — Regression.** Export YAML/JSON and run the regression suite. Show actual fixture execution and status, including any invalid legacy fixtures rather than hiding them.
 
-Open the app, start the POV tutorial, run its baseline, then click **Break My Strategy**. Read the failing participation property, open replay, export the fixture, and run its displayed CLI command.
+**2:45–2:55 — OpenAI role and close.** “GPT-5.6 can propose structured hypotheses; deterministic code decides results. Codex built and verified the workflow. This is a software regression inside a bounded synthetic harness, not a live-trading claim.”

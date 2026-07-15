@@ -1,5 +1,7 @@
 # Methodology
 
+This document describes the broader synthetic-world research infrastructure. The primary Market Fuzzer browser workflow uses the smaller deterministic POV harness documented in `docs/ARCHITECTURE.md` and `docs/PRODUCT_WORKFLOW.md`; it does not claim that every metric below is exercised by the product path.
+
 ## Market mechanism
 
 Each asset trades on a synthetic continuous double auction. Limit orders cross immediately when marketable; otherwise they rest at integer tick prices. Execution uses price priority followed by FIFO. Market orders walk resting levels. Owner-scoped cancellation, partial remainders, fees, inventory, cash, latency, and deterministic halts are logged.

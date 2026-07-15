@@ -1,4 +1,4 @@
-.PHONY: install verify test demo run clean-artifacts
+.PHONY: install verify test demo run run-example regression clean-artifacts
 
 PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 
@@ -23,6 +23,12 @@ run:
 
 demo:
 	$(PYTHON) -m app.cli demo --serve
+
+run-example:
+	$(PYTHON) -m app.cli run-example
+
+regression:
+	$(PYTHON) -m app.cli test artifacts/market_fuzzer
 
 clean-artifacts:
 	rm -rf artifacts/smw-*

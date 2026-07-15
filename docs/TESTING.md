@@ -3,24 +3,34 @@
 ## Complete verification
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
+.venv/bin/python -m ruff format --check app tests
+.venv/bin/python -m ruff check app tests
+.venv/bin/python -m mypy app
+.venv/bin/python -m pytest -q
+.venv/bin/python scripts/determinism_check.py
+.venv/bin/python scripts/provenance_check.py
+.venv/bin/python scripts/demo_smoke.py
+git diff --check
 make verify
 ```
 
-From the repository root, `make verify` runs formatting, lint, type checking, unit/integration tests, determinism, provenance, no-key demo smoke, and whitespace checks.
+The product tests cover baseline PASS, targeted participation failure, deterministic reproduction, minimized evidence, verified neighbor PASS, exact corrected comparison, YAML/JSON export, CLI replay, invalid/mismatched fixtures, and regression-suite execution.
 
 ## Judge path
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e .
+.venv/bin/pip install -e '.[dev]'
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open `http://127.0.0.1:8000`, load the calibration pack, compile the default prompt, and run the 96-world quick validation campaign. Inspect the five validation vectors, claim gate, and governed release manifest. No API key or financial data subscription is needed.
+Open `http://127.0.0.1:8000`, choose **Start with POV example**, inspect the strategy and safety properties, run the baseline, click **Break My Strategy**, open replay, retest corrected POV, export a fixture, and run the regression suite. No API key or financial-data subscription is required.
 
-Supported platforms: macOS, Linux, and Windows with Python 3.12+; Docker is also supported.
-# Product checks
+## CLI smoke path
 
-Run `pytest -q`, `ruff check app tests`, and `smw test path/to/fixture.yaml`. The product test demonstrates that fragile POV passes baseline but produces a reproducible bounded failure.
+```bash
+.venv/bin/python -m app.cli test artifacts/market_fuzzer/failure_<id>.yaml
+.venv/bin/python -m app.cli test artifacts/market_fuzzer/failure_<id>.json
+```
+
+The broader synthetic-world and calibration commands remain available, but they are secondary research infrastructure rather than the primary Market Fuzzer path.

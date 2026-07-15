@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -12,7 +12,16 @@ from pydantic import BaseModel, Field
 from app.calibration import build_demo_calibration_pack, calibrate_bootstrap
 from app.compiler import compile_world
 from app.experiments import run_batch, run_single, run_validation_campaign
-from app.product import DEFAULT_PROPERTIES, STORE, STRATEGIES, evaluate, export_fixture, run_search, stable_id
+from app.product import (
+    DEFAULT_PROPERTIES,
+    STORE,
+    STRATEGIES,
+    evaluate,
+    export_fixture,
+    run_search,
+    scenario_hash,
+    stable_id,
+)
 from app.schemas import WorldSpec
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -169,7 +178,7 @@ def replay(failure_id: str) -> dict:
 
 @app.post("/api/comparisons")
 def comparison(request: ProductRunRequest) -> dict:
-    strategy = product_strategy(request)
+    strategy: dict[str, Any] = product_strategy(request)
     failure_key = request.scenario.get("failure_id")
     original = PRODUCT_FAILURES.get(str(failure_key), {}) if failure_key is not None else {}
     scenario = original.get("minimized", request.scenario)
@@ -179,17 +188,39 @@ def comparison(request: ProductRunRequest) -> dict:
         **STRATEGIES["pov_fragile"],
         "parameters": STRATEGIES["pov_fragile"]["defaults"],
     }
+    # The corrected implementation receives the identical parent-order configuration;
+    # only its strategy logic changes.
+    fragile_parameters = cast(dict[str, Any], STRATEGIES["pov_fragile"]["defaults"])
+    comparison_strategy: dict[str, Any] = {**strategy, "parameters": dict(fragile_parameters)}
     old_runs = [evaluate(fragile, scenario, request.properties, seed) for seed in seeds]
-    new_runs = [evaluate(strategy, scenario, request.properties, seed) for seed in seeds]
+    new_runs = [evaluate(comparison_strategy, scenario, request.properties, seed) for seed in seeds]
+    scenario_id = scenario_hash(scenario)
     return {
         "scenario": scenario,
-        "scenario_hash": stable_id("scenario", scenario),
+        "scenario_hash": scenario_id,
         "seeds": seeds,
         "original": old_runs[0],
         "modified": new_runs[0],
         "original_runs": old_runs,
         "modified_runs": new_runs,
         "same_scenario_and_seeds": True,
+        "same_properties": True,
+        "same_parent_order": fragile_parameters == comparison_strategy["parameters"],
+        "comparison_contract": {
+            "scenario_hash": scenario_id,
+            "seed_list": seeds,
+            "safety_properties": request.properties,
+            "original_strategy": {
+                "id": fragile["id"],
+                "version": fragile["version"],
+                "parameters": fragile["parameters"],
+            },
+            "modified_strategy": {
+                "id": comparison_strategy["id"],
+                "version": comparison_strategy["version"],
+                "parameters": comparison_strategy["parameters"],
+            },
+        },
     }
 
 
@@ -217,13 +248,16 @@ def regression_suite() -> dict:
             rows.append(_run_fixture_data(path))
         except Exception as exc:
             rows.append({"path": str(path), "result": "invalid", "error": str(exc)})
+    invalid = sum(x.get("result") == "invalid" for x in rows)
+    failing = sum(x.get("result") != "invalid" and x.get("matches_expected_outcome") is False for x in rows)
     return {
         "total": len(rows),
         "passing": sum(x.get("matches_expected_outcome") is True for x in rows),
-        "failing": sum(x.get("matches_expected_outcome") is False for x in rows),
+        "failing": failing,
+        "invalid": invalid,
         "newly_failing": 0,
         "fixed": 0,
-        "status": "complete",
+        "status": "complete" if invalid == 0 else "complete_with_invalid_fixtures",
         "fixtures": rows,
     }
 

@@ -2,40 +2,34 @@
 
 ## Tagline
 
-A programmable synthetic exchange that stress-tests quant strategies in realistic counterfactual markets before they reach production.
+Find the market conditions that break your trading algorithm before the market does.
 
 ## Short description
 
-Synthetic Market World turns a natural-language market scenario into a validated, reproducible world of fictional issuers, information events, heterogeneous agents, and exact exchange mechanics. Quant teams can deploy an execution strategy, observe endogenous effects, and compare failure behavior across controlled worlds.
+Market Fuzzer is a Developer Tools product that runs execution strategies against bounded synthetic market conditions, finds a reproducible safety-property violation, minimizes the counterexample, and exports it as a regression test.
 
 ## Full write-up
 
-Historical backtests expose a strategy to one realized history. Replay also cannot fully answer how liquidity providers and other participants would respond when the strategy changes its size or timing. Synthetic Market World provides a controlled counterfactual laboratory.
+Historical backtests show one realized market path. Market Fuzzer gives a quant developer a different workflow: choose a built-in POV strategy, define what safe behavior means, run a normal baseline, search adverse but deterministic conditions, inspect the failure replay, retest a corrected implementation on the exact same scenario, and preserve the result as a fixture.
 
-A researcher describes a market, inspects the explicit typed specification and assumptions, and runs three synthetic companies on a continuous double-auction exchange. Market makers, fundamental, momentum, mean-reversion, noise, forced-liquidation, and execution agents interact through price-time-priority books with integer ticks, partial fills, cancellations, fees, latency, ledgers, and halts. The same strategy then runs through normal, liquidity-withdrawal, earnings-shock, and crowded-unwind worlds using common seeds.
-
-Results include execution metrics, scenario-by-participation failure surfaces, component realism diagnostics, and a self-contained audit bundle with specifications, Parquet logs, hashes, and reproduction commands.
+The Build Week product slice is deliberately a compact deterministic market test harness. It models discrete steps, actual and delayed observed volume, latency, pending orders, fills, parent-order remainder, realized participation, completion, a deterministic shortfall proxy, and replay evidence. The fragile POV intentionally ignores pending orders and stale volume contraction; the corrected POV applies a pending-order budget and fill-time participation guard. The search targets participation and never lets GPT decide a verdict.
 
 ## Built with
 
-Python, FastAPI, Pydantic, NumPy, Pandas, PyArrow, Typer, OpenAI Responses API, GPT-5.6, Codex, HTML, CSS, JavaScript, Pytest, Hypothesis, Ruff, Mypy, Docker, GitHub Actions.
+Python, FastAPI, Pydantic, NumPy, Typer, OpenAI Responses API/GPT-5.6 (optional), Codex, HTML, CSS, JavaScript, Pytest, Ruff, Mypy, and GitHub Actions.
 
 ## Installation and judge testing
 
-Use the commands in `docs/TESTING.md`. The complete offline workflow needs no API key. Open the browser app, compile the default world, run the exchange, configure a strategy, and run the counterfactual battery.
+Follow `docs/TESTING.md`. The offline browser workflow needs no API key. Start the POV tutorial, run baseline, break the strategy, inspect replay, retest corrected POV, export a fixture, and run the regression suite.
 
-## GPT-5.6
+## GPT-5.6 and Codex
 
-GPT-5.6 uses structured output to compile natural-language world requests into the same strict schema as offline presets. It identifies assumptions and warnings. It never sets individual prices, orders, fills, accounting entries, or measured outcomes.
+GPT-5.6 may produce schema-constrained failure hypotheses and explanations grounded in measured simulation evidence. It never determines prices, fills, property values, reproduction confidence, or PASS/FAIL. Codex implemented and repaired the deterministic harness, search/minimization workflow, fixture contract, API, CLI, tests, and product UI. Add the final `/feedback` session ID before submission.
 
-## Codex
+## Limitations
 
-Codex implemented, tested, repaired, and documented the product; coordinated license, architecture, and UX research; added deterministic and invariant checks; and produced the release and submission material. Add the final `/feedback` session ID before submission.
+The product proves software behavior only within its declared compact synthetic environment. It is not institutional calibration, a production capacity estimate, a profitability claim, a live-trading recommendation, or regulatory approval. The repository’s broader synthetic-world research modules are retained as secondary infrastructure and are not silently represented as the Market Fuzzer backend.
 
-## Limitations and attribution
+## License
 
-The prototype is not calibrated to institutional order-book data and is not suitable for live trading. ABIDES, JAX-LOB, TRADES/DeepMarket, and MarS were studied, but no source, weights, or datasets were copied. Exact revisions and licenses are in `THIRD_PARTY_NOTICES.md`.
-# Market Fuzzer
-
-Market Fuzzer is a developer product for discovering bounded synthetic market conditions that violate declared execution safety properties, minimizing the counterexample, and preserving it as a regression fixture.
-
+MIT. No proprietary market data or secrets are committed.

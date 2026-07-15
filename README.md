@@ -2,82 +2,81 @@
 
 Market Fuzzer finds the market conditions that break a trading algorithm, reduces each failure to a reproducible counterexample, and turns it into a regression test.
 
-It tests built-in TWAP, POV, and market-maker strategy behavior against explicit safety properties within a bounded synthetic market environment. It does not forecast markets, prove alpha, estimate production capacity, or validate live trading. Run `smw demo --serve` and select **Start with POV example** for a no-key tutorial. GPT hypotheses are optional, structured, and never decide deterministic results. See `docs/PRODUCT_WORKFLOW.md` and `docs/REGRESSION_FIXTURES.md`.
+The current product slice is intentionally narrow and truthful: a deterministic POV execution harness with a fragile tutorial implementation and a corrected implementation. It tests explicit safety properties inside a bounded synthetic market search space. It does not forecast markets, prove alpha, estimate production capacity, or validate live trading.
 
-> A calibrated counterfactual market-validation platform for execution stress testing and governed synthetic-data release.
+## The workflow
 
-Historical backtests replay the market that occurred. Synthetic Market World tests how a generated market responds to the strategy itself.
+```text
+Strategy → Safety Properties → Baseline → Break My Strategy
+→ Minimized Counterexample → Replay → Corrected Retest → Regression Fixture
+```
 
-The commercial surface has three modules: **Execution Validation**, **Counterfactual Research**, and **Governed Data Release**.
-
-## Product workflow
-
-1. **Calibrate:** compile a user-acquired canonical sample into an aggregate-only `CalibrationPackV1`, or use the deterministic no-data demo pack.
-2. **Intervene:** reduce displayed depth, add a forced seller, and sweep participation from 2% to 20%.
-3. **Validate:** run common-random-number worlds across an accepted calibration ensemble and gate every conclusion.
-4. **Release:** export a `SyntheticMarketPackage` only with explicit fit-for-use and confidentiality/derivation evidence.
+The first-run tutorial uses a fragile POV strategy whose delayed-volume accounting and pending-order handling can violate a participation cap. The search targets that property specifically; it does not accept an unrelated completion failure. The corrected POV receives the exact same minimized market, parent-order parameters, safety properties, and seeds.
 
 ## Quick start — no key
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e .
+.venv/bin/pip install -e '.[dev]'
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open `http://127.0.0.1:8000`. No financial data or OpenAI API key is required.
+Open <http://127.0.0.1:8000>, choose **Start with POV example**, run the baseline, click **Break My Strategy**, open replay, retest corrected POV, and export the regression fixture. No financial data subscription or OpenAI API key is required.
 
 ## CLI
 
 ```bash
+smw test path/to/fixture.yaml
+smw test path/to/fixture.json
+smw test artifacts/market_fuzzer
+smw run-example
+```
+
+`smw test` validates schema version, scenario hash, strategy identity, safety properties, seeds, and expected outcomes. It loads the exact stored strategy ID and exits nonzero for mismatches or invalid fixtures. A directory may contain YAML and JSON fixtures; invalid legacy fixtures are reported explicitly.
+
+The repository also retains the broader synthetic-market research engine and calibration commands:
+
+```bash
 smw validate configs/presets/normal.yaml
 smw compile --prompt "thin liquidity and an earnings shock" --offline
-smw run configs/presets/normal.yaml
-smw batch configs/presets/fragile-small-cap.yaml
-smw calibrate --mode quick
-smw validate-market configs/presets/fragile-small-cap.yaml --mode quick
 smw demo
 ```
 
-## Architecture
+Those are secondary research infrastructure, not the primary Market Fuzzer product path.
 
-The authoritative path is `WorldSpec → synthetic world → heterogeneous agents → latency queue → integer-tick price-time-priority exchange → metrics/artifacts`. GPT-5.6 is isolated to structured compilation and assumption disclosure. See [architecture](docs/ARCHITECTURE.md) and [methodology](docs/METHODOLOGY.md).
+## Architecture truth
 
-## GPT-5.6 role
+The product path is a **compact deterministic market test harness**, not a claim of full exact exchange integration. `app/product.py` owns the POV state machine, delayed observations, pending orders, fills, participation, completion, shortfall proxy, replay timeline, search, minimization, comparison, and fixture export. The older `app/exchange/` and synthetic-world modules remain available as research infrastructure and are not silently represented as the product harness.
 
-Set `OPENAI_API_KEY` and optionally `OPENAI_MODEL` (default `gpt-5.6`) to use the online compiler. The current OpenAI SDK Responses structured-output path validates model output directly into Pydantic models. The model never produces prices, fills, accounting, or executable code. Offline mode supports the full demonstration.
+The deterministic evaluator is the accounting authority for every displayed product result. GPT-5.6, when configured, may propose structured failure hypotheses and explain verified evidence; it never determines prices, fills, property values, reproduction confidence, or PASS/FAIL outcomes. Offline deterministic hypotheses support the complete workflow.
 
-## Reproducibility and artifacts
+## What is tested
 
-Every world has canonical JSON and a SHA-256 specification hash. Validation campaigns write orders, trades, book states, latent regimes, intervention labels, calibration evidence, separate simulator and release reports, manifests, and hashes under `artifacts/<experiment-id>/`. Source rows are never copied into an artifact package.
+- Strategy correctness: valid quantities, participation, completion, and state handling.
+- Execution robustness: bounded liquidity, latency, forced-flow, and volume-contraction conditions.
+- Safety properties: completion, shortfall, participation, halt behavior, and remaining inventory.
+- Regression resistance: exact YAML/JSON fixtures and CLI replay.
+
+The result is a software-testing conclusion within the declared synthetic environment. It is not a production capacity estimate, market prediction, profitability claim, live-trading recommendation, or regulatory approval.
 
 ## Testing
 
 ```bash
-.venv/bin/pip install -e '.[dev]'
-.venv/bin/make verify
+.venv/bin/python -m ruff format --check app tests
+.venv/bin/python -m ruff check app tests
+.venv/bin/python -m mypy app
+.venv/bin/python -m pytest -q
+make verify
 ```
 
-This covers formatting, lint, typing, unit/integration tests, matching invariants, determinism, artifact verification, provenance, and no-key demo smoke. See [testing](docs/TESTING.md).
+See [testing and judge instructions](docs/TESTING.md), [product workflow](docs/PRODUCT_WORKFLOW.md), [fixture contract](docs/REGRESSION_FIXTURES.md), and [limitations](docs/LIMITATIONS.md).
 
-## Build Week and Codex
+## Build Week and provenance
 
-The original engine and product were written during OpenAI Build Week. [Hackathon work](docs/HACKATHON_WORK.md) separates new work, inspiration, and deferred integrations. [Codex collaboration](docs/CODEX_COLLABORATION.md) describes implementation and review. Add the final `/feedback` session ID before submission.
+The repository contains the pre-existing research engine plus the Build Week Market Fuzzer product layer. [Hackathon work](docs/HACKATHON_WORK.md) and [Codex collaboration](docs/CODEX_COLLABORATION.md) separate those lanes. Add the final `/feedback` session ID before submission.
 
-## Third-party systems
+## License and safety
 
-ABIDES, ABIDES-JPMC, JAX-LOB, DeepMarket/TRADES, and MarS were inspected at pinned revisions. No code, model weight, checkpoint, or proprietary dataset was copied. See [third-party notices](THIRD_PARTY_NOTICES.md).
+MIT. No proprietary market data or secrets are committed. This is research and testing infrastructure, not investment advice.
 
-## Judge path
-
-Use the no-key quick start, load the calibration pack, compile the default world, and run the 96-world quick campaign. The browser follows Calibration → Intervention → Validation → Governed Release.
-
-## Limitations and safety
-
-This prototype is not institutionally calibrated, does not prove strategy profitability or safety, and is not suitable for live trading without independent validation. It is research and testing infrastructure, not investment advice. See [limitations](docs/LIMITATIONS.md) and [roadmap](docs/ROADMAP.md).
-
-## License
-
-MIT. Research references and reuse boundaries are documented separately.
-
-> We do not claim every synthetic market is realistic. We prove which decisions each market is fit to support.
+> Find the market conditions that break your trading algorithm before the market does.
