@@ -109,6 +109,19 @@ def report(experiment_id: str) -> None:
 @cli.command("test")
 def test_fixture(path: Path) -> None:
     """Run a Market Fuzzer YAML/JSON regression fixture."""
+    if path.is_dir():
+        results = [_run_fixture_data(item) for item in sorted(path.glob("*.yaml"))]
+        typer.echo(json.dumps({"total": len(results), "results": results}, indent=2))
+        if any(not item["matches_expected_outcome"] for item in results):
+            raise typer.Exit(1)
+        return
+    result = _run_fixture_data(path)
+    typer.echo(json.dumps(result, indent=2))
+    if not result["matches_expected_outcome"]:
+        raise typer.Exit(1)
+
+
+def _run_fixture_data(path: Path) -> dict:
     data = (
         yaml.safe_load(path.read_text()) if path.suffix in {".yaml", ".yml"} else json.loads(path.read_text())
     )
@@ -121,19 +134,13 @@ def test_fixture(path: Path) -> None:
     results = [evaluate(strategy, data["market"], props, int(seed)) for seed in seeds]
     actual = "pass" if all(result["passed"] for result in results) else "fail"
     matches = actual == data["expected"]["result"]
-    typer.echo(
-        json.dumps(
-            {
-                "result": actual,
-                "expected": data["expected"]["result"],
-                "seeds": seeds,
-                "matches_expected_outcome": matches,
-            },
-            indent=2,
-        )
-    )
-    if not matches:
-        raise typer.Exit(1)
+    return {
+        "path": str(path),
+        "result": actual,
+        "expected": data["expected"]["result"],
+        "seeds": seeds,
+        "matches_expected_outcome": matches,
+    }
 
 
 @cli.command()

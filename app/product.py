@@ -121,7 +121,7 @@ def evaluate(strategy: dict, scenario: dict, properties: list[dict], seed: int) 
     qty = p.get("quantity", 50000)
     cap = p.get("max_participation", 10) / 100
     remaining = float(qty)
-    pending = []
+    pending: list[tuple[int, float]] = []
     max_part = 0
     filled = 0.0
     cost = 0.0

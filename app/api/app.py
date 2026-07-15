@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -59,7 +60,12 @@ def health() -> dict:
 def product_strategy(request: ProductRunRequest) -> dict:
     if request.strategy_id not in STRATEGIES:
         raise HTTPException(422, "unknown built-in strategy")
-    return {"id": request.strategy_id, **STRATEGIES[request.strategy_id], "parameters": {**STRATEGIES[request.strategy_id]["defaults"], **request.parameters}}
+    base: Any = STRATEGIES[request.strategy_id]
+    return {
+        "id": request.strategy_id,
+        **base,
+        "parameters": {**base["defaults"], **request.parameters},
+    }
 
 
 @app.get("/api/strategies")
@@ -70,7 +76,11 @@ def strategies() -> dict:
 @app.post("/api/projects")
 def create_project(payload: dict) -> dict:
     project_id = stable_id("project", {"payload": payload, "count": len(PRODUCT_PROJECTS)})
-    project = {"id": project_id, "name": payload.get("name", "Untitled safety test"), "strategy_id": payload.get("strategy_id", "pov_fragile")}
+    project = {
+        "id": project_id,
+        "name": payload.get("name", "Untitled safety test"),
+        "strategy_id": payload.get("strategy_id", "pov_fragile"),
+    }
     PRODUCT_PROJECTS[project_id] = project
     return project
 
@@ -85,8 +95,25 @@ def get_project(project_id: str) -> dict:
 @app.post("/api/baselines")
 def baseline(request: ProductRunRequest) -> dict:
     strategy = product_strategy(request)
-    result = evaluate(strategy, {"liquidity": 1, "volatility": 1, "latency_ms": strategy["parameters"].get("latency_ms", 10), "forced_seller": 0, "spread": 1, "replenishment": 1}, request.properties, 42)
-    return {"id": stable_id("baseline", result), "strategy": strategy, **result, "warning": "A pass validates this bounded synthetic test only; it is not a live-trading or capacity claim."}
+    result = evaluate(
+        strategy,
+        {
+            "liquidity": 1,
+            "volatility": 1,
+            "latency_ms": strategy["parameters"].get("latency_ms", 10),
+            "forced_seller": 0,
+            "spread": 1,
+            "replenishment": 1,
+        },
+        request.properties,
+        42,
+    )
+    return {
+        "id": stable_id("baseline", result),
+        "strategy": strategy,
+        **result,
+        "warning": "A pass validates this bounded synthetic test only; it is not a live-trading or capacity claim.",
+    }
 
 
 @app.post("/api/searches")
@@ -127,17 +154,43 @@ def minimize(failure_id: str) -> dict:
 @app.get("/api/failures/{failure_id}/replay")
 def replay(failure_id: str) -> dict:
     value = failure(failure_id)
-    return {"failure_id": failure_id, "baseline": evaluate(value["strategy"], {"liquidity": 1, "volatility": 1, "latency_ms": 10, "forced_seller": 0, "spread": 1}, value["properties"], 42)["timeline"], "failure": value["runs"][0]["timeline"], "annotation": "Forced flow reaches a thin book; stale participation accounting violates the cap."}
+    return {
+        "failure_id": failure_id,
+        "baseline": evaluate(
+            value["strategy"],
+            {"liquidity": 1, "volatility": 1, "latency_ms": 10, "forced_seller": 0, "spread": 1},
+            value["properties"],
+            42,
+        )["timeline"],
+        "failure": value["runs"][0]["timeline"],
+        "annotation": "Forced flow reaches a thin book; stale participation accounting violates the cap.",
+    }
 
 
 @app.post("/api/comparisons")
 def comparison(request: ProductRunRequest) -> dict:
     strategy = product_strategy(request)
-    original = PRODUCT_FAILURES.get(request.scenario.get("failure_id"), {})
+    failure_key = request.scenario.get("failure_id")
+    original = PRODUCT_FAILURES.get(str(failure_key), {}) if failure_key is not None else {}
     scenario = original.get("minimized", request.scenario)
-    old = evaluate({"id": "pov_fragile", **STRATEGIES["pov_fragile"]}, scenario, request.properties, 42)
-    new = evaluate(strategy, scenario, request.properties, 42)
-    return {"scenario": scenario, "original": old, "modified": new}
+    seeds = original.get("reproduction", {}).get("seeds_tested", [42])
+    fragile = {
+        "id": "pov_fragile",
+        **STRATEGIES["pov_fragile"],
+        "parameters": STRATEGIES["pov_fragile"]["defaults"],
+    }
+    old_runs = [evaluate(fragile, scenario, request.properties, seed) for seed in seeds]
+    new_runs = [evaluate(strategy, scenario, request.properties, seed) for seed in seeds]
+    return {
+        "scenario": scenario,
+        "scenario_hash": stable_id("scenario", scenario),
+        "seeds": seeds,
+        "original": old_runs[0],
+        "modified": new_runs[0],
+        "original_runs": old_runs,
+        "modified_runs": new_runs,
+        "same_scenario_and_seeds": True,
+    }
 
 
 @app.post("/api/regression-fixtures")
@@ -156,12 +209,33 @@ def regression_fixtures() -> dict:
 
 @app.post("/api/regression-suites/run")
 def regression_suite() -> dict:
-    return {"total": len(list(STORE.glob("*.yaml"))), "passing": 0, "failing": 0, "newly_failing": 0, "fixed": 0, "status": "No persisted fixtures have been run in this process."}
+    from app.cli import _run_fixture_data
+
+    rows = []
+    for path in sorted(STORE.glob("*.yaml")):
+        try:
+            rows.append(_run_fixture_data(path))
+        except Exception as exc:
+            rows.append({"path": str(path), "result": "invalid", "error": str(exc)})
+    return {
+        "total": len(rows),
+        "passing": sum(x.get("matches_expected_outcome") is True for x in rows),
+        "failing": sum(x.get("matches_expected_outcome") is False for x in rows),
+        "newly_failing": 0,
+        "fixed": 0,
+        "status": "complete",
+        "fixtures": rows,
+    }
 
 
 @app.get("/api/model-quality")
 def model_quality() -> dict:
-    return {"mechanical_validity": "supported by deterministic exchange tests", "calibration_stability": "demo calibration evidence available", "permitted_claim": "software regression within configured synthetic bounds", "blocked_claims": ["production capacity estimate", "future profitability", "live-trading safety"]}
+    return {
+        "mechanical_validity": "supported by deterministic exchange tests",
+        "calibration_stability": "demo calibration evidence available",
+        "permitted_claim": "software regression within configured synthetic bounds",
+        "blocked_claims": ["production capacity estimate", "future profitability", "live-trading safety"],
+    }
 
 
 @app.get("/api/schema")
