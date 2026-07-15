@@ -8,7 +8,7 @@ from typing import Any, cast
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.analyst import analyze_failure
 from app.calibration import build_demo_calibration_pack, calibrate_bootstrap
@@ -36,30 +36,40 @@ PRODUCT_FAILURES: dict[str, dict] = {}
 
 
 class CompileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     prompt: str = Field(min_length=3, max_length=2_000)
     seed: int = Field(default=42, ge=0, le=2_147_483_647)
     mode: str = Field(default="offline", pattern="^(offline|gpt)$")
 
 
 class RunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     spec: WorldSpec
 
 
 class CampaignRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     spec: WorldSpec
     mode: str = Field(default="quick", pattern="^(quick|audit)$")
 
 
 class ProductRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     strategy_id: str = "pov_fragile"
-    parameters: dict = Field(default_factory=dict)
-    properties: list[dict] = Field(default_factory=lambda: DEFAULT_PROPERTIES.copy())
-    scenario: dict = Field(default_factory=dict)
+    parameters: dict = Field(default_factory=dict, max_length=32)
+    properties: list[dict] = Field(default_factory=lambda: DEFAULT_PROPERTIES.copy(), max_length=16)
+    scenario: dict = Field(default_factory=dict, max_length=32)
     mode: str = Field(default="quick", pattern="^(quick|deep)$")
 
 
 class FailureAnalysisRequest(BaseModel):
-    model: str | None = Field(default=None, max_length=120)
+    model_config = ConfigDict(extra="forbid")
+
+    model: str | None = Field(default=None, max_length=120, pattern=r"^gpt-[A-Za-z0-9._-]{1,100}$")
 
 
 @app.get("/")
