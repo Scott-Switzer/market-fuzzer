@@ -1,49 +1,92 @@
-# Performance notes
+# Performance evidence
 
-These are local development measurements for the compact deterministic harness, not production capacity claims. Hardware, Python version, and filesystem affect them.
+These are local development measurements, not production benchmarks, capacity claims, or an SLA. Hardware, Python version, cold filesystem state, browser cache, and concurrent processes affect them.
 
-## Reference workload
-
-The golden tutorial uses:
-
-- one built-in fragile POV strategy;
-- 20 deterministic simulation steps per candidate;
-- the quick search grid;
-- seeds `41, 42, 43`;
-- one minimized counterexample and one verified passing neighbor.
-
-The search intentionally favors explainability and deterministic evidence over throughput. The research-grade exchange modules are not part of this reference workload.
-
-## Local reference measurement
-
-On the Build Week macOS workspace on 2026-07-15, the current `.venv` measured:
-
-| Command | Wall time | Scope |
-|---|---:|---|
-| `smw run-example` | 1.31 s | fresh quick search, minimization, corrected retest, fixture export |
-| `smw test artifacts/market_fuzzer` | 0.49 s | replay of the active fixture directory |
-
-These values are reproducibility notes for this environment, not an SLA or a claim about production throughput.
-
-## What to measure locally
-
-Run:
+## Reproduce
 
 ```bash
-time .venv/bin/python -m app.cli run-example >/tmp/market-fuzzer-run-example.json
-time .venv/bin/python -m pytest -q
+make install
+make install-browser
+make performance
 ```
 
-The CLI output records the actual candidate count, seeds, minimized severity, and fixture paths. Do not copy timings from another machine into a product claim.
+`scripts/performance_probe.py` reports JSON with environment context, workload, matrix hash, and timings for:
 
-## Runtime guardrails
+- application process start until `/api/health` succeeds;
+- public practice, median of three deterministic runs;
+- one policy across the persisted protected-world manifest and internal `SEEDS`;
+- the complete built-in benchmark matrix;
+- a SQLite practice write, audit write, and challenge read, median of five;
+- deterministic no-key GPT fallback, median of five; and
+- headless Chromium initial page load through network idle and visible hero.
 
-- Quick mode uses three seeds and a bounded candidate grid.
-- Deep mode uses eight seeds; it is for audit evidence, not first-run onboarding.
-- The judge script creates an isolated temporary artifact root so stale fixtures cannot affect the result.
-- Search results are deterministic for a fixed strategy, property profile, mode, and seeds.
-- The API does not execute arbitrary uploaded Python.
+The probe uses a temporary SQLite database and removes it. It removes `OPENAI_API_KEY` for the fallback measurement and does not make a live model call.
 
-## Future optimization targets
+## Verified local measurement
 
-If the product grows beyond the tutorial harness, profile the pure evaluator before adding concurrency. Candidate work is embarrassingly parallel, but result hashes, seed pairing, and minimization ordering must remain stable. A future vectorized backend may be added behind the existing strategy/search contracts; it is not required for this Build Week slice.
+Measured on 2026-07-15 at 20:47:51 UTC against implementation commit
+`437c9111cbbfad162e5174a02b4f5cf6a2d7c610`. The environment was macOS 26.5.1 on arm64 with
+Python 3.14.5. The immutable built-in matrix hash was
+`dd8bd36fba11529b7c009ea192ddc009a1c904916e9224a5223f7ad5ef2c6990`.
+
+| Operation | Measured wall time | Fixed workload contract |
+| --- | ---: | --- |
+| Application startup to healthy | 2,882.36 ms | Fresh Uvicorn process and SQLite initialization |
+| Public practice | 2,189.25 ms | Aggressive POV, stored public world, exact seed 42; median of 3 |
+| One-policy protected evaluation | 12,261.05 ms | Aggressive POV, 4 protected worlds × seeds 41 and 42 = 8 runs |
+| Full benchmark matrix | 54,542.77 ms | 4 built-ins × canonical public/protected contract |
+| SQLite persistence operation | 117.96 ms | Practice write + audit write + challenge read; median of 5 |
+| GPT fallback | 0.25 ms | Released aggregate/public-trace evidence, no key; median of 5 |
+| Browser initial load | 965.94 ms | Headless Chromium, network idle and hero visible |
+
+Complete probe output:
+
+```json
+{
+  "claim_boundary": "Local development evidence only; not a production benchmark or SLA.",
+  "environment": {
+    "code_commit": "437c9111cbbfad162e5174a02b4f5cf6a2d7c610",
+    "machine": "arm64",
+    "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+    "processor": "arm",
+    "python": "3.14.5"
+  },
+  "measured_at": "2026-07-15T20:47:51.165113+00:00",
+  "measurements_ms": {
+    "application_startup_to_healthy": 2882.36,
+    "browser_initial_load_network_idle": 965.94,
+    "full_benchmark_matrix": 54542.77,
+    "gpt_no_key_fallback_median_of_5": 0.25,
+    "one_policy_hidden_matrix": 12261.05,
+    "public_practice_median_of_3": 2189.25,
+    "sqlite_practice_write_audit_read_median_of_5": 117.96
+  },
+  "workload": {
+    "feedback_mode": "deterministic_fallback",
+    "full_matrix_policy_count": 4,
+    "hidden_seeds": [41, 42],
+    "hidden_world_count": 4,
+    "matrix_hash": "dd8bd36fba11529b7c009ea192ddc009a1c904916e9224a5223f7ad5ef2c6990",
+    "one_policy_hidden_runs": 8,
+    "public_seed": 42
+  }
+}
+```
+
+## Runtime behavior
+
+- Public practice runs only the stored public world and never calls the hidden matrix.
+- Public leaderboard reads public-only results; it does not compute protected worlds on page load.
+- Hidden evaluation is run once per locked challenge and persisted with a deterministic matrix hash.
+- Subsequent leaderboard and release requests read immutable SQLite snapshots.
+- Release atomically changes visibility, phase, timestamps, and audit state without recomputing the matrix.
+- The no-key feedback path is local and deterministic.
+- Playwright E2E intentionally runs the real matrix and is therefore slower than an API health smoke.
+
+## Caching contract
+
+Immutable evaluation identity is derived from challenge, policy, world, seed, exchange/agent/scoring versions, and result content. A change to a policy, world, seed, or relevant version changes the hash and prevents stale reuse. SQLite de-duplicates the stored challenge evaluation; raw page loads do not trigger hidden recomputation.
+
+## Scaling boundary
+
+The current single-process SQLite design is appropriate for a local Build Week demonstration. It does not claim multi-instance scheduling, distributed evaluation workers, GPU batching, high availability, or institutional class-scale throughput. A future worker pool could parallelize independent policy/world/seed cells only if deterministic ordering, hash construction, and audit semantics remain unchanged.
