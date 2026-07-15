@@ -8,7 +8,8 @@ import time
 from dataclasses import asdict, dataclass
 
 from app.agents.behaviors import AgentContext, ExecutionAgent, MarketMaker, build_agents
-from app.exchange import Account, CancelRequest, Exchange, Order
+from app.exchange import Account, CancelRequest, Exchange, Order, OrderType, Side
+from app.orderflow import QueueReactiveProvider, RuleBasedProvider
 from app.schemas import WorldSpec
 
 
@@ -38,16 +39,25 @@ def run_simulation(spec: WorldSpec) -> SimulationResult:
     started = time.perf_counter()
     rng = random.Random(spec.seed)
     exchange = Exchange([asset.ticker for asset in spec.assets], spec.exchange)
+    provider = (
+        QueueReactiveProvider(spec) if spec.order_flow_provider == "queue_reactive" else RuleBasedProvider()
+    )
     agents = build_agents(spec.agents.populations, spec)
     agent_map = {agent.agent_id: agent for agent in agents}
     for agent in agents:
         exchange.register(
             Account(agent.agent_id, agent.capital_cents, {asset.ticker: 0 for asset in spec.assets})
         )
+    for account_id in provider.account_ids:
+        exchange.register(Account(account_id, 10_000_000_000, {asset.ticker: 0 for asset in spec.assets}))
+    intervention_seller_id = "intervention-forced-seller"
+    exchange.register(
+        Account(intervention_seller_id, 10_000_000_000, {asset.ticker: 1_000_000 for asset in spec.assets})
+    )
 
     fundamentals = {asset.ticker: asset.initial_fundamental_value_ticks for asset in spec.assets}
     prices = {asset.ticker: [asset.initial_price_ticks] for asset in spec.assets}
-    liquidity_multiplier = 1.0
+    liquidity_multiplier = spec.interventions.displayed_depth_multiplier
     pending: list[tuple[int, int, Order]] = []
     pending_sequence = 0
     events_log: list[dict] = []
@@ -76,6 +86,8 @@ def run_simulation(spec: WorldSpec) -> SimulationResult:
                     agent.resting_order_ids.add(order.order_id)
 
     arrival_price = prices[spec.experiment.target_asset][-1]
+    forced_remaining = spec.interventions.forced_seller_quantity
+    forced_start = max(1, spec.clock.steps // 2)
     for step in range(spec.clock.steps):
         for event in event_map.get(step, []):
             if event.asset:
@@ -117,6 +129,48 @@ def run_simulation(spec: WorldSpec) -> SimulationResult:
             except RuntimeError:
                 # A delayed order can arrive during a configured exchange halt.
                 continue
+
+        for asset in spec.assets:
+            for action in provider.actions(step, asset.ticker, exchange, rng):
+                try:
+                    if action.cancel is not None:
+                        exchange.cancel(action.cancel, action.symbol)
+                    elif action.order is not None:
+                        exchange.submit(action.order, step)
+                    events_log.append(
+                        {
+                            "event_id": f"order-flow-{step}-{len(events_log) + 1}",
+                            "step": step,
+                            "simulation_step": step,
+                            "scope": "asset",
+                            "asset": asset.ticker,
+                            "type": "order_flow",
+                            "order_flow_event_type": action.event_type,
+                            "backoff_level": action.backoff_level,
+                            "world_type": spec.world_type,
+                        }
+                    )
+                except (KeyError, PermissionError, RuntimeError):
+                    continue
+
+        if forced_remaining > 0 and step >= forced_start:
+            slice_quantity = min(forced_remaining, max(10, spec.interventions.forced_seller_quantity // 12))
+            slice_quantity -= slice_quantity % spec.exchange.lot_size
+            if slice_quantity > 0:
+                forced_order = Order(
+                    f"INTERVENTION-SELL-{step:05d}",
+                    intervention_seller_id,
+                    spec.experiment.target_asset,
+                    Side.SELL,
+                    OrderType.MARKET,
+                    slice_quantity,
+                    step,
+                )
+                try:
+                    exchange.submit(forced_order, step)
+                    forced_remaining -= slice_quantity
+                except RuntimeError:
+                    pass
 
         observed_volume = sum(row["quantity"] for row in exchange.trade_log[trade_cursor:])
         for agent in agents:
@@ -267,6 +321,16 @@ def run_simulation(spec: WorldSpec) -> SimulationResult:
         "total_market_volume": sum(trade["quantity"] for trade in exchange.trade_log),
         "market_disruption": max(0.0, temporary - shortfall),
         "fees_cents": exchange.fee_account_cents,
+        "world_type": spec.world_type,
+        "response_classification": (
+            "imposed structural assumption"
+            if spec.world_type == "structural_benchmark"
+            else "observed emergent simulation output"
+        ),
+        "calibration_pack_id": spec.calibration_pack_id,
+        "calibration_parameter_set_id": spec.calibration_parameter_set_id,
+        "order_flow_provider": spec.order_flow_provider,
+        "interventions": spec.interventions.model_dump(mode="json"),
     }
     deterministic = {
         "spec_hash": spec.specification_hash(),

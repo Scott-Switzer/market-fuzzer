@@ -142,10 +142,24 @@ class ExperimentSpec(StrictModel):
     repetitions: int = Field(default=2, ge=1, le=20)
 
 
+class InterventionSpec(StrictModel):
+    participation_rate: float = Field(default=0.08, gt=0.0, le=0.5)
+    displayed_depth_multiplier: float = Field(default=1.0, ge=0.05, le=3.0)
+    forced_seller_quantity: int = Field(default=0, ge=0, le=5_000_000)
+    labels: list[str] = Field(default_factory=list, max_length=20)
+
+
 class WorldSpec(StrictModel):
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.1"
     world_id: str = Field(min_length=3, max_length=80)
     seed: int = Field(ge=0, le=2_147_483_647)
+    world_type: Literal["structural_benchmark", "emergent_calibrated"] = "structural_benchmark"
+    calibration_pack_id: str | None = None
+    calibration_parameter_set_id: str | None = None
+    order_flow_provider: Literal["rule_based", "queue_reactive"] = "rule_based"
+    order_flow_parameters: dict[str, float] = Field(default_factory=dict)
+    interventions: InterventionSpec = Field(default_factory=InterventionSpec)
+    ground_truth_labels: dict[str, str | float | int | bool] = Field(default_factory=dict)
     clock: ClockSpec
     macro: MacroSpec
     assets: list[AssetSpec] = Field(min_length=3, max_length=20)
@@ -168,6 +182,11 @@ class WorldSpec(StrictModel):
                 raise ValueError(f"event {event.event_id} must reference a known asset")
         if self.experiment.parent_order.quantity % self.exchange.lot_size:
             raise ValueError("parent order quantity must be a multiple of exchange.lot_size")
+        if self.world_type == "emergent_calibrated":
+            if not self.calibration_pack_id or not self.calibration_parameter_set_id:
+                raise ValueError("emergent_calibrated worlds require calibration pack and parameter set ids")
+            if self.order_flow_provider != "queue_reactive":
+                raise ValueError("emergent_calibrated worlds require the queue_reactive provider")
         return self
 
     def canonical_json(self) -> str:

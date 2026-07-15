@@ -12,6 +12,11 @@ Repository baseline established on 2026-07-14 in commit `577cc54` on branch `cod
 - JSON/YAML/Parquet artifact bundle, manifest hashes, component realism report, and evidence-gated failure surface
 - Offline compiler, optional GPT-5.6 structured compiler, CLI, FastAPI service, and browser laboratory
 - Tests, reproducibility checks, CI, Docker setup, documentation, and Devpost draft
+- Aggregate-only `CalibrationPackV1`, chronological holdouts, bootstrap parameter ensemble, and identifiability evidence
+- Queue-reactive order-flow provider with six event types and sparse-state backoff
+- 96-world paired intervention campaign and exact participation-cost claim gate
+- Five-vector fit-for-use validation and separate confidentiality/derivation release validation
+- Hashed `SyntheticMarketPackage` with latent regimes and intervention labels
 
 ## Adapted open-source code
 
@@ -28,4 +33,3 @@ None was imported. Private financial data, FENRIX collaboration assets, MIT rese
 ## Deferred work
 
 Institutional order-flow calibration, learned responsive flow, optional ABIDES backend, accelerator/vectorized books, multiple venues, and production controls remain roadmap items.
-

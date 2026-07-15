@@ -18,6 +18,6 @@ python3 -m venv .venv
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open `http://127.0.0.1:8000`, compile the default prompt in Offline mode, run the exchange, scrub through the event, configure the execution strategy, and run the 24-run battery. No API key or financial data subscription is needed.
+Open `http://127.0.0.1:8000`, load the calibration pack, compile the default prompt, and run the 96-world quick validation campaign. Inspect the five validation vectors, claim gate, and governed release manifest. No API key or financial data subscription is needed.
 
 Supported platforms: macOS, Linux, and Windows with Python 3.12+; Docker is also supported.

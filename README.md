@@ -1,17 +1,17 @@
 # Synthetic Market World Engine
 
-> A programmable synthetic exchange that stress-tests quant strategies in realistic counterfactual markets before they reach production.
+> A calibrated counterfactual market-validation platform for execution stress testing and governed synthetic-data release.
 
 Historical backtests replay the market that occurred. Synthetic Market World tests how a generated market responds to the strategy itself.
 
+The commercial surface has three modules: **Execution Validation**, **Counterfactual Research**, and **Governed Data Release**.
+
 ## Product workflow
 
-1. Describe a counterfactual market in natural language.
-2. Compile it offline or with GPT-5.6 into a strict, editable, hashed world specification.
-3. Run three fictional issuers, a macro factor, information events, seven agent roles, and exact exchange mechanics.
-4. Deploy TWAP or participation-of-volume execution into the market.
-5. Compare four worlds at multiple participation rates and common seeds.
-6. Inspect execution metrics, component realism diagnostics, a failure surface, and reproducible artifacts.
+1. **Calibrate:** compile a user-acquired canonical sample into an aggregate-only `CalibrationPackV1`, or use the deterministic no-data demo pack.
+2. **Intervene:** reduce displayed depth, add a forced seller, and sweep participation from 2% to 20%.
+3. **Validate:** run common-random-number worlds across an accepted calibration ensemble and gate every conclusion.
+4. **Release:** export a `SyntheticMarketPackage` only with explicit fit-for-use and confidentiality/derivation evidence.
 
 ## Quick start — no key
 
@@ -30,6 +30,8 @@ smw validate configs/presets/normal.yaml
 smw compile --prompt "thin liquidity and an earnings shock" --offline
 smw run configs/presets/normal.yaml
 smw batch configs/presets/fragile-small-cap.yaml
+smw calibrate --mode quick
+smw validate-market configs/presets/fragile-small-cap.yaml --mode quick
 smw demo
 ```
 
@@ -43,7 +45,7 @@ Set `OPENAI_API_KEY` and optionally `OPENAI_MODEL` (default `gpt-5.6`) to use th
 
 ## Reproducibility and artifacts
 
-Every world has canonical JSON and a SHA-256 specification hash. Same-seed outputs have a separate deterministic result hash. Batch experiments write JSON, YAML, Parquet logs, reports, artifact hashes, code commit, seeds, mutations, package context, and reproduction commands under `artifacts/<experiment-id>/`.
+Every world has canonical JSON and a SHA-256 specification hash. Validation campaigns write orders, trades, book states, latent regimes, intervention labels, calibration evidence, separate simulator and release reports, manifests, and hashes under `artifacts/<experiment-id>/`. Source rows are never copied into an artifact package.
 
 ## Testing
 
@@ -64,7 +66,7 @@ ABIDES, ABIDES-JPMC, JAX-LOB, DeepMarket/TRADES, and MarS were inspected at pinn
 
 ## Judge path
 
-Use the no-key quick start, compile the default prompt, run Exchange Lab, configure the strategy, and run the 24-run battery. The browser exposes measured results, diagnostics, limitations, hashes, and downloads without rebuilding research models.
+Use the no-key quick start, load the calibration pack, compile the default world, and run the 96-world quick campaign. The browser follows Calibration → Intervention → Validation → Governed Release.
 
 ## Limitations and safety
 
@@ -74,4 +76,4 @@ This prototype is not institutionally calibrated, does not prove strategy profit
 
 MIT. Research references and reuse boundaries are documented separately.
 
-> Do not test tomorrow’s strategy only against yesterday’s market.
+> We do not claim every synthetic market is realistic. We prove which decisions each market is fit to support.

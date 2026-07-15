@@ -7,8 +7,9 @@ import typer
 import uvicorn
 import yaml
 
+from app.calibration import build_demo_calibration_pack, calibrate_bootstrap, compile_canonical_csv
 from app.compiler import compile_world
-from app.experiments import run_batch, run_single
+from app.experiments import run_batch, run_single, run_validation_campaign
 from app.schemas import WorldSpec
 from app.world import build_demo_world
 
@@ -57,6 +58,39 @@ def batch(path: Path, seed: int | None = None) -> None:
                 "experiment_id": result.experiment_id,
                 "artifact_dir": str(result.artifact_dir),
                 "worst": result.failure_surface["worst"],
+            },
+            indent=2,
+        )
+    )
+
+
+@cli.command("calibrate")
+def calibrate_command(source: Path | None = None, mode: str = "quick") -> None:
+    if mode not in {"quick", "audit"}:
+        raise typer.BadParameter("mode must be quick or audit")
+    pack = compile_canonical_csv(source) if source else build_demo_calibration_pack()
+    calibration = calibrate_bootstrap(pack, mode=mode)  # type: ignore[arg-type]
+    typer.echo(
+        json.dumps(
+            {"pack": pack.model_dump(mode="json"), "calibration": calibration.model_dump(mode="json")},
+            indent=2,
+        )
+    )
+
+
+@cli.command("validate-market")
+def validate_market(path: Path, mode: str = "quick") -> None:
+    if mode not in {"quick", "audit"}:
+        raise typer.BadParameter("mode must be quick or audit")
+    result = run_validation_campaign(load_spec(path), mode=mode)
+    typer.echo(
+        json.dumps(
+            {
+                "experiment_id": result.experiment_id,
+                "artifact_dir": str(result.artifact_dir),
+                "simulator_verdict": result.simulator_validation_report["overall_verdict"],
+                "execution_stress_testing": result.simulator_validation_report["use_case"],
+                "release_permitted": result.synthetic_release_validation_report["release_permitted"],
             },
             indent=2,
         )

@@ -1,10 +1,11 @@
 # Limitations
-- Agent rules are transparent heuristics, not calibrated institutional policies or learned responsive order flow.
-- Quick-mode simulations are short and small; several realism components are correctly marked Not evaluated.
+- Demo calibration is based on internally generated aggregates, not proprietary institutional order-book data.
+- Queue-reactive intensities are regularized lookup behavior, not learned institutional policies or a Hawkes residual model.
+- Several confidentiality checks remain `NOT_EVALUATED` without customer-side source-window access.
 - Latency is discretized into clock steps rather than modeled at exchange-gateway nanosecond resolution.
 - Circuit breakers use a simple reference-price threshold.
 - POV observes recent synthetic volume; a production execution model would use more detailed volume forecasting and venue state.
 - Only one synthetic venue and three equities are supported.
 - No commercial or proprietary order-book data is included.
-- Results do not establish profitability, safety, or fitness for live trading.
+- A `FIT` component does not establish profitability, safety, production capacity, or fitness for live trading.
 - This is research and testing infrastructure, not investment advice.

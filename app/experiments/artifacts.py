@@ -22,6 +22,16 @@ REQUIRED_FILES = (
     "report.md",
 )
 
+VALIDATION_REQUIRED_FILES = REQUIRED_FILES + (
+    "calibration_pack.json",
+    "intervention_results.json",
+    "simulator_validation_report.json",
+    "synthetic_release_validation_report.json",
+    "synthetic_market_package_manifest.json",
+    "latent_regimes.parquet",
+    "intervention_labels.parquet",
+)
+
 
 def safe_artifact_dir(root: Path, experiment_id: str) -> Path:
     if not experiment_id.replace("-", "").isalnum():

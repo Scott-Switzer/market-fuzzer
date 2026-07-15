@@ -8,17 +8,23 @@ Each asset trades on a synthetic continuous double auction. Limit orders cross i
 
 Three fictional issuers have distinct fundamentals, macro betas, idiosyncratic volatility, liquidity profiles, and event sensitivity. A shared seeded factor and asset noise evolve fundamental values. Exchange prices are never assigned to fundamentals; they emerge from market-maker quotes and marketable agent orders.
 
-## Counterfactual design
+## Calibration and counterfactual design
 
-The normal, liquidity-withdrawal, earnings-shock, and crowded-unwind worlds preserve common seeds, assets, clock, and strategy. Mutation metadata states exactly what changes. The quick battery crosses four worlds, three participation rates, and two common seeds.
+Canonical source rows are used transiently and split chronologically 60/20/20 into train, validation, and held-out test windows. Only aggregate targets, uncertainty, provenance, and hashes are retained. Quick mode preserves three accepted bootstrap parameter sets plus rejected-set evidence.
+
+The queue-reactive provider conditions six event types on spread, depth, imbalance, recent flow, volatility, last event, and intervention state, with sparse-state backoff. The quick campaign combines 50% displayed-depth reduction and a forced seller while crossing 2%, 5%, 10%, and 20% participation over eight paired seeds and three accepted calibrations.
 
 ## Execution metrics
 
 The engine reports filled quantity, fill rate, arrival price, market VWAP, average execution price, implementation shortfall, VWAP slippage, temporary and persistent impact, spread paid, adverse selection proxy, remaining inventory, maximum mark-to-market loss, market disruption, volume, fees, and runtime. These are simulation measurements, not forecasts.
 
-## Realism diagnostics
+## Fit-for-use validation
 
-Component checks include return excess kurtosis, raw and absolute-return autocorrelation, spread, depth, order-flow persistence, volume-volatility relationship, cross-asset correlation, and impact decay. Status values are limited to Pass, Partial, Fail, and Not evaluated. Directional literature targets draw from:
+The five vectors are mechanical validity, calibration stability, statistical fidelity, interventional fidelity, and downstream utility. Verdicts are `FIT`, `LIMITED`, `FAIL`, and `NOT_EVALUATED`. The execution-cost claim requires Spearman rho ≥ 0.70, positive paired changes ≥ 0.70, a positive bootstrap-slope lower bound, and calibration-set agreement ≥ 0.80.
+
+Structural properties are labeled as imposed assumptions; impact and costs in calibrated worlds are labeled as observed emergent outputs. The only Build Week use-case verdict is `execution_stress_testing`; production capacity estimates are always blocked.
+
+Directional literature targets draw from:
 
 - Rama Cont, “Empirical properties of asset returns: stylized facts and statistical issues,” *Quantitative Finance* 1(2), 2001.
 - Bouchaud, Farmer, and Lillo, “How markets slowly digest changes in supply and demand,” in *Handbook of Financial Markets*, 2009.
@@ -27,5 +33,4 @@ Component checks include return excess kurtosis, raw and absolute-return autocor
 - Berti et al., TRADES, arXiv:2502.07071.
 - Li et al., MarS, arXiv:2409.07486.
 
-The prototype is not calibrated to a proprietary order-book dataset and makes no institutional-realism claim.
-
+The release report separately checks exact-row leakage, nearest source-window similarity, source-trajectory correlation, license eligibility, and public/private boundaries. Membership inference is `NOT_APPLICABLE` because no provider is trained on source records.

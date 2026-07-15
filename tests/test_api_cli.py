@@ -10,6 +10,9 @@ def test_health_schema_compile_validate_and_run():
     client = TestClient(app)
     assert client.get("/api/health").json()["engine"] == "internal_exact_clob"
     assert "properties" in client.get("/api/schema").json()
+    calibration = client.get("/api/calibration/demo")
+    assert calibration.status_code == 200
+    assert len(calibration.json()["calibration_pack"]["calibration"]["accepted_parameter_sets"]) == 3
     compiled = client.post(
         "/api/compile", json={"prompt": "thin liquidity and earnings shock", "seed": 3, "mode": "offline"}
     )

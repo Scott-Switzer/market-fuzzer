@@ -8,8 +8,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from app.calibration import build_demo_calibration_pack, calibrate_bootstrap
 from app.compiler import compile_world
-from app.experiments import run_batch, run_single
+from app.experiments import run_batch, run_single, run_validation_campaign
 from app.schemas import WorldSpec
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +28,11 @@ class CompileRequest(BaseModel):
 
 class RunRequest(BaseModel):
     spec: WorldSpec
+
+
+class CampaignRequest(BaseModel):
+    spec: WorldSpec
+    mode: str = Field(default="quick", pattern="^(quick|audit)$")
 
 
 @app.get("/")
@@ -82,6 +88,26 @@ def batch_endpoint(request: RunRequest) -> dict:
     return value
 
 
+@app.get("/api/calibration/demo")
+def demo_calibration() -> dict:
+    pack = build_demo_calibration_pack()
+    calibration = calibrate_bootstrap(pack, mode="quick")
+    return {
+        "calibration_pack": {
+            "pack": pack.model_dump(mode="json"),
+            "calibration": calibration.model_dump(mode="json"),
+        }
+    }
+
+
+@app.post("/api/validation-campaign")
+def validation_campaign(request: CampaignRequest) -> dict:
+    result = run_validation_campaign(request.spec, ARTIFACT_ROOT, request.mode)
+    value = result.to_dict()
+    JOBS[result.experiment_id] = value
+    return value
+
+
 @app.get("/api/experiments/{experiment_id}")
 def experiment_status(experiment_id: str) -> dict:
     if experiment_id in JOBS:
@@ -101,12 +127,23 @@ def results(experiment_id: str) -> dict:
     directory = (ARTIFACT_ROOT / experiment_id).resolve()
     if ARTIFACT_ROOT not in directory.parents or not directory.exists():
         raise HTTPException(404, "experiment not found")
-    return {
+    response = {
         "manifest": json.loads((directory / "manifest.json").read_text()),
         "metrics": json.loads((directory / "metrics.json").read_text()),
         "realism_report": json.loads((directory / "realism_report.json").read_text()),
         "failure_surface": json.loads((directory / "failure_surface.json").read_text()),
     }
+    for name in (
+        "calibration_pack",
+        "intervention_results",
+        "simulator_validation_report",
+        "synthetic_release_validation_report",
+        "synthetic_market_package_manifest",
+    ):
+        path = directory / f"{name}.json"
+        if path.exists():
+            response[name] = json.loads(path.read_text())
+    return response
 
 
 @app.get("/api/artifacts/{experiment_id}/{filename}")

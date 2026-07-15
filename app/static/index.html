@@ -1,11 +1,136 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Synthetic Market World</title><link rel="stylesheet" href="/static/styles.css"></head>
-<body><div class="warning">RESEARCH PROTOTYPE · SYNTHETIC DATA · NOT INVESTMENT ADVICE · NOT INSTITUTIONALLY CALIBRATED</div>
-<header class="top"><div><span class="logo">SMW</span><div><h1>Synthetic Market World</h1><p>Counterfactual strategy validation laboratory</p></div></div><div class="run-context"><span>ENGINE <b>INTERNAL CLOB</b></span><span>MODE <b id="modeBadge">OFFLINE</b></span><span>SEED <b id="seedBadge">42</b></span></div></header>
-<nav><button class="tab active" data-tab="world">01 World Builder</button><button class="tab" data-tab="exchange">02 Exchange Lab</button><button class="tab" data-tab="experiment">03 Experiment</button><button class="tab" data-tab="results">04 Results</button></nav>
-<main>
-<section id="world" class="view active"><div class="grid two"><article class="panel"><div class="panel-title"><h2>World request</h2><span class="tag generated">GENERATED NARRATIVE</span></div><label>Preset<select id="preset"><option>Fragile small-cap execution lab</option><option>Normal market</option><option>Liquidity withdrawal</option><option>Earnings shock</option><option>Crowded unwind</option></select></label><label>Compiler<select id="compilerMode"><option value="offline">Offline deterministic</option><option value="gpt">GPT-5.6 structured output</option></select></label><label>Seed<input id="seed" type="number" min="0" value="42"></label><label>Natural-language world<textarea id="prompt">Create a fragile three-stock equity market with shallow liquidity, crowded momentum, a negative earnings surprise after 20 simulated minutes, and one forced seller.</textarea></label><div class="actions"><button id="compile">Compile world</button><button id="validate" class="ghost">Validate edited spec</button></div><div id="validation" class="notice neutral">No world compiled.</div></article>
-<article class="panel"><div class="panel-title"><h2>Validated world specification</h2><span class="tag deterministic">DETERMINISTIC CONFIG</span></div><div id="hash" class="hash">SPEC HASH —</div><textarea id="spec" class="code" spellcheck="false"></textarea><div><h3>Assumptions and warnings</h3><ul id="assumptions"><li>Compile a world to expose all assumptions.</li></ul></div></article></div></section>
-<section id="exchange" class="view"><div class="toolbar"><button id="runWorld">Run deterministic exchange</button><label>Playback step<input id="scrubber" type="range" min="0" max="119" value="0"></label><button id="play" class="ghost">▶ Play</button></div><div class="metrics" id="exchangeMetrics"></div><div class="grid chart-grid"><article class="panel wide"><div class="panel-title"><h2>NOVA price vs fundamental</h2><span class="tag measured">MEASURED RESULT</span></div><svg id="priceChart" viewBox="0 0 900 300" preserveAspectRatio="none"></svg></article><article class="panel"><h2>Level-2 book</h2><div id="book" class="book empty">Run exchange</div></article><article class="panel"><h2>Agent ecology</h2><div id="agents" class="agent-list"></div></article><article class="panel wide"><h2>Event and synthetic information timeline</h2><div id="eventTimeline" class="events"></div></article></div></section>
-<section id="experiment" class="view"><div class="grid two"><article class="panel"><div class="panel-title"><h2>Execution strategy</h2><span class="tag deterministic">DETERMINISTIC INPUT</span></div><label>Strategy<select id="strategy"><option value="twap">TWAP</option><option value="pov">Participation of volume</option></select></label><label>Side<select id="side"><option>buy</option><option>sell</option></select></label><label>Target asset<select id="target"><option>NOVA</option><option>ORBT</option><option>VYNE</option></select></label><label>Parent quantity<input id="quantity" type="number" value="6000" step="100"></label><label>Participation rate<input id="participation" type="range" min="2" max="30" value="8"><output id="participationValue">8%</output></label><label>Strategy latency (ms)<input id="latency" type="number" min="0" value="5"></label></article><article class="panel"><h2>Counterfactual battery</h2><table><thead><tr><th>World</th><th>Controlled mutation</th><th>Common seeds</th></tr></thead><tbody><tr><td>Normal</td><td>Stress events removed</td><td>42, 43</td></tr><tr><td>Liquidity withdrawal</td><td>Displayed size → 35%</td><td>42, 43</td></tr><tr><td>Earnings shock</td><td>NOVA fundamental −6.5%</td><td>42, 43</td></tr><tr><td>Crowded unwind</td><td>Crowding 2.4× + forced sale</td><td>42, 43</td></tr></tbody></table><p class="muted">Each world runs at 2%, 8%, and 20% participation. Scenario comparisons share seeds to isolate controlled mutations.</p><button id="runBatch">Run 24-run battery</button><div id="progress" class="notice neutral">Ready.</div></article></div></section>
-<section id="results" class="view"><div id="resultEmpty" class="panel empty-state"><h2>No experiment results yet</h2><p>Run the counterfactual battery from the Experiment tab.</p></div><div id="resultContent" hidden><div class="metrics" id="resultMetrics"></div><div class="grid two"><article class="panel"><div class="panel-title"><h2>Failure surface</h2><span class="tag measured">MEASURED RESULT</span></div><div id="heatmap" class="heatmap"></div><div id="thresholds" class="notice neutral"></div></article><article class="panel"><div class="panel-title"><h2>Realism diagnostics</h2><span class="tag diagnostic">COMPONENT CHECKS</span></div><table><thead><tr><th>Metric</th><th>Value</th><th>Status</th></tr></thead><tbody id="realism"></tbody></table></article><article class="panel wide"><div class="panel-title"><h2>Reproducibility manifest</h2><span class="tag deterministic">AUDIT TRAIL</span></div><pre id="manifest"></pre><div id="downloads" class="actions"></div></article></div></div></section>
-</main><footer><p>Historical backtests replay one realized path. This laboratory tests how a synthetic market responds to the strategy itself.</p><b>Do not test tomorrow’s strategy only against yesterday’s market.</b></footer><script src="/static/app.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Synthetic Market World</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="prototype-banner">Research prototype · Synthetic data only · Not calibrated or approved for live trading</div>
+  <header class="shell-header">
+    <div>
+      <p class="eyebrow">SYNTHETIC MARKET WORLD ENGINE</p>
+      <h1>Counterfactual strategy validation</h1>
+      <p class="subhead">Build, intervene on, validate, and govern reproducible synthetic markets.</p>
+    </div>
+    <div class="experiment-status">
+      <span id="engine-status" class="status neutral">Ready</span>
+      <span id="experiment-label">No experiment</span>
+    </div>
+  </header>
+
+  <nav class="tabs" aria-label="Validation workflow">
+    <button class="tab active" data-view="calibration"><b>01</b> Calibration</button>
+    <button class="tab" data-view="intervention"><b>02</b> Intervention</button>
+    <button class="tab" data-view="validation"><b>03</b> Validation</button>
+    <button class="tab" data-view="release"><b>04</b> Governed Release</button>
+  </nav>
+
+  <main>
+    <section id="view-calibration" class="view active">
+      <div class="view-title">
+        <div><p class="kicker">CALIBRATION</p><h2>Define the evidence boundary</h2></div>
+        <button id="load-calibration" class="secondary">Load demo calibration</button>
+      </div>
+      <div class="grid two">
+        <article class="panel">
+          <div class="panel-heading"><h3>Calibration pack</h3><span class="provenance measured">Measured targets</span></div>
+          <p class="help">Inspect the statistical and microstructure targets used to judge—not claim—market realism.</p>
+          <div id="calibration-summary" class="empty">Load the deterministic demo pack to inspect its sources, targets, and coverage.</div>
+        </article>
+        <article class="panel">
+          <div class="panel-heading"><h3>Coverage & constraints</h3><span class="provenance limitation">Limitations</span></div>
+          <div id="calibration-coverage" class="empty">No calibration evidence loaded.</div>
+        </article>
+      </div>
+      <article class="panel full">
+        <div class="panel-heading"><h3>Target definitions</h3><span class="unit-note">Components are reported separately; no unsupported composite score</span></div>
+        <div id="calibration-targets" class="table-wrap"><p class="empty">Awaiting calibration pack.</p></div>
+      </article>
+    </section>
+
+    <section id="view-intervention" class="view">
+      <div class="view-title">
+        <div><p class="kicker">INTERVENTION</p><h2>Compile and perturb a market world</h2></div>
+        <div class="toolbar"><button id="compile">Compile world</button><button id="run-campaign" class="primary">Run quick campaign</button></div>
+      </div>
+      <div class="grid intervention-grid">
+        <article class="panel builder">
+          <div class="panel-heading"><h3>World request</h3><span class="provenance generated">Generated narrative</span></div>
+          <label for="prompt">Counterfactual market description</label>
+          <textarea id="prompt">Create a fragile three-stock market with shallow liquidity, crowded momentum, a negative earnings surprise after 20 simulated minutes, and one forced seller.</textarea>
+          <div class="controls">
+            <label>Compiler<select id="compiler-mode"><option value="offline">Offline deterministic</option><option value="gpt" disabled>GPT-5.6 (key required)</option></select></label>
+            <label>Seed<input id="seed" type="number" value="42" min="0"></label>
+          </div>
+          <div id="compile-messages" class="messages"></div>
+        </article>
+        <article class="panel specification">
+          <div class="panel-heading"><h3>Validated world specification</h3><span class="provenance deterministic">Deterministic config</span></div>
+          <pre id="spec">Compile a world to inspect its explicit parameters.</pre>
+        </article>
+      </div>
+      <article class="panel full">
+        <div class="panel-heading"><h3>Controlled interventions</h3><span class="unit-note">Common experiment structure; isolated scenario mutations</span></div>
+        <div id="intervention-summary" class="scenario-grid empty">Run a campaign to compare controlled market worlds.</div>
+        <div id="claim-gate" class="empty">Claim evidence appears after the paired campaign.</div>
+      </article>
+    </section>
+
+    <section id="view-validation" class="view">
+      <div class="view-title">
+        <div><p class="kicker">VALIDATION</p><h2>Test both simulator and release</h2></div>
+        <span class="provenance measured">Deterministic measured results</span>
+      </div>
+      <div class="metric-strip" id="validation-headline">
+        <div class="metric"><small>CAMPAIGN</small><strong>—</strong><span>not run</span></div>
+        <div class="metric"><small>SIMULATOR</small><strong>—</strong><span>not evaluated</span></div>
+        <div class="metric"><small>SYNTHETIC RELEASE</small><strong>—</strong><span>not evaluated</span></div>
+        <div class="metric"><small>WORST WORLD</small><strong>—</strong><span>not measured</span></div>
+      </div>
+      <div class="grid two">
+        <article class="panel">
+          <div class="panel-heading"><h3>Simulator validation</h3><span class="unit-note">mechanics · realism · intervention response</span></div>
+          <div id="simulator-validation" class="empty">No campaign results.</div>
+        </article>
+        <article class="panel">
+          <div class="panel-heading"><h3>Synthetic release validation</h3><span class="unit-note">privacy · leakage · disclosure quality</span></div>
+          <div id="release-validation" class="empty">No release results.</div>
+        </article>
+      </div>
+      <article class="panel full">
+        <div class="panel-heading"><h3>Strategy response by world</h3><span class="unit-note">Implementation shortfall (bps) and fill rate (%)</span></div>
+        <div id="result-chart" class="chart empty">No measured scenario runs.</div>
+      </article>
+    </section>
+
+    <section id="view-release" class="view">
+      <div class="view-title">
+        <div><p class="kicker">GOVERNED RELEASE</p><h2>Decide what is safe to share</h2></div>
+        <span id="release-decision" class="status neutral">Not assessed</span>
+      </div>
+      <div class="grid release-grid">
+        <article class="panel">
+          <div class="panel-heading"><h3>Release gate</h3><span class="provenance limitation">Explicit controls</span></div>
+          <div id="release-gate" class="empty">Run validation before releasing artifacts.</div>
+        </article>
+        <article class="panel manifest-panel">
+          <div class="panel-heading"><h3>Reproducibility manifest</h3><span class="provenance deterministic">Auditable</span></div>
+          <pre id="manifest">No manifest generated.</pre>
+        </article>
+      </div>
+      <article class="panel full">
+        <div class="panel-heading"><h3>Release contents</h3><span class="unit-note">Synthetic outputs only; source and method disclosures retained</span></div>
+        <div id="release-contents" class="empty">No governed release available.</div>
+      </article>
+    </section>
+  </main>
+
+  <footer>
+    <strong>We do not claim every synthetic market is realistic. We prove which decisions each market is fit to support.</strong>
+    <span>Developer tool for research, execution validation, and model-risk workflows.</span>
+  </footer>
+  <script src="/static/app.js"></script>
+</body>
+</html>
