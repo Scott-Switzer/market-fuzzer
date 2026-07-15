@@ -620,17 +620,19 @@ class ArenaStore:
             if challenge is None:
                 raise KeyError(challenge_id)
             if challenge["phase"] != "hidden_evaluation":
-                raise ValueError("challenge must be evaluated before release")
+                raise ArenaPhaseError("challenge must be evaluated before release")
             if evaluation is None:
                 raise ValueError("hidden evaluation is missing")
             connection.execute(
                 "UPDATE hidden_evaluations SET released_at = COALESCE(released_at, ?) WHERE challenge_id = ?",
                 (now, challenge_id),
             )
-            connection.execute(
-                "UPDATE challenges SET phase = 'released', updated_at = ? WHERE challenge_id = ?",
-                (now, challenge_id),
+            updated = connection.execute(
+                "UPDATE challenges SET phase = 'released', updated_at = ? WHERE challenge_id = ? AND phase = ?",
+                (now, challenge_id, "hidden_evaluation"),
             )
+            if updated.rowcount != 1:
+                raise ArenaPhaseError("challenge phase changed during release")
             connection.execute(
                 "INSERT INTO challenge_phases(challenge_id, actor, occurred_at, previous_state, new_state, reason) VALUES (?, ?, ?, 'hidden_evaluation', 'released', ?)",
                 (challenge_id, actor, now, reason),

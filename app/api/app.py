@@ -669,7 +669,12 @@ def execution_release(challenge_id: str, payload: ExecutionPhaseRequest, request
         before = store.evaluation(challenge_id)
     except KeyError as exc:
         raise HTTPException(409, "hidden evaluation is missing") from exc
-    released = store.release_challenge(challenge_id, actor, payload.reason)
+    try:
+        released = store.release_challenge(challenge_id, actor, payload.reason)
+    except KeyError as exc:
+        raise HTTPException(404, "execution challenge not found") from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     return {
         "challenge_id": challenge_id,
         "phase": "released",

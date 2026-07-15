@@ -571,3 +571,71 @@ def test_release_changes_visibility_not_evaluation(client: TestClient) -> None:
         client.get(f"/api/arena/execution/challenges/{CHALLENGE_ID}/evidence", headers=student).status_code
         == 403
     )
+
+
+def test_second_release_returns_conflict_not_server_error(client: TestClient) -> None:
+    instructor = {"X-Test-Role": "instructor", "X-Test-User": "teacher"}
+    student = {"X-Test-Role": "student", "X-Test-User": "learner"}
+    assert (
+        client.post(
+            f"/api/arena/execution/challenges/{CHALLENGE_ID}/submissions",
+            headers=student,
+            json={"policy": policy_payload()},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/arena/execution/challenges/{CHALLENGE_ID}/lock",
+            headers=instructor,
+            json={"reason": "deadline"},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/arena/execution/challenges/{CHALLENGE_ID}/evaluate",
+            headers=instructor,
+        ).status_code
+        == 200
+    )
+    first = client.post(
+        f"/api/arena/execution/challenges/{CHALLENGE_ID}/release",
+        headers=instructor,
+        json={"reason": "publish results"},
+    )
+    assert first.status_code == 200
+    second = client.post(
+        f"/api/arena/execution/challenges/{CHALLENGE_ID}/release",
+        headers=instructor,
+        json={"reason": "publish results again"},
+    )
+    assert second.status_code == 409
+    assert "evaluated before release" in second.json()["detail"]
+
+
+def test_release_challenge_rejects_failed_compare_and_set(tmp_path) -> None:
+    store = ArenaStore(tmp_path / "release-conflict.sqlite3")
+    store.ensure_default_challenge(CHALLENGE_ID, list(HIDDEN_VARIANTS))
+    store.transition(CHALLENGE_ID, "instructor", "submission_locked", "deadline")
+    store.transition(CHALLENGE_ID, "instructor", "hidden_evaluation", "evaluate")
+    matrix = benchmark_matrix(seeds=(42,))
+    store.save_evaluation(CHALLENGE_ID, "instructor", matrix)
+    with store.connection() as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER ignore_release
+            BEFORE UPDATE OF phase ON challenges
+            WHEN OLD.challenge_id = 'trade-the-shock'
+                 AND NEW.phase = 'released'
+            BEGIN
+                SELECT RAISE(IGNORE);
+            END
+            """
+        )
+
+    with pytest.raises(ArenaPhaseError, match="phase changed during release"):
+        store.release_challenge(CHALLENGE_ID, "instructor", "publish")
+
+    assert store.challenge(CHALLENGE_ID)["phase"] == "hidden_evaluation"
+    assert all(event["action"] != "hidden_release" for event in store.audit_events(CHALLENGE_ID))
