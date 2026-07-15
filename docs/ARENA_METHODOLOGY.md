@@ -1,8 +1,8 @@
-# Quant Challenge Arena methodology
+# Secondary research/positions challenge methodology
 
 ## Purpose
 
-The Arena is a classroom assessment, not an investment simulator. It tests whether a student's position file continues to support its stated mechanism after controlled hidden changes to the fictional data-generating process.
+This experimental secondary challenge tests whether a student's position file continues to support its stated mechanism after controlled hidden changes to a fictional data-generating process. The primary Quant Challenge Arena now uses the exchange-backed policy contract documented in `EXECUTION_CHALLENGE.md`.
 
 ## Public and hidden regimes
 

@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import json
 import os
+import sqlite3
 import time
+from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.analyst import analyze_failure
 from app.arena import (
@@ -33,15 +38,26 @@ from app.arena import (
 from app.calibration import build_demo_calibration_pack, calibrate_bootstrap
 from app.compiler import compile_world
 from app.execution_arena import (
-    POLICIES as EXECUTION_POLICIES,
-)
-from app.execution_arena import (
+    CHALLENGE_ID,
+    HIDDEN_VARIANTS,
     ExecutionPolicySubmission,
     benchmark_matrix,
     challenge_overview,
+    public_leaderboard_matrix,
     run_execution_challenge,
     run_policy_submission,
 )
+from app.execution_arena import (
+    POLICIES as EXECUTION_POLICIES,
+)
+from app.execution_challenge_designer import (
+    ALLOWED_INTERVENTION_IDS,
+    ALLOWED_POLICY_PARAMETER_IDS,
+    ExecutionChallengeDesignInput,
+    generate_execution_challenge_design,
+)
+from app.execution_feedback import build_execution_evidence, generate_execution_feedback
+from app.execution_store import ArenaPhaseError, ArenaQuotaError, ArenaStore
 from app.experiments import run_batch, run_single, run_validation_campaign
 from app.product import (
     DEFAULT_PROPERTIES,
@@ -62,7 +78,26 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 JOBS: dict[str, dict] = {}
 PRODUCT_PROJECTS: dict[str, dict] = {}
 PRODUCT_FAILURES: dict[str, dict] = {}
-EXECUTION_SUBMISSIONS: dict[str, dict[str, Any]] = {}
+
+DESIGN_INTERVENTION_LABELS = {
+    "liquidity_withdrawal": "Liquidity withdrawal",
+    "crowded_unwind": "Crowded unwind",
+    "earnings_shock": "Scheduled event shock",
+    "latency_shock": "Message latency shock",
+}
+DESIGN_PARAMETER_LABELS = {
+    "strategy_type": "Strategy type",
+    "target_participation": "Target participation",
+    "max_participation": "Maximum participation",
+    "max_spread_bps": "Maximum spread",
+    "urgency_curve": "Urgency curve",
+    "feed_latency_tolerance_ms": "Feed-latency tolerance",
+    "cancel_after_ms": "Cancel-after interval",
+    "completion_buffer_steps": "Completion buffer",
+    "pause_during_halt": "Pause during halt",
+    "pause_above_spread_limit": "Pause above spread limit",
+    "include_pending_in_budget": "Include pending orders in budget",
+}
 
 
 def _seed_arena_challenge() -> ChallengeSpec:
@@ -147,7 +182,7 @@ class ExecutionChallengeRunRequest(BaseModel):
     policy_id: str = Field(
         default="aggressive_pov", pattern=r"^(twap|aggressive_pov|guarded_pov|completion_first)$"
     )
-    seed: int = Field(default=42, ge=0, le=2_147_483_647)
+    seed: Literal[42] = 42
 
 
 class ExecutionSubmissionRequest(BaseModel):
@@ -156,11 +191,36 @@ class ExecutionSubmissionRequest(BaseModel):
     policy: ExecutionPolicySubmission
 
 
+class ExecutionPracticeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    policy_id: str | None = Field(
+        default=None, pattern=r"^(twap|aggressive_pov|guarded_pov|completion_first)$"
+    )
+    policy: ExecutionPolicySubmission | None = None
+    comparison_policy_id: str | None = Field(
+        default=None, pattern=r"^(twap|aggressive_pov|guarded_pov|completion_first)$"
+    )
+    seed: Literal[42] = 42
+
+    @model_validator(mode="after")
+    def exactly_one_policy(self) -> ExecutionPracticeRequest:
+        if (self.policy_id is None) == (self.policy is None):
+            raise ValueError("provide exactly one of policy_id or policy")
+        return self
+
+
+class ExecutionPhaseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(default="Instructor advanced the demo challenge.", min_length=3, max_length=500)
+
+
 class DemoSessionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role: str = Field(pattern="^(student|instructor)$")
-    user_id: str = Field(default="demo-user", min_length=1, max_length=80)
+    instructor_code: str | None = Field(default=None, min_length=8, max_length=256)
 
 
 @app.get("/")
@@ -204,10 +264,13 @@ def execution_challenge_run(request: ExecutionChallengeRunRequest) -> dict[str, 
 
 @app.get("/api/execution-challenge/benchmarks")
 def execution_challenge_benchmarks(request: Request) -> dict[str, Any]:
-    """The full hidden matrix is instructor-only until an explicit release path exists."""
+    """Compatibility read: hidden evaluation must first run through the audited lifecycle."""
     if _arena_role(request) != "instructor":
         raise HTTPException(403, "hidden benchmark matrix is instructor-only")
-    return benchmark_matrix()
+    try:
+        return _execution_store().evaluation(CHALLENGE_ID)["matrix"]
+    except KeyError as exc:
+        raise HTTPException(409, "lock and evaluate the challenge before reading the matrix") from exc
 
 
 @app.get("/api/execution-challenge/policies")
@@ -216,76 +279,582 @@ def execution_challenge_policies() -> dict[str, Any]:
 
 
 @app.post("/api/arena/demo-session")
-def arena_demo_session(payload: DemoSessionRequest, response: Response) -> dict[str, str]:
+def arena_demo_session(payload: DemoSessionRequest, request: Request, response: Response) -> dict[str, str]:
     """Issue a deliberately scoped demo cookie; this is not institutional auth."""
     if os.getenv("ARENA_DEMO_AUTH") != "1":
         raise HTTPException(404, "demo sessions are disabled")
-    issued_at = str(int(time.time()))
-    value = f"{payload.role}|{payload.user_id}|{issued_at}"
-    signature = hmac.new(_arena_session_secret(), value.encode(), hashlib.sha256).hexdigest()
-    token = base64.urlsafe_b64encode(f"{value}|{signature}".encode()).decode()
-    response.set_cookie("arena_demo_session", token, httponly=True, samesite="lax", secure=False)
-    return {"status": "ok", "role": payload.role, "authentication": "demo_session"}
+    if payload.role == "instructor":
+        expected_code = os.getenv("ARENA_DEMO_INSTRUCTOR_CODE")
+        if not expected_code:
+            raise HTTPException(403, "instructor demo sessions are disabled")
+        if payload.instructor_code is None or not hmac.compare_digest(payload.instructor_code, expected_code):
+            raise HTTPException(403, "invalid instructor demo code")
+    role_cookie = f"arena_{payload.role}_session"
+    token = request.cookies.get(role_cookie, "")
+    existing = _arena_identity_from_token(token)
+    if existing is not None and existing[0] == payload.role:
+        user_id = existing[1]
+        action = "demo_session_resumed"
+    else:
+        issued = datetime.now(UTC)
+        issued_at = str(int(issued.timestamp()))
+        expires_at = str(int((issued + timedelta(hours=12)).timestamp()))
+        user_id = f"demo-{payload.role}-{uuid4().hex[:16]}"
+        value = f"{payload.role}|{user_id}|{issued_at}|{expires_at}"
+        signature = hmac.new(_arena_session_secret(), value.encode(), hashlib.sha256).hexdigest()
+        token = base64.urlsafe_b64encode(f"{value}|{signature}".encode()).decode()
+        _execution_store().save_session(
+            hashlib.sha256(token.encode()).hexdigest(),
+            user_id,
+            payload.role,
+            issued.isoformat(),
+            (issued + timedelta(hours=12)).isoformat(),
+        )
+        action = "demo_session_issued"
+    _execution_store().audit(CHALLENGE_ID, user_id, action, {"role": payload.role})
+    response.set_cookie(
+        "arena_demo_session", token, httponly=True, samesite="lax", secure=False, max_age=43_200
+    )
+    response.set_cookie(role_cookie, token, httponly=True, samesite="lax", secure=False, max_age=43_200)
+    return {
+        "status": "ok",
+        "role": payload.role,
+        "user_id": user_id,
+        "authentication": "demo_session",
+    }
 
 
 @app.get("/api/arena/execution/challenges/{challenge_id}")
 def execution_public_challenge(challenge_id: str) -> dict[str, Any]:
-    if challenge_id != "trade-the-shock":
-        raise HTTPException(404, "execution challenge not found")
-    return challenge_overview()
+    challenge = _execution_challenge_record(challenge_id)
+    overview = challenge_overview()
+    return {
+        **overview,
+        "phase": challenge["phase"],
+        "hidden_worlds": {
+            "count": len(challenge["hidden_worlds"]),
+            "status": "withheld_until_release",
+        },
+        "practice_policy": {
+            "maximum_runs": challenge["max_practice_runs"],
+            "score_mode": challenge["practice_score_mode"],
+            "best_public_only": challenge["best_public_only"],
+        },
+        "submission_policy": {
+            "maximum_final_submissions": challenge["max_final_submissions"],
+            "hidden_results_final_only": challenge["hidden_final_only"],
+        },
+    }
+
+
+@app.get("/api/arena/session")
+def arena_current_session(request: Request) -> dict[str, str | bool]:
+    role, user_id = _arena_identity(request)
+    if user_id == "anonymous-student":
+        return {"status": "anonymous", "authenticated": False}
+    return {
+        "status": "ok",
+        "role": role,
+        "user_id": user_id,
+        "authentication": "demo_session",
+        "authenticated": True,
+    }
+
+
+@app.post("/api/arena/execution/challenge-designs")
+def execution_challenge_design(
+    payload: dict[str, Any],
+    request: Request,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """Create an instructor-only qualitative draft; deterministic code still owns worlds."""
+    _, actor = _require_execution_instructor(request)
+    if model is not None and (len(model) > 120 or not model.startswith("gpt-")):
+        raise HTTPException(422, "model must be a supported gpt-* identifier")
+    try:
+        constraints = ExecutionChallengeDesignInput.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(422, "invalid challenge-design constraints") from exc
+    result = generate_execution_challenge_design(constraints, model=model)
+    store = _execution_store()
+    design_id = store.save_challenge_design(
+        CHALLENGE_ID,
+        actor,
+        constraints.model_dump(mode="json"),
+        result,
+    )
+    return {
+        **result,
+        "design_id": design_id,
+        "approval_status": "draft",
+        "numeric_worlds_created": False,
+    }
+
+
+@app.get("/api/arena/execution/challenge-design-options")
+def execution_challenge_design_options(request: Request) -> dict[str, Any]:
+    """Return protected designer allow-lists only to an authenticated instructor."""
+    _require_execution_instructor(request)
+    return {
+        "allowed_world_interventions": [
+            {"id": identifier, "label": DESIGN_INTERVENTION_LABELS[identifier]}
+            for identifier in DESIGN_INTERVENTION_LABELS
+            if identifier in ALLOWED_INTERVENTION_IDS
+        ],
+        "allowed_policy_parameters": [
+            {"id": identifier, "label": DESIGN_PARAMETER_LABELS[identifier]}
+            for identifier in DESIGN_PARAMETER_LABELS
+            if identifier in ALLOWED_POLICY_PARAMETER_IDS
+        ],
+        "exchange_capabilities": [
+            "price-time-priority order book",
+            "explicit feed, decision, order-entry, and cancel latency",
+            "partial fills and simplified queue-ahead evidence",
+            "deterministic event and replay instrumentation",
+        ],
+    }
 
 
 @app.get("/api/arena/execution/challenges/{challenge_id}/policies")
 def execution_policies(challenge_id: str) -> dict[str, Any]:
-    if challenge_id != "trade-the-shock":
-        raise HTTPException(404, "execution challenge not found")
+    _execution_challenge_record(challenge_id)
     return execution_challenge_policies()
 
 
 @app.post("/api/arena/execution/challenges/{challenge_id}/practice")
-def execution_practice(challenge_id: str, request: ExecutionChallengeRunRequest) -> dict[str, Any]:
-    if challenge_id != "trade-the-shock":
-        raise HTTPException(404, "execution challenge not found")
-    return execution_challenge_run(request)
+def execution_practice(
+    challenge_id: str, payload: ExecutionPracticeRequest, request: Request
+) -> dict[str, Any]:
+    challenge = _execution_challenge_record(challenge_id)
+    if challenge["phase"] != "public_practice":
+        raise HTTPException(409, "public practice is closed")
+    role, user_id = _require_execution_student(request)
+    store = _execution_store()
+    used = store.practice_count(challenge_id, user_id)
+    if used >= int(challenge["max_practice_runs"]):
+        raise HTTPException(429, "public practice limit reached")
+    try:
+        result = (
+            run_policy_submission(payload.policy, f"practice-{user_id}", payload.seed)
+            if payload.policy is not None
+            else run_execution_challenge(
+                str(payload.policy_id), challenge["public_world_variant"], payload.seed
+            )
+        )
+        if payload.comparison_policy_id is not None:
+            comparison = run_execution_challenge(
+                payload.comparison_policy_id,
+                challenge["public_world_variant"],
+                payload.seed,
+            )
+            result["comparison"] = {
+                "policy_id": payload.comparison_policy_id,
+                "name": comparison["policy"]["name"],
+                "metrics": comparison["metrics"],
+                "public_score": comparison["public_score"],
+                "replay": comparison["replay"],
+                "world": comparison["world"],
+                "evidence": comparison["evidence"],
+            }
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    policy_hash = hashlib.sha256(
+        json.dumps(result["policy"], sort_keys=True, default=str).encode()
+    ).hexdigest()
+    run_id = f"practice-{uuid4().hex[:16]}"
+    try:
+        store.save_practice(
+            run_id,
+            challenge_id,
+            user_id,
+            policy_hash,
+            payload.seed,
+            float(result["public_score"]),
+            result,
+            max_runs=int(challenge["max_practice_runs"]),
+        )
+    except ArenaPhaseError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ArenaQuotaError as exc:
+        raise HTTPException(429, str(exc)) from exc
+    return {
+        **result,
+        "practice_run_id": run_id,
+        "practice_runs_remaining": int(challenge["max_practice_runs"]) - used - 1,
+        "actor_role": role,
+    }
 
 
 @app.post("/api/arena/execution/challenges/{challenge_id}/submissions")
-def execution_submit(challenge_id: str, payload: ExecutionSubmissionRequest) -> dict[str, Any]:
-    if challenge_id != "trade-the-shock":
-        raise HTTPException(404, "execution challenge not found")
-    submission_id = f"execution-submission-{len(EXECUTION_SUBMISSIONS) + 1:04d}"
+def execution_submit(
+    challenge_id: str, payload: ExecutionSubmissionRequest, request: Request
+) -> dict[str, Any]:
+    challenge = _execution_challenge_record(challenge_id)
+    if challenge["phase"] != "public_practice":
+        raise HTTPException(409, "final submissions are closed")
+    _, user_id = _require_execution_student(request)
+    store = _execution_store()
+    if store.submission_count(challenge_id, user_id) >= int(challenge["max_final_submissions"]):
+        raise HTTPException(429, "final submission limit reached")
+    submission_id = f"execution-submission-{uuid4().hex[:16]}"
     result = run_policy_submission(payload.policy, submission_id)
-    EXECUTION_SUBMISSIONS[submission_id] = {"policy": payload.policy, "result": result, "released": False}
-    return {"submission_id": submission_id, "public_score": result["public_score"], "status": "submitted"}
+    policy_json = payload.policy.model_dump(mode="json")
+    policy_hash = hashlib.sha256(json.dumps(policy_json, sort_keys=True).encode()).hexdigest()
+    try:
+        store.save_submission(
+            submission_id,
+            challenge_id,
+            user_id,
+            payload.policy.schema_version,
+            policy_json,
+            policy_hash,
+            result,
+            max_final_submissions=int(challenge["max_final_submissions"]),
+        )
+    except ArenaPhaseError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ArenaQuotaError as exc:
+        raise HTTPException(429, str(exc)) from exc
+    return {
+        "submission_id": submission_id,
+        "public_score": result["public_score"],
+        "public_metrics": result["metrics"],
+        "status": "final",
+        "hidden_results": "withheld_until_release",
+    }
+
+
+@app.post("/api/arena/execution/challenges/{challenge_id}/drafts")
+def execution_save_draft(
+    challenge_id: str, payload: ExecutionSubmissionRequest, request: Request
+) -> dict[str, Any]:
+    challenge = _execution_challenge_record(challenge_id)
+    if challenge["phase"] != "public_practice":
+        raise HTTPException(409, "draft editing is closed")
+    _, user_id = _require_execution_student(request)
+    draft_id = f"execution-draft-{uuid4().hex[:16]}"
+    result = run_policy_submission(payload.policy, draft_id)
+    policy_json = payload.policy.model_dump(mode="json")
+    policy_hash = hashlib.sha256(json.dumps(policy_json, sort_keys=True).encode()).hexdigest()
+    try:
+        _execution_store().save_submission(
+            draft_id,
+            challenge_id,
+            user_id,
+            payload.policy.schema_version,
+            policy_json,
+            policy_hash,
+            result,
+            status="draft",
+        )
+    except ArenaPhaseError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"submission_id": draft_id, "status": "draft", "policy_hash": policy_hash}
+
+
+@app.get("/api/arena/execution/challenges/{challenge_id}/submissions/me")
+def execution_current_submission(challenge_id: str, request: Request) -> dict[str, Any]:
+    """Recover the signed-in student's persisted submission after reload or restart."""
+    _execution_challenge_record(challenge_id)
+    _, user_id = _require_execution_student(request)
+    store = _execution_store()
+    owned = [row for row in store.submissions(challenge_id) if row["user_id"] == user_id]
+    finals = [row for row in owned if row["status"] == "final"]
+    drafts = [row for row in owned if row["status"] == "draft"]
+    final = finals[-1] if finals else None
+    draft = drafts[-1] if drafts else None
+    challenge = store.challenge(challenge_id)
+    practice_used = store.practice_count(challenge_id, user_id)
+    return {
+        "challenge_id": challenge_id,
+        "practice_runs_used": practice_used,
+        "practice_runs_remaining": max(0, int(challenge["max_practice_runs"]) - practice_used),
+        "final": (
+            {
+                "submission_id": final["submission_id"],
+                "created_at": final["created_at"],
+                "public_score": final["public_score"],
+                "status": final["status"],
+                "policy": final["policy"],
+            }
+            if final
+            else None
+        ),
+        "latest_draft": (
+            {
+                "submission_id": draft["submission_id"],
+                "created_at": draft["created_at"],
+                "status": draft["status"],
+                "policy": draft["policy"],
+            }
+            if draft
+            else None
+        ),
+    }
+
+
+@app.post("/api/arena/execution/challenges/{challenge_id}/lock")
+def execution_lock(challenge_id: str, payload: ExecutionPhaseRequest, request: Request) -> dict[str, Any]:
+    _, actor = _require_execution_instructor(request)
+    try:
+        challenge = _execution_store().transition(challenge_id, actor, "submission_locked", payload.reason)
+    except KeyError as exc:
+        raise HTTPException(404, "execution challenge not found") from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"challenge_id": challenge_id, "phase": challenge["phase"]}
 
 
 @app.post("/api/arena/execution/challenges/{challenge_id}/evaluate")
 def execution_evaluate(challenge_id: str, request: Request) -> dict[str, Any]:
-    if challenge_id != "trade-the-shock":
-        raise HTTPException(404, "execution challenge not found")
-    _require_instructor(request)
-    return benchmark_matrix()
+    _, actor = _require_execution_instructor(request)
+    challenge = _execution_challenge_record(challenge_id)
+    if challenge["phase"] != "submission_locked":
+        raise HTTPException(409, "challenge must be submission_locked before evaluation")
+    store = _execution_store()
+    final_submissions = {
+        row["submission_id"]: ExecutionPolicySubmission.model_validate(row["policy"])
+        for row in store.submissions(challenge_id)
+        if row["status"] == "final"
+    }
+    matrix = benchmark_matrix(
+        variants=tuple(challenge["hidden_worlds"]),
+        student_submissions=final_submissions,
+    )
+    try:
+        evaluation = store.save_evaluation_and_transition(
+            challenge_id,
+            actor,
+            matrix,
+            "instructor initiated evaluation",
+        )
+    except KeyError as exc:
+        raise HTTPException(404, "execution challenge not found") from exc
+    except ArenaPhaseError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {
+        "evaluation_id": evaluation["evaluation_id"],
+        "matrix_hash": evaluation["matrix_hash"],
+        "phase": "hidden_evaluation",
+        "policy_count": len(matrix["rows"]),
+        "world_result_count": sum(len(row.get("world_results", [])) for row in matrix["rows"]),
+    }
+
+
+@app.post("/api/arena/execution/challenges/{challenge_id}/release")
+def execution_release(challenge_id: str, payload: ExecutionPhaseRequest, request: Request) -> dict[str, Any]:
+    _, actor = _require_execution_instructor(request)
+    store = _execution_store()
+    challenge = _execution_challenge_record(challenge_id)
+    if challenge["phase"] != "hidden_evaluation":
+        raise HTTPException(409, "challenge must be evaluated before release")
+    try:
+        before = store.evaluation(challenge_id)
+    except KeyError as exc:
+        raise HTTPException(409, "hidden evaluation is missing") from exc
+    released = store.release_challenge(challenge_id, actor, payload.reason)
+    return {
+        "challenge_id": challenge_id,
+        "phase": "released",
+        "matrix_hash": released["matrix_hash"],
+        "evaluation_unchanged": before["matrix_hash"] == released["matrix_hash"],
+    }
+
+
+@app.post("/api/arena/execution/challenges/{challenge_id}/archive")
+def execution_archive(challenge_id: str, payload: ExecutionPhaseRequest, request: Request) -> dict[str, Any]:
+    _, actor = _require_execution_instructor(request)
+    try:
+        challenge = _execution_store().transition(challenge_id, actor, "archived", payload.reason)
+    except KeyError as exc:
+        raise HTTPException(404, "execution challenge not found") from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"challenge_id": challenge_id, "phase": challenge["phase"]}
 
 
 @app.get("/api/arena/execution/challenges/{challenge_id}/leaderboard/public")
 def execution_public_leaderboard(challenge_id: str) -> dict[str, Any]:
-    if challenge_id != "trade-the-shock":
-        raise HTTPException(404, "execution challenge not found")
-    matrix = benchmark_matrix()
+    challenge = _execution_challenge_record(challenge_id)
+    try:
+        matrix = _execution_store().evaluation(challenge_id)["matrix"]
+    except KeyError:
+        store = _execution_store()
+        final_submissions = {
+            row["submission_id"]: ExecutionPolicySubmission.model_validate(row["policy"])
+            for row in store.submissions(challenge_id)
+            if row["status"] == "final"
+        }
+        matrix = public_leaderboard_matrix(student_submissions=final_submissions)
     return {
+        "challenge_id": challenge_id,
+        "phase": challenge["phase"],
         "rows": [
-            {key: row[key] for key in ("policy_id", "name", "public_score", "public_rank")}
+            {
+                "policy_id": row["policy_id"],
+                "name": row["name"],
+                "public_score": row["public_score"],
+                "public_rank": (row["public_rank"] if "public_rank" in row else row["public_score_rank"]),
+            }
             for row in matrix["rows"]
-        ]
+        ],
     }
 
 
 @app.get("/api/arena/execution/challenges/{challenge_id}/leaderboard/hidden")
 def execution_hidden_leaderboard(challenge_id: str, request: Request) -> dict[str, Any]:
-    if challenge_id != "trade-the-shock":
-        raise HTTPException(404, "execution challenge not found")
-    _require_instructor(request)
-    return benchmark_matrix()
+    challenge = _execution_challenge_record(challenge_id)
+    role, _ = _arena_identity(request)
+    if role != "instructor" and challenge["phase"] != "released":
+        raise HTTPException(403, "hidden results are withheld until release")
+    try:
+        evaluation = _execution_store().evaluation(challenge_id)
+    except KeyError as exc:
+        raise HTTPException(409, "hidden evaluation has not run") from exc
+    if role == "instructor":
+        return {**evaluation["matrix"], "released": challenge["phase"] == "released"}
+    return {
+        "challenge_id": challenge_id,
+        "released": True,
+        "matrix_hash": evaluation["matrix_hash"],
+        "rows": _released_execution_rows(evaluation["matrix"]),
+    }
+
+
+@app.get("/api/arena/execution/challenges/{challenge_id}/evidence")
+def execution_raw_evidence(challenge_id: str, request: Request) -> dict[str, Any]:
+    _require_execution_instructor(request)
+    try:
+        evaluation = _execution_store().evaluation(challenge_id)
+    except KeyError as exc:
+        raise HTTPException(409, "hidden evaluation has not run") from exc
+    return {
+        "evaluation": evaluation,
+        "audit_events": _execution_store().audit_events(challenge_id),
+        "raw_evidence_policy": "instructor_only_even_after_release",
+    }
+
+
+@app.get("/api/arena/execution/submissions/{submission_id}")
+def execution_submission(submission_id: str, request: Request) -> dict[str, Any]:
+    role, user_id = _require_execution_session(request)
+    store = _execution_store()
+    try:
+        submission = store.submission(submission_id)
+    except KeyError as exc:
+        raise HTTPException(404, "submission not found") from exc
+    if role != "instructor" and submission["user_id"] != user_id:
+        raise HTTPException(403, "submission belongs to another user")
+    challenge = store.challenge(submission["challenge_id"])
+    result = {
+        "submission_id": submission_id,
+        "status": submission["status"],
+        "policy": submission["policy"],
+        "public_score": submission["public_score"],
+        "public_metrics": submission["public_result"]["metrics"],
+        "hidden_results": "withheld_until_release",
+    }
+    if challenge["phase"] == "released":
+        result["hidden_results"] = "released"
+    return result
+
+
+@app.post("/api/arena/execution/submissions/{submission_id}/feedback")
+def execution_submission_feedback(
+    submission_id: str, payload: ArenaFeedbackRequest, request: Request
+) -> dict[str, Any]:
+    role, user_id = _require_execution_session(request)
+    store = _execution_store()
+    try:
+        submission = store.submission(submission_id)
+    except KeyError as exc:
+        raise HTTPException(404, "submission not found") from exc
+    if role != "instructor" and submission["user_id"] != user_id:
+        raise HTTPException(403, "submission belongs to another user")
+    challenge = store.challenge(submission["challenge_id"])
+    if challenge["phase"] != "released":
+        return {
+            "status": "withheld",
+            "message": "Feedback is withheld until the instructor releases hidden evaluation.",
+        }
+    existing_report = store.feedback(submission_id)
+    if existing_report is not None:
+        return {
+            **existing_report["report"],
+            "report_id": existing_report["report_id"],
+            "recovered_from_sqlite": True,
+        }
+    try:
+        matrix = store.evaluation(submission["challenge_id"])["matrix"]
+        feedback_matrix = deepcopy(matrix)
+        if not challenge["raw_evidence_released"]:
+            for row in feedback_matrix["rows"]:
+                row.pop("world_results", None)
+        public_replay = submission["public_result"].get("replay", {})
+
+        def trace_ids(kind: str, values: list[Any], limit: int) -> list[str]:
+            """Return a bounded, stable, de-duplicated public trace allow-list."""
+            identifiers: list[str] = []
+            seen: set[str] = set()
+            for value in values:
+                identifier = f"public.{kind}.{hashlib.sha256(str(value).encode()).hexdigest()[:16]}"
+                if identifier in seen:
+                    continue
+                seen.add(identifier)
+                identifiers.append(identifier)
+                if len(identifiers) == limit:
+                    break
+            return identifiers
+
+        evidence = build_execution_evidence(
+            feedback_matrix,
+            submission_id,
+            released=True,
+            policy_parameters=submission["policy"],
+            event_ids=trace_ids(
+                "event",
+                [row.get("event_id", index) for index, row in enumerate(public_replay.get("events", []))],
+                200,
+            ),
+            trade_ids=trace_ids(
+                "trade",
+                [row.get("trade_id", index) for index, row in enumerate(public_replay.get("trades", []))],
+                500,
+            ),
+            fill_ids=trace_ids(
+                "fill",
+                [
+                    row.get("trade_id", index)
+                    for index, row in enumerate(public_replay.get("strategy_trades", []))
+                ],
+                500,
+            ),
+            replay_step_ids=trace_ids(
+                "replay",
+                [row.get("step", index) for index, row in enumerate(public_replay.get("evidence_rows", []))],
+                500,
+            ),
+        )
+        report = generate_execution_feedback(evidence, model=payload.model)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(422, f"feedback evidence is unavailable: {exc}") from exc
+    response_report = {
+        **report,
+        "scoring_authority": "deterministic_engine",
+        "evidence_scope": (
+            "released_world_evidence"
+            if challenge["raw_evidence_released"]
+            else "released_aggregates_and_public_trace_ids"
+        ),
+    }
+    report_id = store.save_feedback(
+        submission_id,
+        user_id,
+        str(report["status"]),
+        report.get("model"),
+        response_report,
+    )
+    return {**response_report, "report_id": report_id, "recovered_from_sqlite": False}
 
 
 def product_strategy(request: ProductRunRequest) -> dict:
@@ -653,23 +1222,103 @@ def _arena_session_secret() -> bytes:
     return os.getenv("ARENA_SESSION_SECRET", "local-demo-not-for-production").encode()
 
 
-def _arena_role(request: Request) -> str:
-    """Resolve role from a signed cookie, never a normal client header."""
-    if os.getenv("ARENA_TEST_AUTH") == "1":
-        return request.headers.get("X-Test-Role", "student").strip().lower()
-    token = request.cookies.get("arena_demo_session")
+def _execution_store() -> ArenaStore:
+    store = ArenaStore()
+    store.ensure_default_challenge(CHALLENGE_ID, list(HIDDEN_VARIANTS))
+    return store
+
+
+def _execution_challenge_record(challenge_id: str) -> dict[str, Any]:
+    if challenge_id != CHALLENGE_ID:
+        raise HTTPException(404, "execution challenge not found")
+    challenge = _execution_store().challenge(challenge_id)
+    hidden_worlds = challenge["hidden_worlds"]
+    if (
+        not hidden_worlds
+        or len(set(hidden_worlds)) != len(hidden_worlds)
+        or any(world not in HIDDEN_VARIANTS for world in hidden_worlds)
+    ):
+        raise HTTPException(500, "stored protected-world manifest is invalid")
+    return challenge
+
+
+def _arena_identity_from_token(token: str) -> tuple[str, str] | None:
     if not token:
-        return "student"
+        return None
     try:
         decoded = base64.urlsafe_b64decode(token.encode()).decode()
-        role, user_id, issued_at, signature = decoded.split("|", 3)
-        value = f"{role}|{user_id}|{issued_at}"
+        role, user_id, issued_at, expires_at, signature = decoded.split("|", 4)
+        value = f"{role}|{user_id}|{issued_at}|{expires_at}"
         expected = hmac.new(_arena_session_secret(), value.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(signature, expected) or role not in {"student", "instructor"}:
-            return "student"
-        return role
-    except (ValueError, UnicodeDecodeError):
-        return "student"
+        session = _execution_store().session(hashlib.sha256(token.encode()).hexdigest())
+        if (
+            not hmac.compare_digest(signature, expected)
+            or role not in {"student", "instructor"}
+            or int(expires_at) < int(time.time())
+            or session is None
+            or session["role"] != role
+            or session["user_id"] != user_id
+        ):
+            return None
+        return role, user_id
+    except (binascii.Error, ValueError, UnicodeDecodeError, sqlite3.Error):
+        return None
+
+
+def _arena_identity(request: Request) -> tuple[str, str]:
+    """Resolve role from a signed cookie, never a normal client header."""
+    if os.getenv("ARENA_TEST_AUTH") == "1":
+        role = request.headers.get("X-Test-Role", "student").strip().lower()
+        user_id = request.headers.get("X-Test-User", f"test-{role}").strip()
+        return (role if role in {"student", "instructor"} else "student", user_id)
+    identity = _arena_identity_from_token(request.cookies.get("arena_demo_session", ""))
+    if identity is None:
+        return "student", "anonymous-student"
+    return identity
+
+
+def _arena_role(request: Request) -> str:
+    return _arena_identity(request)[0]
+
+
+def _require_execution_session(request: Request) -> tuple[str, str]:
+    identity = _arena_identity(request)
+    if identity[1] == "anonymous-student":
+        raise HTTPException(401, "a signed demo or institutional session is required")
+    return identity
+
+
+def _require_execution_student(request: Request) -> tuple[str, str]:
+    identity = _require_execution_session(request)
+    if identity[0] != "student":
+        raise HTTPException(403, "student session is required for this endpoint")
+    return identity
+
+
+def _require_execution_instructor(request: Request) -> tuple[str, str]:
+    identity = _require_execution_session(request)
+    if identity[0] != "instructor":
+        raise HTTPException(403, "instructor session is required for this endpoint")
+    return identity
+
+
+def _released_execution_rows(matrix: dict[str, Any]) -> list[dict[str, Any]]:
+    allowed = (
+        "policy_id",
+        "name",
+        "public_rank",
+        "robustness_rank",
+        "rank_movement",
+        "public_score",
+        "robustness_score",
+        "public_shortfall_bps",
+        "public_completion_pct",
+        "hidden_mean_shortfall_bps",
+        "hidden_worst_shortfall_bps",
+        "hidden_completion_pct",
+        "released_intent_aggregates",
+    )
+    return [{key: row[key] for key in allowed if key in row} for row in matrix["rows"]]
 
 
 def _require_instructor(request: Request) -> None:

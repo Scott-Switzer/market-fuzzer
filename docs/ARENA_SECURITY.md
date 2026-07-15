@@ -1,21 +1,45 @@
-# Arena data and role boundary
+# Arena security and visibility boundary
 
-This Build Week prototype uses a simple `X-Role: instructor|student` header to demonstrate API separation. It is not authentication and must be replaced by authenticated course membership before deployment.
+The primary Execution Challenge uses signed demo sessions, persisted identities, explicit phases, and allow-listed release views. A normal client header is not an authorization boundary.
 
-Student-facing endpoints return:
+## Demo identity
 
-- The approved public challenge brief.
-- Public rows without hidden dates or regime labels.
-- Public validation results and public score.
-- A public leaderboard without hidden metrics.
+- Demo sessions exist only when `ARENA_DEMO_AUTH=1`.
+- Instructor issuance additionally requires the server-only `ARENA_DEMO_INSTRUCTOR_CODE` using a constant-time comparison.
+- The request supplies only the desired role and, for an instructor, the code. It cannot choose a user ID; the server generates that identity.
+- The server returns signed, HttpOnly, SameSite=Lax generic and role-specific cookies. Their hash, generated user ID, role, issue time, and expiry are recorded in SQLite.
+- Reissuing a role while its role-specific cookie is valid resumes the same persisted identity. This preserves practice limits, drafts, final submission ownership, and released-report recovery across reload and process restart.
+- The instructor code is neither stored in a cookie nor returned to the browser.
+- `X-Role` has no authority. `X-Test-Role` and `X-Test-User` work only when the separately scoped `ARENA_TEST_AUTH=1` flag is set in isolated tests.
 
-Instructor-only endpoints return:
+This is local prototype authentication, not production identity. See `docs/LIMITATIONS.md` for the deployment hardening still required.
 
-- Hidden regime manifest and latent labels.
-- The instructor dataset bundle.
-- Hidden metrics and robustness ranking.
-- All submission evidence and the release action.
+## Execution data visibility
 
-The hidden dataset is generated from the challenge seed inside the server process. It is not written into the public static bundle and is not included in `public_challenge`, `public_dataset`, student submission responses, or unreleased leaderboards. Production hardening should add authenticated roles, persistent access-control audit logs, rate limits, CSRF protection for browser writes, encrypted storage, and separate instructor/student data stores.
+Before release, student endpoints may return:
 
-The project accepts CSV positions only. It does not execute uploaded Python or accept arbitrary strategy code. CSV size, row count, dates, assets, positions, and exposures are bounded before evaluation.
+- the public challenge brief and protected-test count;
+- strict policy definitions and stored limits;
+- the derived public world result, public replay, and public score;
+- the learner’s own immutable policy/submission record; and
+- a public leaderboard without hidden metrics.
+
+They do not return hidden identifiers, interventions, parameters, hashes, world results, replays, or feedback. The public practice payload has no world-variant or seed override; the server reads the public variant from challenge state and uses seed `42`.
+
+Instructor sessions may lock submissions, initiate the server-selected hidden matrix, inspect raw stored evidence/audit history, release the allow-listed aggregate view, and archive the challenge. Hidden evaluation requires the correct phase, reads its protected world IDs from the persisted challenge manifest, uses internal `SEEDS = (41, 42)`, and is stored before release. Client payloads cannot replace that manifest or seed tuple.
+
+After release, students receive only declared aggregate rank/score fields and coarse educational-intent aggregates. These intent aggregates contain measured summaries such as latency, displayed depth, forced flow, completion, participation, and shortfall; they omit seed rows, internal world identifiers, hashes, orders, fills, and protected replay. The analyst is grounded with those release-safe fields and stable hashed identifiers from the student's own public replay. `world_results`, raw world hashes, detailed hidden replay, and audit evidence remain instructor-only even after release and are not copied into student feedback. Release updates visibility, time, and its audit entry atomically; it does not mutate scores or the matrix hash. Once generated, the feedback report is stored and recovered on later requests instead of invoking the analyst again.
+
+## Transaction boundary
+
+State-changing lifecycle operations and their audit rows commit in one SQLite transaction. Practice and final-submission quota checks use `BEGIN IMMEDIATE` around both count and insert, preventing two concurrent requests from both passing the same stale count in the supported single-database deployment. Release likewise commits evaluation visibility, challenge phase, phase history, and audit evidence as one state change.
+
+## Challenge-design boundary
+
+Only an instructor session can request a GPT-authored challenge-design draft. The strict draft is qualitative, limited to approved educational intents and policy controls, and persisted with an audit event. Validation rejects numeric market parameters, seeds, prices, quantities, latency values, metrics, scores, ranks, and model-authored outcomes. A draft cannot create or mutate a numeric hidden world.
+
+## Submission boundary
+
+Execution submissions are strict Pydantic policy objects. Extra fields, invalid enums/bounds, non-finite values, and incompatible controls are rejected. The API does not execute uploaded Python, arbitrary containers, shell commands, or remote URLs.
+
+The secondary research/positions challenge retains its bounded CSV contract under `/api/arena/challenges/...`; it is experimental and does not define the primary Execution Challenge security model.

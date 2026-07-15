@@ -1,48 +1,82 @@
 # Architecture
 
-Market Fuzzer has two intentionally separate layers:
+Quant Challenge Arena is one product with four deliberately separated layers:
 
 ```text
-Primary product path
-  Strategy definition + safety properties
-    -> compact deterministic POV state machine
-    -> bounded adverse search and seeded reproduction
-    -> minimization + verified passing neighbor
-    -> exact fragile/corrected comparison
-    -> replay + YAML/JSON regression fixture
-
-Secondary research infrastructure
-  WorldSpec -> synthetic world -> agents -> exchange/calibration/artifacts
+Primary        Execution Challenge Arena
+Secondary      Research/positions challenge (experimental)
+Advanced       Market Fuzzer developer lab
+Infrastructure Synthetic world, agents, and price-time-priority exchange
 ```
+
+The homepage and primary `/api/arena/execution/...` routes belong to the Execution Challenge. The older research/positions APIs remain under `/api/arena/challenges/...`; they are not the homepage or the basis of the execution leaderboard. `/market-fuzzer` preserves the protected developer-tool milestone.
+
+## Execution Challenge
 
 ```mermaid
 flowchart LR
-  A[Strategy] --> B[Safety properties]
-  B --> C[Deterministic baseline]
-  C --> D[Bounded adverse search]
-  D --> E[Seed reproduction]
-  E --> F[Counterexample minimizer]
-  F --> G[Replay and passing neighbor]
-  G --> H[Corrected retest]
-  H --> I[Regression fixture]
-  J[GPT-5.6] -. hypotheses and grounded explanation .-> D
-  J -. never controls verdict .-> H
+  I["Instructor challenge and phase"] --> S["SQLite lifecycle store"]
+  P["Declarative policy"] --> V["Strict validation and policy adapter"]
+  V --> E["Synthetic world and exchange"]
+  E --> M["Orders, fills, latency, inventory, metrics"]
+  M --> X["Immutable public and hidden evaluation matrix"]
+  X --> S
+  S --> R["Role-scoped release view"]
+  R --> U["Replay and rank movement UI"]
+  R --> G["Grounded GPT-5.6 analysis or labeled fallback"]
 ```
 
-## Product harness
+Key responsibilities:
 
-`app/product.py` is the accounting authority for the browser’s Market Fuzzer workflow. Each run models discrete time steps, actual volume, delayed observed volume, observation latency, pending orders, fills, parent-order remainder, realized participation, completion, a documented deterministic shortfall proxy, strategy decisions, and replay events.
+- `app/execution_arena.py` defines the versioned policy submission, built-in benchmark policies, exchange adapter, public and hidden evaluation matrix, score decomposition, and challenge public brief.
+- `app/simulation.py` and `app/exchange/` own the deterministic market lifecycle: observations, actions, order arrival, acknowledgments, fills, cancels, inventory, and replay evidence.
+- `app/execution_store.py` owns restart-safe product state in SQLite: server-generated demo identities and sessions, challenges and their hidden-world manifests, phase history, practice runs, final submissions, immutable hidden evaluations, per-world results, leaderboard snapshots, qualitative challenge-design drafts, feedback reports, and audit events.
+- `app/execution_challenge_designer.py` validates instructor constraints, maps GPT-5.6 educational intents to an approved intervention allow-list, rejects numeric world construction, and provides a deterministic no-key design.
+- `app/execution_feedback.py` builds the allow-listed evidence package, validates structured feedback, handles refusals/incomplete output, and provides the clearly labeled no-key fallback.
+- `app/api/app.py` enforces the student/instructor boundary and translates stored records into public, released, and instructor-only views.
+- `app/static/arena.html`, `arena.js`, and `arena.css` provide the student/instructor workflow. Raw evidence is secondary to the visible policy, replay, and ranking views.
 
-The fragile POV intentionally sizes from stale observed volume and ignores pending orders. The corrected POV includes pending quantity in its budget and applies a fill-time participation guard. Both receive identical scenario inputs, parent-order parameters, properties, and seeds in comparison runs.
+The challenge adapter under `app/challenges/` defines a small shared contract (`public_brief`, `validate_submission`, `run_public`, `run_hidden`, and `release_view`). Execution is the primary implementation. The legacy research challenge is exposed as a secondary adapter without forcing either product through the other product’s submission schema.
 
-`run_search()` uses a deterministic bounded grid, targets the enabled participation property, selects the least-severe qualifying candidate, recomputes all minimized evidence, and verifies a passing neighbor. `export_fixture()` preserves the exact strategy ID, type, version, parameters, scenario hash, seeds, safety properties, expected targeted result, policy versions, and reproduction command.
+## Persistence and phases
 
-## Research infrastructure boundary
+The deterministic simulator is stateless; the product lifecycle is not. `ArenaStore` initializes a deterministic SQLite schema and uses one short transaction per operation. State changes and their audit entries commit together. Phase transitions, release timestamp plus phase, and quota count-plus-insert operations use immediate write transactions; a concurrent practice or final-submission request therefore cannot pass a stale count and exceed its stored limit in the supported single-database deployment. Tests point `ARENA_DB_PATH` at a temporary database; Docker points it at `/data/arena.sqlite3` in a named volume.
 
-The repository also contains a broader synthetic-market research engine under `app/world/`, `app/agents/`, `app/exchange/`, `app/calibration/`, `app/experiments/`, and `app/analytics/`. Those modules support the earlier world/calibration experiments. They are not silently claimed as the exact backend of the compact Market Fuzzer harness.
+Allowed transitions are exact:
 
-The current product should therefore be described as a **compact deterministic market test harness**, not a full institutional exchange simulator. The older exact matching engine remains useful research infrastructure, but the product acceptance tests exercise `app/product.py` directly.
+```text
+draft → public_practice → submission_locked → hidden_evaluation → released → archived
+```
 
-## AI boundary
+Every transition records actor, time, previous state, new state, and reason in the same transaction as the phase update. Practice and final-submission limits are stored with the challenge. The hidden matrix is stored once and reused; release atomically adds the release timestamp, advances phase, and records its audit event without changing the underlying scores or matrix hash.
 
-GPT-5.6 is optional. It may generate schema-constrained failure hypotheses and explanations grounded in measured evidence. It never sets prices, volumes, fills, accounting entries, safety-property values, reproduction confidence, or PASS/FAIL outcomes. The no-key deterministic path is complete.
+## Security and release boundary
+
+The browser cannot choose a hidden world or evaluation seed. Public practice derives `public_world_variant` from the stored challenge and uses the canonical public seed `PUBLIC_SEED = 42`. The challenge's protected world IDs are persisted as a server-only manifest. Hidden evaluation loads that exact manifest and the internal `SEEDS = (41, 42)` tuple, then requires an instructor session in the correct phase. A request cannot replace either authority.
+
+`ARENA_DEMO_AUTH=1` enables signed, HttpOnly, SameSite=Lax, twelve-hour demo-session cookies whose hashes and server-generated identities are recorded in SQLite. The request supplies a role, not a user ID. A valid role-specific cookie resumes the same student or instructor identity across reload and application restart, so practice and submission ownership remain stable. Instructor issuance additionally requires a constant-time match against the server-only `ARENA_DEMO_INSTRUCTOR_CODE`; the code is never stored in the cookie or returned to the browser. A normal client-supplied role header has no authority. `ARENA_TEST_AUTH=1` separately enables `X-Test-Role` only for isolated automated tests. Demo authentication is disabled by default in Compose.
+
+Before release, a student cannot retrieve hidden identifiers, parameters, hashes, replays, leaderboard rows, or feedback. After release, the student receives only the declared aggregate result fields. Raw matrices, world-level results, hashes, and the audit trail remain instructor-only.
+
+This is a hackathon demo boundary, not OAuth, OIDC, an LMS integration, CSRF hardening for a public multi-tenant deployment, or institutional identity assurance.
+
+## Evaluation and caching
+
+The public benchmark and protected evaluation deliberately have different seed contracts:
+
+```text
+public:    one policy × stored public world × seed 42
+protected: one policy × persisted hidden-world manifest × SEEDS (41, 42)
+```
+
+The immutable matrix records challenge and policy identity, world/seed results, public and robustness rank, and a deterministic matrix hash. SQLite de-duplicates stored hidden evaluation by challenge and matrix hash, so page loads do not recompute the matrix. A version change invalidates reuse by changing the derived hash.
+
+## GPT boundary
+
+The instructor-only challenge designer can create a schema-valid qualitative draft from approved intervention and policy-control IDs. The draft and its audit event are persisted, but the model cannot provide numeric market parameters, seeds, prices, orders, fills, outcomes, scores, or ranks and cannot create or mutate the persisted world manifest.
+
+The evidence analyst receives only post-release aggregate evaluation fields plus bounded stable IDs derived from the student's public replay. Each quantitative statement must cite an allowed evidence ID, canonical metric name, and exact supplied value. The validator rejects unknown IDs, invented metrics or numbers, pre-release hidden content, unsafe financial/production claims, output that contradicts deterministic rank, refusals, and incomplete schema output. A validated or deterministic-fallback report is persisted and recovered on subsequent requests, including after restart. Raw per-world evidence is never added to the student feedback package and remains instructor-only. The model has no API path that writes market events, fills, metrics, scores, ranks, phase, release state, or worlds.
+
+## Preserved systems
+
+`app/arena.py` is the secondary research/positions assessment. `app/product.py` is the compact deterministic Market Fuzzer harness. The broader world and exchange modules are shared research infrastructure. The protected Market Fuzzer tag remains the provenance boundary; the Execution Challenge builds on infrastructure without deleting or relabeling that milestone.
