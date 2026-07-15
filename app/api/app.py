@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, cast
 
@@ -9,6 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from app.analyst import analyze_failure
 from app.calibration import build_demo_calibration_pack, calibrate_bootstrap
 from app.compiler import compile_world
 from app.experiments import run_batch, run_single, run_validation_campaign
@@ -25,7 +27,7 @@ from app.product import (
 from app.schemas import WorldSpec
 
 ROOT = Path(__file__).resolve().parents[1]
-ARTIFACT_ROOT = Path("artifacts").resolve()
+ARTIFACT_ROOT = Path(os.getenv("MARKET_FUZZER_EXPERIMENT_ROOT", "artifacts")).expanduser().resolve()
 app = FastAPI(title="Market Fuzzer", version="0.2.0")
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 JOBS: dict[str, dict] = {}
@@ -54,6 +56,10 @@ class ProductRunRequest(BaseModel):
     properties: list[dict] = Field(default_factory=lambda: DEFAULT_PROPERTIES.copy())
     scenario: dict = Field(default_factory=dict)
     mode: str = Field(default="quick", pattern="^(quick|deep)$")
+
+
+class FailureAnalysisRequest(BaseModel):
+    model: str | None = Field(default=None, max_length=120)
 
 
 @app.get("/")
@@ -163,17 +169,54 @@ def minimize(failure_id: str) -> dict:
 @app.get("/api/failures/{failure_id}/replay")
 def replay(failure_id: str) -> dict:
     value = failure(failure_id)
+    fragile = {
+        "id": "pov_fragile",
+        **STRATEGIES["pov_fragile"],
+        "parameters": STRATEGIES["pov_fragile"]["defaults"],
+    }
+    fragile_parameters = cast(dict[str, Any], STRATEGIES["pov_fragile"]["defaults"])
+    corrected = {
+        "id": "pov",
+        **STRATEGIES["pov"],
+        "parameters": dict(fragile_parameters),
+    }
+    seed = value["reproduction"]["seeds_tested"][0]
+    corrected_result = evaluate(corrected, value["minimized"], value["properties"], seed)
     return {
         "failure_id": failure_id,
+        "scenario_hash": value["scenario_hash"],
         "baseline": evaluate(
-            value["strategy"],
+            fragile,
             {"liquidity": 1, "volatility": 1, "latency_ms": 10, "forced_seller": 0, "spread": 1},
             value["properties"],
             42,
         )["timeline"],
         "failure": value["runs"][0]["timeline"],
+        "corrected": corrected_result["timeline"],
         "annotation": "Forced flow reaches a thin book; stale participation accounting violates the cap.",
     }
+
+
+@app.post("/api/failures/{failure_id}/analysis")
+def failure_analysis(failure_id: str, request: FailureAnalysisRequest) -> dict:
+    value = failure(failure_id)
+    fragile_parameters = cast(dict[str, Any], STRATEGIES["pov_fragile"]["defaults"])
+    corrected = {
+        "id": "pov",
+        **STRATEGIES["pov"],
+        "parameters": dict(fragile_parameters),
+    }
+    evidence_value = {
+        **value,
+        "corrected_runs": [
+            evaluate(corrected, value["minimized"], value["properties"], seed)
+            for seed in value["reproduction"]["seeds_tested"]
+        ],
+    }
+    try:
+        return analyze_failure(evidence_value, model=request.model)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @app.post("/api/comparisons")

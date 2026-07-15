@@ -16,4 +16,4 @@
 
 **2:30–2:45 — Regression.** Export YAML/JSON and run the regression suite. Show actual fixture execution and status, including any invalid legacy fixtures rather than hiding them.
 
-**2:45–2:55 — OpenAI role and close.** “GPT-5.6 can propose structured hypotheses; deterministic code decides results. Codex built and verified the workflow. This is a software regression inside a bounded synthetic harness, not a live-trading claim.”
+**2:45–2:55 — OpenAI role and close.** Click **Explain failure with GPT-5.6** if an API key is configured; otherwise show the explicit deterministic fallback. “GPT-5.6 can propose grounded hypotheses and explain measured evidence; deterministic code decides results. Codex built and verified the workflow. This is a software regression inside a bounded synthetic harness, not a live-trading claim.”

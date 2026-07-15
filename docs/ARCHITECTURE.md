@@ -15,6 +15,20 @@ Secondary research infrastructure
   WorldSpec -> synthetic world -> agents -> exchange/calibration/artifacts
 ```
 
+```mermaid
+flowchart LR
+  A[Strategy] --> B[Safety properties]
+  B --> C[Deterministic baseline]
+  C --> D[Bounded adverse search]
+  D --> E[Seed reproduction]
+  E --> F[Counterexample minimizer]
+  F --> G[Replay and passing neighbor]
+  G --> H[Corrected retest]
+  H --> I[Regression fixture]
+  J[GPT-5.6] -. hypotheses and grounded explanation .-> D
+  J -. never controls verdict .-> H
+```
+
 ## Product harness
 
 `app/product.py` is the accounting authority for the browser’s Market Fuzzer workflow. Each run models discrete time steps, actual volume, delayed observed volume, observation latency, pending orders, fills, parent-order remainder, realized participation, completion, a documented deterministic shortfall proxy, strategy decisions, and replay events.
