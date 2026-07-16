@@ -1,134 +1,102 @@
 # Quant Challenge Arena
 
-Quant Challenge Arena is an education-oriented execution-strategy assessment platform. Students configure a safe, declarative policy for a fictional limit-order-book exchange, practice in a public market, and are evaluated against hidden, deterministic liquidity, latency, event, and crowding regimes. It teaches the difference between optimizing a visible leaderboard and understanding execution robustness.
+**Problem.** A strategy can top a visible backtest by exploiting one friendly market and still fail when liquidity disappears, latency rises, order flow crowds, or an event changes the price path.
 
-The current challenge, **Trade the Shock**, is intentionally small and truthful: three fictional issuers, a continuous price-time-priority exchange, seven background-agent roles, a 6,000-share parent order, and hidden liquidity-withdrawal, forced-seller, earnings, and latency worlds. The deterministic exchange owns every order, fill, metric, and rank. GPT-5.6 may design a lesson or explain measured evidence, but never scores, ranks, or alters execution.
+**Product.** Quant Challenge Arena is a synthetic-exchange assessment platform. A learner configures a bounded declarative execution policy, practices in a visible limit-order-book world, submits a final policy, and receives a protected multi-world evaluation only after an instructor releases it. Deterministic code owns market events, orders, fills, metrics, scores, ranks, phase state, and release state.
 
-## Arena workflow
+**Audience.** The primary users are instructors and students; the same workflow can support candidate assessment and bounded quant-team training. It evaluates reasoning about execution robustness inside a fictional market. It does not prove alpha, production capacity, or live-trading safety.
 
-```text
-Choose declarative policy → Run public exchange world → Submit final policy
-→ Instructor evaluates hidden worlds → Robustness-adjusted ranking
-→ Evidence-backed feedback and replay
-```
+## Three-step demo
 
-Open <http://127.0.0.1:8000> after starting the server. The primary UI is the exchange-backed Arena. Select one of four included declarative policies, run the visible exchange, then use the instructor control to evaluate the protected benchmark matrix. The verified demonstration shows **Aggressive POV** rank first in public practice while **Guarded Adaptive POV** ranks first across the hidden worlds.
+1. Select **Aggressive POV**, edit the permitted policy controls, and run public practice.
+2. Save the final declarative policy; an instructor locks submissions and runs the protected evaluation matrix.
+3. Release the result and compare **public rank → robustness rank**. In the production default seed matrix, Aggressive POV wins the visible ranking while Guarded Adaptive POV wins the robustness ranking. Replay evidence connects that reversal to measured orders, fills, participation, inventory, impact, and latency—not a hardcoded policy label.
 
-The public score deliberately differs from the hidden robustness rubric: public practice prioritizes completion and then shortfall; hidden evaluation balances shortfall, completion, impact, terminal inventory, stability, and order hygiene. The reversal is calculated from engine runs, never hardcoded.
+The central reveal is simple:
 
-## Secondary developer tool: Market Fuzzer
+> A strategy can win the visible practice leaderboard but lose after hidden robustness testing.
 
-The protected Market Fuzzer milestone remains available at <http://127.0.0.1:8000/market-fuzzer>. It finds bounded synthetic conditions that break an execution strategy, minimizes the failure, replays it, and exports a regression fixture.
-
-```text
-Strategy → Safety Properties → Baseline → Break My Strategy
-→ Minimized Counterexample → Replay → Corrected Retest → Regression Fixture
-```
-
-The first-run Market Fuzzer tutorial uses a fragile POV strategy whose delayed-volume accounting and pending-order handling can violate a participation cap. The search targets that property specifically; it does not accept an unrelated completion failure. The corrected POV receives the exact same minimized market, parent-order parameters, safety properties, and seeds.
-
-## Quick start — no key
+## Launch
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
+ARENA_DEMO_AUTH=1 \
+ARENA_DEMO_INSTRUCTOR_CODE=change-this-local-demo-code \
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open <http://127.0.0.1:8000>, choose a policy, and run the public world. No financial data subscription or OpenAI API key is required. The deterministic no-key path is complete; an OpenAI key only adds optional structured lesson prose and evidence explanations.
+Open <http://127.0.0.1:8000>. `ARENA_DEMO_AUTH=1` enables deliberately scoped demo sessions. The server generates the student or instructor identity; the browser does not submit a user ID. Re-selecting a role with its still-valid role cookie resumes that persisted identity, including its practice count and saved submission. The instructor role additionally requires the server-configured local code entered in the UI. Choose a different code for your run. The code is compared server-side and is never returned in the session payload. When `ARENA_SESSION_SECRET` is omitted in demo mode, the server generates a process-random secret: reloads work, but cookies intentionally stop validating after a process restart. Set a stable secret of at least 32 bytes only when restart continuity is needed.
 
-To exercise the secondary Market Fuzzer, open `/market-fuzzer`, choose **Start with POV example**, run the baseline, click **Break My Strategy**, open replay, retest corrected POV, and export the regression fixture.
+Cookies are `Secure` by default. The direct HTTP loopback launch above is detected narrowly and may omit `Secure`; `ARENA_COOKIE_SECURE=1` forces it. `ARENA_COOKIE_SECURE=0` is valid only with `ARENA_DEMO_AUTH=1` and is effective only for the same verified loopback/test scope—non-loopback clients still receive `Secure` cookies. Any other override value fails closed. This is not institutional authentication. No market-data subscription or OpenAI API key is required.
 
-For a judge-style isolated launch that generates fresh artifacts and prints the exact test path:
+After installing dependencies, the one-command isolated judge launch is:
 
 ```bash
 make judge-demo
 ```
 
-The script uses a temporary artifact root and removes it when stopped. Set `JUDGE_KEEP_ARTIFACTS=1` to retain the generated package. The same no-key flow can run in Docker:
+It prints the URL and local instructor code, stores SQLite and generated artifacts in a temporary directory, and removes them when stopped unless `JUDGE_KEEP_ARTIFACTS=1`.
+
+Docker is the one-command isolated path:
 
 ```bash
+ARENA_DEMO_AUTH=1 \
+ARENA_DEMO_INSTRUCTOR_CODE=change-this-local-demo-code \
 docker compose up --build
 ```
 
-The container listens on <http://127.0.0.1:8000>, runs as a non-root user, writes only to the mounted `artifacts/` directory, and exposes `/api/health`. A public deployment is not included in this repository.
+The image runs as a non-root user, persists Arena state and Market Fuzzer artifacts in a named volume, and exposes a semantic health check at `/api/health`. Demo authentication is off by default; Compose passes the instructor code from the host environment and does not bake it into the image.
 
-## CLI
+## Product map
 
-```bash
-smw test path/to/fixture.yaml
-smw test path/to/fixture.json
-smw test artifacts/market_fuzzer
-smw run-example
+```text
+Primary        Execution Challenge Arena (/ and /api/arena/execution/...)
+Secondary      Research/positions challenge (/api/arena/challenges/...)
+Advanced       Market Fuzzer (/market-fuzzer)
+Infrastructure Synthetic world, agents, and price-time-priority exchange
 ```
 
-`smw test` validates schema version, scenario hash, strategy identity, safety properties, seeds, and expected outcomes. It loads the exact stored strategy ID and exits nonzero for mismatches or invalid fixtures. A directory may contain YAML and JSON fixtures; invalid legacy fixtures are reported explicitly.
+The protected Market Fuzzer milestone remains intact at <http://127.0.0.1:8000/market-fuzzer>. It searches bounded synthetic conditions, minimizes a counterexample, replays the failure, compares a corrected POV implementation, and exports a regression fixture. The older research/positions challenge remains available through its API but is explicitly experimental and is not the homepage.
 
-The repository also retains the broader synthetic-market research engine and calibration commands:
+## Student and instructor boundary
 
-```bash
-smw validate configs/presets/normal.yaml
-smw compile --prompt "thin liquidity and an earnings shock" --offline
-smw demo
+The public challenge returns a protected-test count, public policy definitions, practice limits, and the visible world narrative. It does not return hidden identifiers, parameters, hashes, replays, or raw evidence.
+
+The lifecycle is explicit and persisted in SQLite:
+
+```text
+draft → public_practice → submission_locked → hidden_evaluation → released → archived
 ```
 
-Those are secondary research infrastructure, not the primary Arena or Market Fuzzer product path.
+Only an instructor demo session created with the configured instructor code can lock, evaluate, or release. Normal `X-Role` headers are ignored. The `ARENA_TEST_AUTH=1` bypass is additionally gated to Starlette's in-process `testclient` request scope, so setting the environment variable cannot make its role headers authoritative for a real network client. Public practice uses the stored public world and the exact public seed `42`. Protected evaluation reads the persisted hidden-world manifest and the internal protected seed tuple `SEEDS = (41, 42)`; neither the manifest nor those seeds are accepted from a learner request. Release changes visibility, not the immutable stored evaluation. Instructor-only raw world evidence and audit history remain separately protected.
 
-## Arena architecture truth
+Phase changes, practice/final quota checks plus writes, evaluation persistence, release state, and their audit records are committed transactionally in SQLite. The quota count and insert run under the same immediate write transaction, so concurrent requests cannot both pass a stale limit check in the supported single-database demo.
 
-`app/arena.py` owns the challenge schema, deterministic regime engine, strict CSV contract, public/hidden dataset separation, metrics, integrity checks, scoring, and feedback grounding. Hidden rows and regime manifests are generated server-side and are never returned by student-facing endpoints. The API uses `X-Role: instructor` for instructor-only operations in this prototype; production deployment would replace that demo boundary with authenticated course roles.
+Participant input is a strict versioned policy object, never uploaded Python. The schema supports `twap`, `pov`, and `adaptive_pov` plus bounded participation, spread, urgency, latency-tolerance, cancel, completion-buffer, and pause controls. Extra fields and incompatible combinations are rejected. Built-in policies go through the same engine adapter as student policies.
 
-The scoring contract keeps public performance, hidden performance, regime stability, operational robustness, concentration, and explanation quality separate. GPT-5.6 is constrained to challenge generation and evidence-grounded feedback. It never determines scores, ranks, verdicts, prices, or hidden data.
+## Deterministic evidence and GPT-5.6
 
-The browser intentionally leads with a student/instructor product flow rather than raw JSON. Technical evidence, hashes, manifests, and the hidden bundle are available only in the instructor console or advanced evidence drawer.
+The exchange and scoring pipeline is authoritative. GPT-5.6 has two bounded roles:
 
-## Market Fuzzer architecture truth
+- produce an instructor-only, schema-constrained **qualitative draft** that is persisted for review and maps only to approved intervention intents; and
+- explain an already-verified released evidence package using only valid metric and evidence IDs.
 
-The product path is a **compact deterministic market test harness**, not a claim of full exact exchange integration. `app/product.py` owns the POV state machine, delayed observations, pending orders, fills, participation, completion, shortfall proxy, replay timeline, search, minimization, comparison, and fixture export. The older `app/exchange/` and synthetic-world modules remain available as research infrastructure and are not silently represented as the product harness.
+Challenge-design output cannot contain numeric market parameters, seeds, outcomes, scores, or ranks and cannot create or mutate a world. The instructor UI exposes this as a clearly labeled qualitative draft. Feedback receives release-safe overall and educational-intent aggregates plus bounded, stable IDs derived from the learner's own public replay; raw hidden world rows remain instructor-only. Model output is strict structured data. Unknown evidence IDs, invented numbers, hidden references before release, investment advice, and attempts to change deterministic rank or score are rejected. Refusals and incomplete output are handled explicitly. The validated feedback report is persisted and returned on later requests or after restart instead of being regenerated. Without `OPENAI_API_KEY`, the complete workflow shows a labeled deterministic explanation template; it never presents fallback text as model-generated.
 
-The deterministic evaluator is the accounting authority for every displayed product result. GPT-5.6, when configured, may propose structured failure hypotheses and explain verified evidence; it never determines prices, fills, property values, reproduction confidence, or PASS/FAIL outcomes. Offline deterministic hypotheses support the complete workflow.
-
-The **Explain failure with GPT-5.6** action sends a small evidence package containing only the measured failure, minimized scenario, passing neighbor, reproduction records, and permitted evidence-reference IDs. Structured output is validated locally; unknown evidence references and unsupported numeric claims are rejected. Without `OPENAI_API_KEY`, the UI shows a clearly labeled deterministic fallback rather than pretending that GPT ran.
-
-## What Arena tests
-
-- Public performance versus hidden performance.
-- Structural-break and false-feature generalization.
-- One-day signal-delay sensitivity.
-- Transaction-cost and liquidity-shock sensitivity.
-- Exposure concentration and simple integrity indicators.
-- Reproducibility: same challenge seed and CSV produce the same metrics and hashes.
-- Submission contract: complete public dates, known assets, bounded positions, and exposure limits.
-
-The Arena result is a classroom assessment inside a declared fictional market. It does not prove alpha, detect misconduct, or predict future markets.
-
-## What Market Fuzzer tests
-
-- Strategy correctness: valid quantities, participation, completion, and state handling.
-- Execution robustness: bounded liquidity, latency, forced-flow, and volume-contraction conditions.
-- Safety properties: completion, shortfall, participation, halt behavior, and remaining inventory.
-- Regression resistance: exact YAML/JSON fixtures and CLI replay.
-
-The result is a software-testing conclusion within the declared synthetic environment. It is not a production capacity estimate, market prediction, profitability claim, live-trading recommendation, or regulatory approval.
-
-## Testing
+## Verification
 
 ```bash
-.venv/bin/python -m ruff format --check app tests
-.venv/bin/python -m ruff check app tests
-.venv/bin/python -m mypy app
-.venv/bin/python -m pytest -q
+make install
+make install-browser
 make verify
+make docker-smoke
 ```
 
-See [execution challenge contract](docs/EXECUTION_CHALLENGE.md), [judge instructions](docs/JUDGE_GUIDE.md), [testing and judge instructions](docs/TESTING.md), [product workflow](docs/PRODUCT_WORKFLOW.md), [fixture contract](docs/REGRESSION_FIXTURES.md), [performance notes](docs/PERFORMANCE.md), and [limitations](docs/LIMITATIONS.md).
+`make verify` runs formatting, lint, typing, pytest, determinism and provenance checks, both offline smoke paths, JavaScript syntax checks, and the headless Chromium lifecycle test. The E2E test covers student practice/submission, pre-release hidden denial, instructor lock/evaluate/release, ranking reversal, released feedback, a clean browser console, and `/market-fuzzer`. `make docker-smoke` builds the real image, waits for container health, and verifies the primary page, public hidden-data boundary, and advanced route from the host.
 
-## Build Week and provenance
-
-The repository contains a protected pre-existing Market Fuzzer milestone plus the new Quant Challenge Arena product layer. [Hackathon work](docs/HACKATHON_WORK.md), [provenance](docs/BUILD_WEEK_PROVENANCE.md), and [integration ADR](docs/decisions/ADR_QUANT_CHALLENGE_ARENA_INTEGRATION.md) separate those lanes. Add the final `/feedback` session ID before submission.
+See [execution challenge contract](docs/EXECUTION_CHALLENGE.md), [architecture](docs/ARCHITECTURE.md), [five-minute judge path](docs/JUDGE_GUIDE.md), [testing](docs/TESTING.md), [performance evidence](docs/PERFORMANCE.md), [research references](docs/RESEARCH_REFERENCES.md), [Build Week provenance](docs/BUILD_WEEK_PROVENANCE.md), and [limitations](docs/LIMITATIONS.md).
 
 ## License and safety
 
-MIT. No proprietary market data or secrets are committed. This is research and testing infrastructure, not investment advice.
-
-> Find the market conditions that break your trading algorithm before the market does.
+MIT. No proprietary market data, arbitrary remote code execution, brokerage connection, or real-money trading is included. This is educational and research-testing infrastructure, not investment advice.

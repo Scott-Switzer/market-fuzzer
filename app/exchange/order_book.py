@@ -14,6 +14,8 @@ class OrderBook:
         self.seen_ids: set[str] = set()
         self.sequence = 0
         self.trade_sequence = 0
+        self.order_fill_sequences: dict[str, int] = defaultdict(int)
+        self.level_executed_quantity: dict[int, int] = defaultdict(int)
         self.last_price_ticks: int | None = None
         self.halted_until_step = -1
 
@@ -40,9 +42,15 @@ class OrderBook:
         order.sequence = self.sequence
         trades = self._match(order, step)
         if order.remaining and order.order_type == OrderType.LIMIT:
-            self.orders[order.order_id] = order
+            assert order.price_ticks is not None
             levels = self.bid_levels if order.side == Side.BUY else self.ask_levels
-            levels[order.price_ticks].append(order.order_id)  # type: ignore[index]
+            order.displayed_quantity_ahead_at_entry = sum(
+                self.orders[order_id].remaining or 0 for order_id in levels[order.price_ticks]
+            )
+            order.level_executed_quantity_at_entry = self.level_executed_quantity[order.price_ticks]
+            order.rested_quantity_at_entry = order.remaining
+            self.orders[order.order_id] = order
+            levels[order.price_ticks].append(order.order_id)
         self.assert_valid()
         return trades
 
@@ -96,8 +104,13 @@ class OrderBook:
             incoming.remaining -= executed
             maker.remaining = (maker.remaining or 0) - executed
             self.trade_sequence += 1
+            self.order_fill_sequences[maker.order_id] += 1
+            self.order_fill_sequences[incoming.order_id] += 1
             buyer = incoming.agent_id if incoming.side == Side.BUY else maker.agent_id
             seller = maker.agent_id if incoming.side == Side.BUY else incoming.agent_id
+            traded_before_fill = self.level_executed_quantity[price] - (
+                maker.level_executed_quantity_at_entry or 0
+            )
             trade = Trade(
                 f"{self.symbol}-T{self.trade_sequence:08d}",
                 self.symbol,
@@ -108,8 +121,20 @@ class OrderBook:
                 maker.order_id,
                 incoming.order_id,
                 step,
+                maker_id=maker.agent_id,
+                taker_id=incoming.agent_id,
+                arrival_step=incoming.exchange_arrival_step,
+                fill_step=step,
+                arrival_time_ms=incoming.exchange_arrival_time_ms,
+                fill_time_ms=incoming.exchange_arrival_time_ms,
+                fill_sequence=self.trade_sequence,
+                maker_partial_fill_sequence=self.order_fill_sequences[maker.order_id],
+                taker_partial_fill_sequence=self.order_fill_sequences[incoming.order_id],
+                maker_queue_ahead_at_entry=maker.displayed_quantity_ahead_at_entry,
+                quantity_traded_at_level_before_fill=traded_before_fill,
             )
             trades.append(trade)
+            self.level_executed_quantity[price] += executed
             self.last_price_ticks = price
             if maker.remaining == 0:
                 levels[price].popleft()

@@ -1,12 +1,18 @@
-.PHONY: install verify test demo run run-example arena-demo regression judge-demo docker-smoke clean-artifacts
+.PHONY: install install-browser verify test e2e demo run run-example arena-demo regression judge-demo docker-smoke performance clean-artifacts
 
 PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 
 install:
 	$(PYTHON) -m pip install -e '.[dev]'
 
+install-browser:
+	$(PYTHON) -m playwright install chromium
+
 test:
 	$(PYTHON) -m pytest
+
+e2e:
+	$(PYTHON) scripts/browser_e2e.py
 
 verify:
 	$(PYTHON) -m ruff format --check app tests
@@ -17,6 +23,7 @@ verify:
 	$(PYTHON) scripts/provenance_check.py
 	$(PYTHON) scripts/demo_smoke.py
 	$(PYTHON) scripts/arena_smoke.py
+	$(PYTHON) scripts/browser_e2e.py
 	bash -n scripts/judge_demo.sh
 	node --check app/static/app.js
 	node --check app/static/arena.js
@@ -41,14 +48,20 @@ judge-demo:
 	./scripts/judge_demo.sh
 
 docker-smoke:
-	docker compose build --quiet
-	docker compose up -d
-	@trap 'docker compose down' EXIT; \
-	for i in $$(seq 1 30); do \
-		$(PYTHON) -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=1)" && exit 0; \
-		sleep 1; \
-	done; \
-	docker compose logs; exit 1
+	@set -eu; \
+	$(PYTHON) scripts/docker_preflight.py; \
+	export GIT_COMMIT_SHA=$$(git rev-parse HEAD); \
+	export ARENA_PORT=$${ARENA_DOCKER_PORT:-18080}; \
+	project=quant-arena-smoke; \
+	cleanup() { docker compose -p $$project down --volumes --remove-orphans >/dev/null 2>&1 || true; }; \
+	trap cleanup EXIT INT TERM; \
+	cleanup; \
+	docker compose -p $$project build --quiet; \
+	docker compose -p $$project up -d --wait --wait-timeout 90; \
+	ARENA_BASE_URL=http://127.0.0.1:$$ARENA_PORT $(PYTHON) scripts/docker_health_smoke.py
+
+performance:
+	$(PYTHON) scripts/performance_probe.py
 
 clean-artifacts:
 	rm -rf artifacts/smw-*

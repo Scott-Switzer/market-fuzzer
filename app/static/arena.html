@@ -1,89 +1,462 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Quant Challenge Arena · Trade the Shock</title>
-  <link rel="stylesheet" href="/static/styles.css">
-  <link rel="stylesheet" href="/static/arena.css">
-</head>
-<body>
-  <header>
-    <a class="brand" href="/">QUANT <i>CHALLENGE ARENA</i></a>
-    <nav><a class="legacy-link" href="/market-fuzzer">Advanced Market Fuzzer ↗</a></nav>
-    <span class="pill">Education · real synthetic exchange</span>
-  </header>
-  <main>
-    <section class="arena-hero">
-      <p class="eyebrow">EXECUTION STRATEGY CHALLENGE</p>
-      <h1>Can your strategy survive the market you <em>didn’t see?</em></h1>
-      <p>Configure a safe execution policy, test it in a real synthetic limit-order-book exchange, then see whether it survives hidden liquidity, latency, event, and crowding regimes.</p>
-      <div class="hero-actions"><button id="jump-to-policy" class="primary big">Choose a policy →</button><button id="run-example" class="big">Run public example</button></div>
-    </section>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Quant Challenge Arena · Trade the Shock</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/arena.css" />
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="/">QUANT <i>CHALLENGE ARENA</i></a>
+      <nav>
+        <a class="legacy-link" href="/market-fuzzer"
+          >Advanced Market Fuzzer ↗</a
+        >
+      </nav>
+      <span id="session-status" class="pill">No signed session</span>
+    </header>
+    <main>
+      <section class="arena-hero">
+        <p class="eyebrow">EXECUTION STRATEGY ASSESSMENT</p>
+        <h1>Can your strategy survive the market you <em>didn’t see?</em></h1>
+        <p>
+          Configure a bounded execution policy, practice in a visible synthetic
+          exchange, then compare its public rank with protected robustness
+          testing.
+        </p>
+        <div class="hero-actions">
+          <button id="jump-to-policy" class="primary big">
+            Configure a policy →
+          </button>
+          <button id="student-session" class="big">Student demo</button>
+          <button id="instructor-session" class="big">Instructor demo</button>
+          <label class="demo-code"
+            >Instructor code<input
+              id="instructor-code"
+              type="password"
+              autocomplete="off"
+              placeholder="Required for instructor controls"
+          /></label>
+        </div>
+        <div id="session-message" class="hint" role="status"></div>
+      </section>
 
-    <section class="workflow-strip" aria-label="Execution challenge workflow">
-      <div><b>01</b><span>Configure</span><small>Declarative policy</small></div>
-      <div><b>02</b><span>Practice</span><small>Visible exchange world</small></div>
-      <div><b>03</b><span>Submit</span><small>Hidden worlds protected</small></div>
-      <div><b>04</b><span>Learn</span><small>Evidence, not guesswork</small></div>
-    </section>
+      <section class="workflow-strip" aria-label="Execution challenge workflow">
+        <div>
+          <b>01</b><span>Configure</span><small>Declarative policy</small>
+        </div>
+        <div>
+          <b>02</b><span>Practice</span><small>Visible exchange world</small>
+        </div>
+        <div><b>03</b><span>Submit</span><small>Protected tests</small></div>
+        <div><b>04</b><span>Learn</span><small>Measured evidence</small></div>
+      </section>
 
-    <section class="section-heading"><div><p class="eyebrow">LEVEL 3 · TRADE THE SHOCK</p><h2 id="challenge-title">Loading challenge…</h2><p id="challenge-objective" class="muted"></p></div><span id="phase" class="mode-badge">PUBLIC PRACTICE</span></section>
+      <section class="section-heading">
+        <div>
+          <p class="eyebrow">LEVEL 3 · TRADE THE SHOCK</p>
+          <h2 id="challenge-title">Loading challenge…</h2>
+          <p id="challenge-objective" class="muted"></p>
+        </div>
+        <span id="phase" class="mode-badge">PUBLIC PRACTICE</span>
+      </section>
 
-    <section class="arena-grid">
-      <article class="panel challenge-card">
-        <div class="card-label">YOUR EXECUTION OBJECTIVE</div>
-        <h3>Buy NOVA without becoming the event.</h3>
-        <p class="muted">You trade 6,000 fictional shares inside a continuous double auction. Background agents, displayed depth, spread, latency, fills, and scheduled events are processed by deterministic exchange code.</p>
-        <div class="metric-row"><div><b>3</b><span>Synthetic issuers</span></div><div><b>7</b><span>Agent roles</span></div><div><b>5</b><span>Book levels</span></div></div>
-        <div class="callout"><b>What this tests</b><span>Execution behavior and robustness inside this bounded fictional market—not future profitability or production capacity.</span></div>
-      </article>
-      <article class="panel">
-        <div class="card-label">WORLD QUALITY</div>
-        <div id="quality-card" class="quality-list">Loading quality checks…</div>
-        <details class="technical"><summary>Stress contract</summary><ul id="stress-contract" class="clean-list compact"></ul></details>
-      </article>
-    </section>
+      <section class="arena-grid">
+        <article class="panel challenge-card">
+          <div class="card-label">EXECUTION OBJECTIVE</div>
+          <h3>Buy NOVA without becoming the event.</h3>
+          <p class="muted">
+            You trade 6,000 fictional shares inside a continuous double auction.
+            Deterministic exchange code owns orders, fills, metrics, scores, and
+            ranks.
+          </p>
+          <div class="metric-row">
+            <div><b>3</b><span>Synthetic issuers</span></div>
+            <div><b>7</b><span>Agent roles</span></div>
+            <div><b>5</b><span>Book levels</span></div>
+          </div>
+          <div class="callout">
+            <b>Assessment boundary</b
+            ><span
+              >This tests behavior inside a bounded fictional market—not
+              profitability, live-trading safety, or production capacity.</span
+            >
+          </div>
+        </article>
+        <article class="panel">
+          <div class="card-label">CHALLENGE QUALITY</div>
+          <div id="quality-card" class="quality-list">
+            Loading quality checks…
+          </div>
+          <details class="technical">
+            <summary>Stress contract</summary>
+            <ul id="stress-contract" class="clean-list compact"></ul>
+          </details>
+        </article>
+      </section>
 
-    <section id="policy-section" class="panel policy-panel">
-      <div class="panel-heading"><div><div class="card-label">1. CHOOSE A SAFE DECLARATIVE POLICY</div><h3>Strategies are configurations—not uploaded code.</h3></div><span class="hint">No arbitrary Python executes in the browser.</span></div>
-      <div id="policy-cards" class="policy-cards"></div>
-      <div id="policy-summary" class="callout"><b>Select a policy.</b><span>Its behavior will be evaluated by the exchange, not an LLM.</span></div>
-    </section>
+      <section id="policy-section" class="panel policy-panel">
+        <div class="panel-heading">
+          <div>
+            <div class="card-label">1. CONFIGURE</div>
+            <h3>Submit parameters, never executable code.</h3>
+          </div>
+          <span class="hint"
+            >Strict schema · bounded controls · immutable final submission</span
+          >
+        </div>
+        <div
+          id="policy-cards"
+          class="policy-cards"
+          aria-label="Benchmark policy presets"
+        ></div>
+        <form id="policy-form" class="policy-form">
+          <label
+            >Strategy type<select id="strategy-type">
+              <option value="twap">TWAP</option>
+              <option value="pov">POV</option>
+              <option value="adaptive_pov" selected>Adaptive POV</option>
+            </select></label
+          >
+          <label
+            >Target participation<input
+              id="target-participation"
+              type="number"
+              min="0.01"
+              max="0.20"
+              step="0.01"
+              value="0.08"
+          /></label>
+          <label
+            >Maximum participation<input
+              id="max-participation"
+              type="number"
+              min="0.01"
+              max="0.30"
+              step="0.01"
+              value="0.10"
+          /></label>
+          <label
+            >Maximum spread (bps)<input
+              id="max-spread"
+              type="number"
+              min="1"
+              max="50"
+              step="1"
+              value="12"
+          /></label>
+          <label
+            >Urgency curve<select id="urgency-curve">
+              <option value="uniform">Uniform</option>
+              <option value="front_loaded">Front loaded</option>
+              <option value="back_loaded">Back loaded</option>
+              <option value="adaptive" selected>Adaptive</option>
+            </select></label
+          >
+          <label
+            >Feed tolerance (ms)<input
+              id="feed-latency"
+              type="number"
+              min="0"
+              max="10000"
+              step="1"
+              value="10"
+          /></label>
+          <label
+            >Cancel after (ms)<input
+              id="cancel-after"
+              type="number"
+              min="10"
+              max="10000"
+              step="10"
+              value="100"
+          /></label>
+          <label
+            >Completion buffer (steps)<input
+              id="completion-buffer"
+              type="number"
+              min="0"
+              max="20"
+              step="1"
+              value="3"
+          /></label>
+          <label class="check"
+            ><input id="pause-halt" type="checkbox" checked /> Pause during
+            halt</label
+          >
+          <label class="check"
+            ><input id="pause-spread" type="checkbox" checked /> Pause above
+            spread limit</label
+          >
+          <label class="check"
+            ><input id="pending-budget" type="checkbox" checked /> Include
+            pending orders in budget</label
+          >
+          <label class="wide"
+            >Rationale<textarea
+              id="rationale"
+              minlength="50"
+              maxlength="2000"
+              rows="3"
+            >
+I cap participation and pause in poor conditions so the parent order remains controlled while preserving a completion buffer.</textarea
+            >
+          </label>
+        </form>
+        <div id="policy-summary" class="callout" aria-live="polite"></div>
+        <div class="comparison-picker">
+          <div>
+            <label for="comparison-policy"
+              ><b>Public comparison benchmark</b></label
+            >
+            <p id="comparison-help" class="hint">
+              The configured policy stays independent from this benchmark. Both
+              run on public seed 42 and must return the same environment hash.
+            </p>
+          </div>
+          <select id="comparison-policy" aria-describedby="comparison-help">
+            <option value="guarded_pov">Guarded adaptive POV</option>
+          </select>
+          <span id="comparison-selection-summary" class="status neutral"
+            >Guarded benchmark selected</span
+          >
+        </div>
+        <div class="button-row">
+          <button id="run-public" class="primary">Run public practice</button>
+          <button id="save-draft">Save draft</button>
+          <button id="submit-final">Submit final policy</button>
+          <span id="submission-status" class="hint" role="status"
+            >No final submission yet.</span
+          >
+        </div>
+      </section>
 
-    <section class="arena-grid">
-      <article class="panel">
-        <div class="panel-heading"><div><div class="card-label">2. PUBLIC PRACTICE WORLD</div><h3>Test the visible market first.</h3></div><button id="run-public" class="primary">Run public world</button></div>
-        <p class="muted">Normal liquidity, stable background flow, and low exchange latency. Public score rewards completing the parent order, then lower shortfall.</p>
-        <div id="public-result" class="empty-state">Choose a policy, then run the visible exchange world.</div>
-      </article>
-      <article class="panel replay-panel">
-        <div class="panel-heading"><div><div class="card-label">EXCHANGE REPLAY</div><h3>Watch the market respond.</h3></div><span id="replay-label" class="status neutral">No run</span></div>
-        <div id="replay-chart" class="spark empty-state">A run will render NOVA mid-price, spread, and displayed depth here.</div>
-        <div id="event-timeline" class="event-timeline"></div>
-      </article>
-    </section>
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <div class="card-label">2. PUBLIC RESULT</div>
+            <h3>See what happened in the visible world.</h3>
+          </div>
+          <span id="practice-limit" class="status neutral"
+            >5 runs available</span
+          >
+        </div>
+        <div id="public-result" class="empty-state">
+          Configure a policy, then run the visible exchange.
+        </div>
+      </section>
 
-    <section class="panel hidden-world-panel">
-      <div class="panel-heading"><div><div class="card-label">3. HIDDEN EVALUATION</div><h3>Public practice is not the final exam.</h3></div><button id="reveal-benchmarks" class="primary">Instructor: reveal benchmark evidence</button></div>
-      <p class="muted">The challenge applies controlled interventions to the same base world and seed family. Learners see the public world while the instructor evaluates hidden liquidity withdrawal, crowding, earnings, and latency shocks.</p>
-      <div id="hidden-worlds" class="hidden-worlds"></div>
-      <div id="benchmark-result" class="empty-state">Hidden results remain withheld. The instructor control runs four declarative benchmark policies across the protected world matrix.</div>
-    </section>
+      <section class="panel comparison-panel">
+        <div class="panel-heading">
+          <div>
+            <div class="card-label">SAME-WORLD COMPARISON</div>
+            <h3>Compare two policies without changing the public world.</h3>
+          </div>
+          <span id="comparison-status" class="status neutral"
+            >Awaiting paired evidence</span
+          >
+        </div>
+        <p class="muted">
+          This view renders only a server-attached public comparison contract.
+          It never substitutes protected-world results or compares runs from
+          different worlds.
+        </p>
+        <div id="policy-comparison" class="empty-state">
+          This practice run has no paired public comparison yet.
+        </div>
+      </section>
 
-    <section class="arena-grid lower-grid">
-      <article class="panel">
-        <div class="card-label">4. EVIDENCE EXPLANATION</div><h3>What would a robust researcher say?</h3>
-        <div id="explanation" class="feedback">Run a public world first. After hidden release, this panel will distinguish measured evidence from an educational interpretation.</div>
-      </article>
-      <article class="panel">
-        <div class="card-label">ADVANCED LAB</div><h3>Need to isolate a failure?</h3>
-        <p class="muted">Market Fuzzer remains available for reproducible counterexamples and regression fixtures. It is intentionally secondary to the competition workflow.</p>
-        <a href="/market-fuzzer" class="button-link">Open Market Fuzzer →</a>
-      </article>
-    </section>
-  </main>
-  <footer>Quant Challenge Arena evaluates declarative strategies in a fictional, reproducible market. Deterministic code owns fills and scores. GPT-assisted lesson design and explanations must never alter them.</footer>
-  <script src="/static/arena.js"></script>
-</body>
+      <section class="replay-grid">
+        <article class="panel replay-panel">
+          <div class="panel-heading">
+            <div>
+              <div class="card-label">MARKET REPLAY</div>
+              <h3>Price, spread, depth, and events</h3>
+            </div>
+            <span id="replay-label" class="status neutral">No run</span>
+          </div>
+          <div id="market-chart" class="spark empty-state">
+            A practice run will render market evidence here.
+          </div>
+          <div id="event-timeline" class="event-timeline"></div>
+        </article>
+        <article class="panel replay-panel">
+          <div class="panel-heading">
+            <div>
+              <div class="card-label">STRATEGY REPLAY</div>
+              <h3>Orders, fills, inventory, participation</h3>
+            </div>
+          </div>
+          <div id="strategy-chart" class="spark empty-state">
+            Strategy evidence will stay synchronized to the market steps.
+          </div>
+        </article>
+      </section>
+      <section class="panel evidence-panel">
+        <div class="panel-heading">
+          <div>
+            <div class="card-label">DETERMINISTIC EVIDENCE</div>
+            <h3>Step-by-step execution record</h3>
+          </div>
+        </div>
+        <div id="evidence-table" class="table-scroll empty-state">
+          No replay evidence yet.
+        </div>
+      </section>
+
+      <section class="panel hidden-world-panel">
+        <div class="panel-heading">
+          <div>
+            <div class="card-label">3. INSTRUCTOR LIFECYCLE</div>
+            <h3>Lock, evaluate, then release.</h3>
+          </div>
+          <span class="hint">Instructor session required</span>
+        </div>
+        <p class="muted">
+          Protected worlds are loaded from server-side challenge state.
+          Evaluation is stored before release; release changes visibility, not
+          scores.
+        </p>
+        <div id="hidden-worlds" class="hidden-worlds"></div>
+        <div class="button-row">
+          <button id="lock-challenge">Lock submissions</button>
+          <button id="evaluate-hidden" class="primary">
+            Evaluate protected matrix
+          </button>
+          <button id="release-results">Release allowed results</button>
+          <button id="refresh-rankings">Refresh rankings</button>
+        </div>
+        <div id="instructor-status" class="hint" role="status"></div>
+        <div id="benchmark-result" class="empty-state">
+          Protected results are withheld.
+        </div>
+        <div
+          id="world-heatmap"
+          class="heatmap-shell empty-state"
+          aria-live="polite"
+        >
+          The policy-by-world heatmap appears only after release from an
+          authorized instructor response.
+        </div>
+        <div
+          id="measured-quality"
+          class="quality-evidence empty-state"
+          aria-live="polite"
+        >
+          Measured challenge-behavior checks appear here for an authorized
+          instructor after evaluation.
+        </div>
+      </section>
+
+      <section id="challenge-designer" class="panel designer-panel" hidden>
+        <div class="panel-heading">
+          <div>
+            <div class="card-label">INSTRUCTOR DESIGN COPILOT</div>
+            <h3>Draft a qualitative challenge with bounded authority.</h3>
+          </div>
+          <span class="status neutral">Draft only · no numeric worlds</span>
+        </div>
+        <p class="muted">
+          GPT-5.6 may propose structured educational framing inside your
+          allow-lists. Deterministic application code remains the sole authority
+          for worlds, prices, fills, metrics, scores, ranks, and release.
+        </p>
+        <fieldset
+          id="challenge-designer-controls"
+          class="designer-controls"
+          disabled
+        >
+          <legend class="sr-only">Challenge design constraints</legend>
+          <label
+            >Course level
+            <select id="design-course-level">
+              <option>Undergraduate market microstructure</option>
+              <option>Graduate quantitative finance</option>
+              <option>Professional execution training</option>
+            </select>
+          </label>
+          <label
+            >Difficulty
+            <select id="design-difficulty">
+              <option value="introductory">Introductory</option>
+              <option value="intermediate" selected>Intermediate</option>
+              <option value="advanced">Advanced</option>
+            </select>
+          </label>
+          <label class="wide"
+            >Learning objective
+            <textarea
+              id="design-learning-objective"
+              rows="2"
+              minlength="10"
+              maxlength="1000"
+            >
+Compare how bounded execution controls affect robustness across controlled synthetic market conditions.</textarea
+            >
+          </label>
+          <fieldset class="allow-list">
+            <legend>Approved world interventions</legend>
+            <div id="design-intervention-options" class="allow-list-options">
+              Available only after authenticated instructor authorization.
+            </div>
+          </fieldset>
+          <fieldset class="allow-list">
+            <legend>Approved policy parameters</legend>
+            <div id="design-parameter-options" class="allow-list-options">
+              Available only after authenticated instructor authorization.
+            </div>
+          </fieldset>
+        </fieldset>
+        <div class="button-row">
+          <button id="draft-challenge-design" class="primary" disabled>
+            Draft with GPT-5.6
+          </button>
+          <span id="challenge-design-status" class="hint" role="status"
+            >Instructor session required.</span
+          >
+        </div>
+        <div
+          id="challenge-design-result"
+          class="empty-state"
+          aria-live="polite"
+        >
+          No qualitative design draft yet.
+        </div>
+      </section>
+
+      <section class="arena-grid lower-grid">
+        <article class="panel">
+          <div class="panel-heading">
+            <div>
+              <div class="card-label">4. EVIDENCE FEEDBACK</div>
+              <h3>Why did the rank move?</h3>
+            </div>
+            <button id="request-feedback">Explain evidence</button>
+          </div>
+          <div id="explanation" class="feedback">
+            Submit a policy and wait for release. Without an API key, the app
+            gives a clearly labeled deterministic explanation.
+          </div>
+        </article>
+        <article class="panel">
+          <div class="card-label">ADVANCED DEVELOPER LAB</div>
+          <h3>Need to isolate a failure?</h3>
+          <p class="muted">
+            Market Fuzzer remains available for reproducible counterexamples and
+            regression fixtures. It is intentionally secondary to this
+            assessment workflow.
+          </p>
+          <a href="/market-fuzzer" class="button-link">Open Market Fuzzer →</a>
+        </article>
+      </section>
+    </main>
+    <footer>
+      Quant Challenge Arena evaluates declarative strategies in a fictional,
+      reproducible market. Deterministic code owns outcomes; GPT-5.6 may explain
+      verified evidence but cannot alter it.
+    </footer>
+    <script src="/static/arena.js"></script>
+  </body>
 </html>

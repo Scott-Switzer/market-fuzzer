@@ -1,8 +1,11 @@
 FROM python:3.12-slim
 
+ARG GIT_COMMIT_SHA=unavailable
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    GIT_COMMIT_SHA=${GIT_COMMIT_SHA} \
     PORT=8000 \
+    ARENA_DB_PATH=/data/arena.sqlite3 \
     MARKET_FUZZER_ARTIFACT_ROOT=/data/artifacts/market_fuzzer \
     MARKET_FUZZER_EXPERIMENT_ROOT=/data/artifacts
 
@@ -17,6 +20,6 @@ RUN useradd --create-home --uid 10001 appuser \
     && chown -R appuser:appuser /app /data
 USER appuser
 EXPOSE 8000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"
+HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=6 \
+  CMD python -c "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/api/health',timeout=2); d=json.load(r); assert r.status==200 and d['status']=='ok' and d['product']=='Quant Challenge Arena'"
 CMD ["sh", "-c", "exec python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]

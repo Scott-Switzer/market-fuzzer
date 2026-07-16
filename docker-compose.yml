@@ -1,11 +1,20 @@
 services:
-  market-fuzzer:
-    build: .
-    ports: ["8000:8000"]
+  quant-challenge-arena:
+    build:
+      context: .
+      args:
+        GIT_COMMIT_SHA: "${GIT_COMMIT_SHA:-unavailable}"
+    ports: ["${ARENA_PORT:-8000}:8000"]
     environment:
+      ARENA_DB_PATH: /data/arena.sqlite3
+      ARENA_DEMO_AUTH: "${ARENA_DEMO_AUTH:-0}"
+      ARENA_DEMO_INSTRUCTOR_CODE: "${ARENA_DEMO_INSTRUCTOR_CODE:-}"
       OPENAI_MODEL: gpt-5.6
       PORT: 8000
       MARKET_FUZZER_ARTIFACT_ROOT: /data/artifacts/market_fuzzer
       MARKET_FUZZER_EXPERIMENT_ROOT: /data/artifacts
     volumes:
-      - ./artifacts:/data/artifacts
+      - arena-data:/data
+
+volumes:
+  arena-data:

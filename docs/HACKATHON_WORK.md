@@ -44,20 +44,20 @@ The protected Market Fuzzer product milestone is commit `496fcc1` and is tagged 
 - Schema-validated YAML/JSON fixtures, CLI replay, and real API regression-suite execution
 - Browser workflow rebuilt around Strategy → Safety Properties → Baseline → Break My Strategy → Replay → Retest → Regression
 
-## Quant Challenge Arena redirect
+## Quant Challenge Arena integration
 
-The primary product direction is now Quant Challenge Arena for the Education track. The Arena is a module-level extension in `app/arena.py` and `/api/arena/*`; it does not import or rewrite the protected Market Fuzzer state machine.
+The primary product is now the exchange-backed Quant Challenge Arena for the Education track. `app/execution_arena.py`, `app/execution_store.py`, `app/execution_challenge_designer.py`, `app/execution_feedback.py`, and `/api/arena/execution/*` own that path. The earlier `app/arena.py` generated-panel/CSV assessment remains an explicitly secondary research challenge; Market Fuzzer remains the advanced lab.
 
-New Arena work includes:
+New primary Arena work includes:
 
-- Versioned challenge and hidden-scenario schemas with deterministic no-key generation
-- Public/instructor dataset separation and strict `date,asset,position` submission validation
-- Public and hidden metrics for structural break, one-day delay, liquidity/cost shock, and false-feature collapse
-- Integrity indicators and a robustness-adjusted ranking with the intentional public-winner/hidden-winner reversal
-- Instructor approval, bundle, release, hidden report, and role-scoped leaderboard endpoints
-- Student submission, public leaderboard, and feedback endpoints
-- Quant Challenge Arena instructor/student browser workflow with the Market Fuzzer route preserved as secondary
-- Arena methodology, security, submission contract, integration ADR, and provenance documentation
-- Deterministic and structured-output tests covering hidden separation, scoring, ranking, feedback, and API roles
+- Strict versioned TWAP/POV/adaptive-POV policy configuration with bounded controls and no participant code execution
+- Public practice derived from stored server state and protected server-selected liquidity/latency/crowding/event worlds
+- Server-generated, resumable signed demo identities, instructor code, phase authorization, and separate test-only header bypass
+- SQLite users, sessions, challenges and protected-world manifests, phase history, drafts, final policies, practice runs, immutable evaluations, world results, leaderboard snapshots, qualitative design drafts, persisted feedback, and audit events; state/audit and quota count/write operations are transactional
+- Fill-derived participation, inventory and child-order conservation, explicit order/ack/fill/cancel times, order-hygiene evidence, and simplified price-time-priority queue evidence
+- Multi-world/multi-seed public-versus-robustness ranking reversal with a stored score decomposition and matrix hash
+- Synchronized market/strategy replay, policy-by-world results, and public-to-hidden rank movement
+- GPT-5.6 qualitative challenge-design drafts and release-safe overall/intent plus public-trace evidence analysis with strict local validation, persisted report recovery, and a complete no-key fallback
+- Security, metric, metamorphic, persistence, GPT, Playwright browser, Docker, and CI verification
 
-The referenced `/Users/scottthomasswitzer/Documents/FenrixQuant` and `/Users/scottthomasswitzer/Documents/zion-terminal` paths were not present during the redirect audit. No files, data, or collaboration assets from those projects were imported. See `docs/decisions/ADR_QUANT_CHALLENGE_ARENA_INTEGRATION.md`.
+The referenced `/Users/scottthomasswitzer/Documents/FenrixQuant` and `/Users/scottthomasswitzer/Documents/zion-terminal` paths were not present during the original redirect audit. No files, data, or collaboration assets from those projects were imported. See `docs/BUILD_WEEK_PROVENANCE.md`.

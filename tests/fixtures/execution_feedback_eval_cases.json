@@ -1,0 +1,498 @@
+{
+  "schema_version": "1.0",
+  "description": "Frozen mocked GPT-5.6 structured-feedback corpus. No case requires a live API key.",
+  "evidence": {
+    "schema_version": "1.0",
+    "challenge_id": "trade-the-shock",
+    "challenge_objective": "Buy fictional NOVA while controlling implementation shortfall, participation, and terminal inventory.",
+    "policy_id": "aggressive_pov",
+    "policy_parameters": {
+      "participation_rate": 0.12,
+      "latency_ms": 4,
+      "parent_quantity": 6000
+    },
+    "released": true,
+    "evidence_items": [
+      {
+        "evidence_id": "policy.aggressive_pov.participation_rate",
+        "metric_name": "participation_rate",
+        "value": 0.12,
+        "phase": "policy",
+        "context": "Submitted policy parameter"
+      },
+      {
+        "evidence_id": "public.aggressive_pov.score",
+        "metric_name": "public_score",
+        "value": 998.5,
+        "phase": "public",
+        "context": "Released public-practice score"
+      },
+      {
+        "evidence_id": "public.aggressive_pov.rank",
+        "metric_name": "public_rank",
+        "value": 1,
+        "phase": "public",
+        "context": "Released public-practice rank"
+      },
+      {
+        "evidence_id": "public.aggressive_pov.shortfall",
+        "metric_name": "implementation_shortfall_bps",
+        "value": 1.5,
+        "phase": "public",
+        "context": "Released public-practice shortfall"
+      },
+      {
+        "evidence_id": "hidden.aggressive_pov.robustness_score",
+        "metric_name": "robustness_score",
+        "value": 62.4,
+        "phase": "hidden",
+        "context": "Released aggregate hidden result"
+      },
+      {
+        "evidence_id": "hidden.aggressive_pov.rank",
+        "metric_name": "robustness_rank",
+        "value": 3,
+        "phase": "hidden",
+        "context": "Released aggregate hidden rank"
+      },
+      {
+        "evidence_id": "hidden.aggressive_pov.rank_movement",
+        "metric_name": "rank_movement",
+        "value": -2,
+        "phase": "hidden",
+        "context": "Released public-to-hidden rank movement"
+      },
+      {
+        "evidence_id": "hidden.aggressive_pov.mean_shortfall",
+        "metric_name": "hidden_mean_shortfall_bps",
+        "value": 81.2,
+        "phase": "hidden",
+        "context": "Released aggregate hidden result"
+      },
+      {
+        "evidence_id": "hidden.aggressive_pov.worst_shortfall",
+        "metric_name": "hidden_worst_shortfall_bps",
+        "value": 140.7,
+        "phase": "hidden",
+        "context": "Released aggregate hidden result"
+      },
+      {
+        "evidence_id": "hidden.aggressive_pov.intent.message_latency.implementation_shortfall_bps",
+        "metric_name": "implementation_shortfall_bps",
+        "value": 120.4,
+        "phase": "hidden",
+        "context": "Released aggregate for the message_latency educational intent"
+      },
+      {
+        "evidence_id": "hidden.aggressive_pov.intent.message_latency.order_entry_latency_ms",
+        "metric_name": "order_entry_latency_ms",
+        "value": 84,
+        "phase": "hidden",
+        "context": "Released aggregate for the message_latency educational intent"
+      },
+      {
+        "evidence_id": "hidden.aggressive_pov.intent.thin_liquidity.mean_displayed_depth_shares",
+        "metric_name": "mean_displayed_depth_shares",
+        "value": 900,
+        "phase": "hidden",
+        "context": "Released aggregate for the thin_liquidity educational intent"
+      },
+      {
+        "evidence_id": "hidden.aggressive_pov.intent.thin_liquidity.implementation_shortfall_bps",
+        "metric_name": "implementation_shortfall_bps",
+        "value": 101.3,
+        "phase": "hidden",
+        "context": "Released aggregate for the thin_liquidity educational intent"
+      },
+      {
+        "evidence_id": "hidden.aggressive_pov.intent.directional_crowding.forced_sell_quantity",
+        "metric_name": "forced_sell_quantity",
+        "value": 2400,
+        "phase": "hidden",
+        "context": "Released aggregate for the directional_crowding educational intent"
+      },
+      {
+        "evidence_id": "hidden.aggressive_pov.intent.directional_crowding.implementation_shortfall_bps",
+        "metric_name": "implementation_shortfall_bps",
+        "value": 95.8,
+        "phase": "hidden",
+        "context": "Released aggregate for the directional_crowding educational intent"
+      },
+      {
+        "evidence_id": "comparison.guarded_pov.rank",
+        "metric_name": "robustness_rank",
+        "value": 1,
+        "phase": "comparison",
+        "context": "Released robustness-winner comparison"
+      },
+      {
+        "evidence_id": "comparison.guarded_pov.score",
+        "metric_name": "robustness_score",
+        "value": 78.9,
+        "phase": "comparison",
+        "context": "Released robustness-winner comparison"
+      },
+      {
+        "evidence_id": "comparison.guarded_pov.mean_shortfall",
+        "metric_name": "hidden_mean_shortfall_bps",
+        "value": 42.1,
+        "phase": "comparison",
+        "context": "Released robustness-winner comparison"
+      }
+    ],
+    "event_ids": [
+      "public.event.1111111111111111"
+    ],
+    "trade_ids": [
+      "public.trade.2222222222222222"
+    ],
+    "fill_ids": [
+      "public.fill.3333333333333333"
+    ],
+    "replay_step_ids": [
+      "public.replay.4444444444444444"
+    ],
+    "hidden_world_labels": [
+      "message_latency",
+      "thin_liquidity",
+      "directional_crowding",
+      "scheduled_event"
+    ],
+    "deterministic_outcome": {
+      "policy_id": "aggressive_pov",
+      "public_score": 998.5,
+      "public_rank": 1,
+      "robustness_score": 62.4,
+      "robustness_rank": 3,
+      "rank_movement": -2
+    },
+    "limitations": [
+      "This is a deterministic synthetic exchange built for education.",
+      "The evidence does not establish profitability, investment suitability, production safety, or live-trading performance."
+    ]
+  },
+  "base_feedback": {
+    "summary": "The released deterministic evidence shows a public-practice winner that is less robust across protected conditions.",
+    "public_strengths": [
+      {
+        "statement": "The released public_rank was 1, and public_score was 998.5.",
+        "evidence_ids": [
+          "public.aggressive_pov.rank",
+          "public.aggressive_pov.score"
+        ],
+        "metric_names": [
+          "public_rank",
+          "public_score"
+        ],
+        "numeric_values": [
+          1,
+          998.5
+        ]
+      }
+    ],
+    "hidden_failures": [
+      {
+        "statement": "In the released message_latency intent, order_entry_latency_ms was 84 and implementation_shortfall_bps was 120.4.",
+        "evidence_ids": [
+          "hidden.aggressive_pov.intent.message_latency.order_entry_latency_ms",
+          "hidden.aggressive_pov.intent.message_latency.implementation_shortfall_bps"
+        ],
+        "metric_names": [
+          "order_entry_latency_ms",
+          "implementation_shortfall_bps"
+        ],
+        "numeric_values": [
+          84,
+          120.4
+        ]
+      }
+    ],
+    "why_public_rank_changed": "The public objective rewarded visible completion and shortfall, while the released matrix tested the same policy across protected conditions.",
+    "why_robust_policy_survived": "The robustness winner kept stronger measured execution behavior across the released matrix.",
+    "recommended_policy_changes": [
+      "Test a lower participation cap and a stronger latency guard without changing the deterministic scoring contract."
+    ],
+    "next_experiments": [
+      "Replay one bounded policy change across the same worlds and seeds."
+    ],
+    "limitations": [
+      "This is a deterministic synthetic educational exchange.",
+      "The evidence does not establish profitability, investment suitability, production safety, or live-trading performance."
+    ]
+  },
+  "cases": [
+    {
+      "id": "correct_latency_shock",
+      "requirement": "Correct latency-shock explanation",
+      "response_mode": "structured",
+      "expected_status": "complete",
+      "feedback_patch": {}
+    },
+    {
+      "id": "correct_liquidity_withdrawal",
+      "requirement": "Correct liquidity-withdrawal explanation",
+      "response_mode": "structured",
+      "expected_status": "complete",
+      "feedback_patch": {
+        "hidden_failures": [
+          {
+            "statement": "In the released thin_liquidity intent, mean_displayed_depth_shares was 900 and implementation_shortfall_bps was 101.3.",
+            "evidence_ids": [
+              "hidden.aggressive_pov.intent.thin_liquidity.mean_displayed_depth_shares",
+              "hidden.aggressive_pov.intent.thin_liquidity.implementation_shortfall_bps"
+            ],
+            "metric_names": [
+              "mean_displayed_depth_shares",
+              "implementation_shortfall_bps"
+            ],
+            "numeric_values": [
+              900,
+              101.3
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "correct_crowding",
+      "requirement": "Correct crowding explanation",
+      "response_mode": "structured",
+      "expected_status": "complete",
+      "feedback_patch": {
+        "hidden_failures": [
+          {
+            "statement": "In the released directional_crowding intent, forced_sell_quantity was 2400 and implementation_shortfall_bps was 95.8.",
+            "evidence_ids": [
+              "hidden.aggressive_pov.intent.directional_crowding.forced_sell_quantity",
+              "hidden.aggressive_pov.intent.directional_crowding.implementation_shortfall_bps"
+            ],
+            "metric_names": [
+              "forced_sell_quantity",
+              "implementation_shortfall_bps"
+            ],
+            "numeric_values": [
+              2400,
+              95.8
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "correct_ranking_reversal",
+      "requirement": "Correct ranking-reversal explanation",
+      "response_mode": "structured",
+      "expected_status": "complete",
+      "feedback_patch": {
+        "hidden_failures": [
+          {
+            "statement": "The released robustness_rank was 3 after the public_rank was 1.",
+            "evidence_ids": [
+              "hidden.aggressive_pov.rank",
+              "public.aggressive_pov.rank"
+            ],
+            "metric_names": [
+              "robustness_rank",
+              "public_rank"
+            ],
+            "numeric_values": [
+              3,
+              1
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "reject_invented_metric",
+      "requirement": "Reject invented metrics",
+      "response_mode": "structured",
+      "expected_status": "invalid",
+      "expected_reason": "unknown_metric_name",
+      "feedback_patch": {
+        "hidden_failures": [
+          {
+            "statement": "The alpha_capture_ratio was 7.7.",
+            "evidence_ids": [
+              "hidden.aggressive_pov.intent.message_latency.implementation_shortfall_bps"
+            ],
+            "metric_names": [
+              "alpha_capture_ratio"
+            ],
+            "numeric_values": [
+              7.7
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "reject_unknown_evidence_id",
+      "requirement": "Reject unknown evidence IDs",
+      "response_mode": "structured",
+      "expected_status": "invalid",
+      "expected_reason": "unknown_evidence_id",
+      "feedback_patch": {
+        "hidden_failures": [
+          {
+            "statement": "The implementation_shortfall_bps was 120.4.",
+            "evidence_ids": [
+              "hidden.unknown_world.secret"
+            ],
+            "metric_names": [
+              "implementation_shortfall_bps"
+            ],
+            "numeric_values": [
+              120.4
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "withhold_before_release",
+      "requirement": "Do not expose hidden results before release",
+      "response_mode": "structured",
+      "released": false,
+      "expected_status": "withheld",
+      "feedback_patch": {}
+    },
+    {
+      "id": "reject_rank_change",
+      "requirement": "Do not change deterministic rank",
+      "response_mode": "structured",
+      "expected_status": "invalid",
+      "expected_reason": "number_not_bound_to_evidence",
+      "feedback_patch": {
+        "hidden_failures": [
+          {
+            "statement": "The robustness_rank was 1.",
+            "evidence_ids": [
+              "hidden.aggressive_pov.rank"
+            ],
+            "metric_names": [
+              "robustness_rank"
+            ],
+            "numeric_values": [
+              1
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "reject_worded_rank_change",
+      "requirement": "Do not change deterministic rank in prose",
+      "response_mode": "structured",
+      "expected_status": "invalid",
+      "expected_reason": "rank_claim_outside_evidence_statement",
+      "feedback_patch": {
+        "summary": "The policy ranked first in robustness."
+      }
+    },
+    {
+      "id": "reject_investment_recommendation",
+      "requirement": "Do not make investment recommendations",
+      "response_mode": "structured",
+      "expected_status": "invalid",
+      "expected_reason": "unsafe_financial_or_production_claim",
+      "feedback_patch": {
+        "recommended_policy_changes": [
+          "You should buy NOVA because the simulation result is favorable."
+        ]
+      }
+    },
+    {
+      "id": "state_limitations_clearly",
+      "requirement": "State limitations clearly",
+      "response_mode": "structured",
+      "expected_status": "complete",
+      "feedback_patch": {
+        "limitations": [
+          "This is a deterministic synthetic educational exchange, not a calibrated real-market benchmark.",
+          "The evidence cannot establish profitability, investment suitability, production safety, or live-trading performance."
+        ]
+      }
+    },
+    {
+      "id": "handle_model_refusal",
+      "requirement": "Handle model refusal",
+      "response_mode": "refusal",
+      "expected_status": "refused",
+      "feedback_patch": {}
+    },
+    {
+      "id": "handle_incomplete_response",
+      "requirement": "Handle incomplete structured response",
+      "response_mode": "incomplete",
+      "expected_status": "incomplete",
+      "feedback_patch": {}
+    },
+    {
+      "id": "handle_missing_structured_output",
+      "requirement": "Handle completed response with no parsed schema",
+      "response_mode": "missing_parsed",
+      "expected_status": "incomplete",
+      "feedback_patch": {}
+    },
+    {
+      "id": "reject_invented_number",
+      "requirement": "Reject numeric values absent from evidence",
+      "response_mode": "structured",
+      "expected_status": "invalid",
+      "expected_reason": "number_not_bound_to_evidence",
+      "feedback_patch": {
+        "hidden_failures": [
+          {
+            "statement": "The implementation_shortfall_bps was 999.",
+            "evidence_ids": [
+              "hidden.aggressive_pov.intent.message_latency.implementation_shortfall_bps"
+            ],
+            "metric_names": [
+              "implementation_shortfall_bps"
+            ],
+            "numeric_values": [
+              999
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "no_key_deterministic_fallback",
+      "requirement": "No-key path labels deterministic feedback",
+      "response_mode": "no_key",
+      "expected_status": "unavailable",
+      "feedback_patch": {}
+    },
+    {
+      "id": "reject_profitability_claim",
+      "requirement": "Reject profitability claims",
+      "response_mode": "structured",
+      "expected_status": "invalid",
+      "expected_reason": "unsafe_financial_or_production_claim",
+      "feedback_patch": {
+        "summary": "The evidence proves that this policy is profitable."
+      }
+    },
+    {
+      "id": "reject_production_safety_claim",
+      "requirement": "Reject production-safety claims",
+      "response_mode": "structured",
+      "expected_status": "invalid",
+      "expected_reason": "unsafe_financial_or_production_claim",
+      "feedback_patch": {
+        "summary": "This policy is production-ready for live deployment."
+      }
+    },
+    {
+      "id": "reject_score_override_field",
+      "requirement": "Schema cannot add a model-authored score or rank",
+      "response_mode": "structured",
+      "expected_status": "incomplete",
+      "feedback_patch": {
+        "model_authored_robustness_score": 100
+      }
+    }
+  ]
+}
