@@ -135,21 +135,30 @@ def policy_from_submission(submission: ExecutionPolicySubmission, submission_id:
 
 def policy_to_submission(policy: Policy, *, rationale: str | None = None) -> ExecutionPolicySubmission:
     """Serialize a benchmark through the same public contract students use."""
-    strategy_type = "twap" if policy.strategy == "twap" else "adaptive_pov" if policy.urgency_curve == "adaptive" else "pov"
+    strategy_type = (
+        "twap"
+        if policy.strategy == "twap"
+        else "adaptive_pov"
+        if policy.urgency_curve == "adaptive"
+        else "pov"
+    )
     return ExecutionPolicySubmission(
         strategy_type=strategy_type,
         target_participation=policy.participation_rate,
         max_participation=policy.max_participation,
         max_spread_bps=policy.max_spread_bps,
         urgency_curve=policy.urgency_curve,
-        feed_latency_tolerance_ms=policy.feed_latency_tolerance_ms or 10_000,
+        feed_latency_tolerance_ms=(
+            policy.feed_latency_tolerance_ms if policy.feed_latency_tolerance_ms is not None else 10_000
+        ),
         order_entry_latency_ms=policy.latency_ms,
         cancel_after_ms=policy.cancel_after_ms,
         completion_buffer_steps=policy.completion_buffer_steps,
         pause_during_halt=policy.pause_during_halt,
         pause_above_spread_limit=policy.pause_above_spread_limit,
         include_pending_in_budget=policy.include_pending_in_budget,
-        rationale=rationale or "Public benchmark policy serialized through the student contract for parity testing.",
+        rationale=rationale
+        or "Public benchmark policy serialized through the student contract for parity testing.",
     )
 
 

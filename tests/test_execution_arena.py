@@ -4,16 +4,16 @@ from fastapi.testclient import TestClient
 from app.api.app import app
 from app.challenges.execution import ExecutionChallengeEngine
 from app.execution_arena import (
+    POLICIES,
     ExecutionPolicySubmission,
     _rank,
     _robustness_decomposition,
     benchmark_matrix,
     challenge_overview,
-    policy_to_submission,
     policy_from_submission,
+    policy_to_submission,
     run_execution_challenge,
     run_policy_submission,
-    POLICIES,
 )
 
 
@@ -219,6 +219,9 @@ def test_builtins_round_trip_through_public_policy_contract() -> None:
         restored = policy_from_submission(public_policy, f"student-{policy_id}")
         assert restored.latency_ms == builtin.latency_ms
         assert restored.max_spread_bps == builtin.max_spread_bps
+        assert restored.feed_latency_tolerance_ms == (
+            builtin.feed_latency_tolerance_ms if builtin.feed_latency_tolerance_ms is not None else 10_000
+        )
         builtin_run = run_execution_challenge(policy_id, "normal", 42)
         student_run = run_policy_submission(public_policy, f"student-{policy_id}", 42)
         assert student_run["metrics"] == builtin_run["metrics"]

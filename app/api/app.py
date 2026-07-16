@@ -96,6 +96,7 @@ DESIGN_PARAMETER_LABELS = {
     "max_spread_bps": "Maximum spread",
     "urgency_curve": "Urgency curve",
     "feed_latency_tolerance_ms": "Feed-latency tolerance",
+    "order_entry_latency_ms": "Order-entry latency",
     "cancel_after_ms": "Cancel-after interval",
     "completion_buffer_steps": "Completion buffer",
     "pause_during_halt": "Pause during halt",
