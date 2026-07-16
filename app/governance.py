@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -117,7 +117,7 @@ def build_enterprise_validation_report(experiment: dict) -> EnterpriseValidation
         experiment_id=experiment["experiment_id"],
         evidence_manifest=manifest,
         vectors=vectors,
-        overall_verdict=overall_verdict,
+        overall_verdict=cast(Literal["FIT", "LIMITED", "FAIL", "NOT_EVALUATED"], overall_verdict),
         permitted_claims=["Compare registered strategies inside the declared synthetic scenario pack."],
         blocked_claims=["Claim live-market fidelity, profitability, production capacity, or best execution."],
         limitations=[

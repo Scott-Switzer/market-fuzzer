@@ -14,6 +14,7 @@ def test_enterprise_world_registry_persists_versioned_manifest(tmp_path, monkeyp
         json={
             "name": "US equities intraday baseline",
             "description": "A reproducible baseline world for execution resilience experiments.",
+            "seed": 77,
             "asset_universe": ["NOVA", "ORBIT"],
             "agent_ecology": ["market_maker", "background_flow", "execution_agent"],
             "intended_use": "execution_stress_testing",
@@ -24,6 +25,7 @@ def test_enterprise_world_registry_persists_versioned_manifest(tmp_path, monkeyp
     assert world["version"] == 1
     assert world["manifest"]["schema_version"] == "1.0"
     assert len(world["manifest_hash"]) == 64
+    assert world["manifest"]["seed"] == 77
     assert client.get(f"/api/enterprise/worlds/{world['world_id']}").json()["world_id"] == world["world_id"]
 
 
@@ -87,6 +89,8 @@ def test_scenario_pack_compiles_to_reproducible_protected_worlds(tmp_path, monke
     second = client.post(f"/api/enterprise/scenario-packs/{pack['scenario_pack_id']}/compile").json()
     assert first["compile_hash"] == second["compile_hash"]
     assert len(first["protected_worlds"]) == 1
+    assert first["seed"] == 42
+    assert first["base_world_manifest_hash"] == world["manifest_hash"]
     assert first["protected_worlds"][0]["world"]["events"][0]["simulation_step"] == 45
 
 

@@ -328,10 +328,14 @@ def enterprise_scenario_pack(scenario_pack_id: str) -> dict[str, Any]:
 def enterprise_compile_scenario_pack(scenario_pack_id: str) -> dict[str, Any]:
     try:
         pack = _execution_store().scenario_pack(scenario_pack_id)
+        base_world = _execution_store().synthetic_world(str(pack["base_world_id"]))
     except KeyError as exc:
-        raise HTTPException(404, "scenario pack not found") from exc
+        raise HTTPException(404, "scenario pack or base world not found") from exc
     try:
-        return compile_scenario_pack({**pack["manifest"], "scenario_pack_id": scenario_pack_id})
+        return compile_scenario_pack(
+            {**pack["manifest"], "scenario_pack_id": scenario_pack_id},
+            base_world_manifest=base_world,
+        )
     except (KeyError, ValueError) as exc:
         raise HTTPException(422, f"scenario pack cannot be compiled: {exc}") from exc
 
@@ -364,12 +368,16 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
     store = _execution_store()
     try:
         pack = store.scenario_pack(payload.scenario_pack_id)
+        base_world = store.synthetic_world(str(pack["base_world_id"]))
         strategies = [store.strategy(strategy_id) for strategy_id in payload.strategy_ids]
     except KeyError as exc:
         raise HTTPException(404, "scenario pack or strategy not found") from exc
     if any(strategy["builtin_policy_id"] is None for strategy in strategies):
         raise HTTPException(422, "only built-in policy adapters are executable in this milestone")
-    compiled = compile_scenario_pack({**pack["manifest"], "scenario_pack_id": payload.scenario_pack_id})
+    compiled = compile_scenario_pack(
+        {**pack["manifest"], "scenario_pack_id": payload.scenario_pack_id},
+        base_world_manifest=base_world,
+    )
     policy_ids = [str(strategy["builtin_policy_id"]) for strategy in strategies]
     matrix = benchmark_matrix(seeds=tuple(payload.seeds), student_submissions=None)
     selected = [row for row in matrix["rows"] if row["policy_id"] in policy_ids]

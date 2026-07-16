@@ -20,9 +20,12 @@ SCENARIO_TO_ENGINE_VARIANT = {
 }
 
 
-def compile_scenario_pack(manifest: dict[str, Any], *, seed: int = 42) -> dict[str, Any]:
+def compile_scenario_pack(
+    manifest: dict[str, Any], *, base_world_manifest: dict[str, Any], seed: int | None = None
+) -> dict[str, Any]:
     """Compile only allow-listed intents; never accept arbitrary world numbers."""
-    base = build_demo_world(seed)
+    selected_seed = int(base_world_manifest.get("seed", 42) if seed is None else seed)
+    base = build_demo_world(selected_seed)
     compiled: list[dict[str, Any]] = []
     for index, intervention in enumerate(manifest["interventions"]):
         intervention_type = intervention["intervention_type"]
@@ -49,8 +52,11 @@ def compile_scenario_pack(manifest: dict[str, Any], *, seed: int = 42) -> dict[s
     result = {
         "scenario_pack_id": manifest["scenario_pack_id"],
         "compiler": "deterministic_scenario_studio_v1",
-        "seed": seed,
-        "public_world": build_demo_world(seed).model_dump(mode="json"),
+        "base_world_id": manifest["base_world_id"],
+        "base_world_manifest_hash": base_world_manifest.get("manifest_hash"),
+        "engine_profile": "demo_equities_v1",
+        "seed": selected_seed,
+        "public_world": base.model_dump(mode="json"),
         "protected_worlds": compiled,
         "claim_boundary": "Compiled worlds are synthetic counterfactuals for declared stress-testing use.",
     }
