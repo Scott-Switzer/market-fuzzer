@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from app.calibration import build_demo_calibration_pack
 from app.governance import build_enterprise_validation_report
 
 
@@ -27,6 +28,28 @@ def test_enterprise_world_registry_persists_versioned_manifest(tmp_path, monkeyp
     assert len(world["manifest_hash"]) == 64
     assert world["manifest"]["seed"] == 77
     assert client.get(f"/api/enterprise/worlds/{world['world_id']}").json()["world_id"] == world["world_id"]
+
+
+def test_real_calibration_pack_attaches_as_a_new_world_version(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("ARENA_TEST_AUTH", "1")
+    client = TestClient(app)
+    world = client.post(
+        "/api/enterprise/worlds",
+        json={
+            "name": "Calibrated execution world",
+            "description": "A world that records aggregate-only calibration provenance for stress testing.",
+            "asset_universe": ["NOVA", "ORBIT", "VYNE"],
+            "agent_ecology": ["market_maker", "fundamental", "execution_agent"],
+        },
+    ).json()
+    pack = build_demo_calibration_pack(seed=8, rows=120).model_dump(mode="json")
+    attached = client.post(f"/api/enterprise/worlds/{world['world_id']}/calibration", json=pack)
+    assert attached.status_code == 200
+    calibrated = attached.json()
+    assert calibrated["version"] == 2
+    assert calibrated["manifest"]["calibration_pack_id"] == pack["pack_id"]
+    assert client.get(f"/api/enterprise/calibration-packs/{pack['pack_id']}").status_code == 200
 
 
 def test_scenario_pack_requires_registered_world_and_preserves_manifest(tmp_path, monkeypatch) -> None:

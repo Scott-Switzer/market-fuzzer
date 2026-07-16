@@ -184,6 +184,15 @@ class ArenaStore:
                     created_by TEXT NOT NULL, created_at TEXT NOT NULL,
                     FOREIGN KEY(experiment_id) REFERENCES stress_experiments(experiment_id)
                 );
+                CREATE TABLE IF NOT EXISTS calibration_packs (
+                    pack_id TEXT PRIMARY KEY, pack_json TEXT NOT NULL, checksum TEXT NOT NULL,
+                    created_by TEXT NOT NULL, created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS world_calibrations (
+                    world_id TEXT PRIMARY KEY, pack_id TEXT NOT NULL, attached_at TEXT NOT NULL,
+                    attached_by TEXT NOT NULL, FOREIGN KEY(world_id) REFERENCES synthetic_worlds(world_id),
+                    FOREIGN KEY(pack_id) REFERENCES calibration_packs(pack_id)
+                );
                 CREATE INDEX IF NOT EXISTS idx_submission_challenge_user
                     ON policy_submissions(challenge_id, user_id);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_final_submission
@@ -836,6 +845,67 @@ class ArenaStore:
                 "SELECT world_id FROM synthetic_worlds ORDER BY created_at DESC"
             ).fetchall()
         return [self.synthetic_world(str(row["world_id"])) for row in rows]
+
+    def attach_calibration_pack(self, world_id: str, pack: dict[str, Any], actor: str) -> dict[str, Any]:
+        now = utc_now()
+        payload = json.dumps(pack, sort_keys=True, separators=(",", ":"))
+        checksum = str(pack["checksum"])
+        with self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            world = connection.execute(
+                "SELECT 1 FROM synthetic_worlds WHERE world_id = ?", (world_id,)
+            ).fetchone()
+            if world is None:
+                raise KeyError(world_id)
+            connection.execute(
+                "INSERT OR IGNORE INTO calibration_packs VALUES (?, ?, ?, ?, ?)",
+                (pack["pack_id"], payload, checksum, actor, now),
+            )
+            latest = connection.execute(
+                "SELECT version, manifest_json FROM synthetic_world_versions WHERE world_id = ? ORDER BY version DESC LIMIT 1",
+                (world_id,),
+            ).fetchone()
+            if latest is None:
+                raise KeyError(world_id)
+            manifest = json.loads(latest["manifest_json"])
+            manifest["calibration_pack_id"] = pack["pack_id"]
+            manifest["calibration_checksum"] = checksum
+            manifest["updated_at"] = now
+            manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+            connection.execute(
+                "INSERT INTO synthetic_world_versions VALUES (?, ?, ?, ?, ?)",
+                (
+                    world_id,
+                    int(latest["version"]) + 1,
+                    json.dumps(manifest, sort_keys=True),
+                    manifest_hash,
+                    now,
+                ),
+            )
+            connection.execute(
+                "INSERT OR REPLACE INTO world_calibrations VALUES (?, ?, ?, ?)",
+                (world_id, pack["pack_id"], now, actor),
+            )
+            self._audit_in_transaction(
+                connection,
+                None,
+                actor,
+                "calibration_pack_attached",
+                {"world_id": world_id, "pack_id": pack["pack_id"], "manifest_hash": manifest_hash},
+                occurred_at=now,
+            )
+        return self.synthetic_world(world_id)
+
+    def calibration_pack(self, pack_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM calibration_packs WHERE pack_id = ?", (pack_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(pack_id)
+        value = dict(row)
+        value["pack"] = json.loads(value.pop("pack_json"))
+        return value
 
     def create_scenario_pack(
         self, scenario_pack_id: str, payload: dict[str, Any], actor: str, manifest_hash: str

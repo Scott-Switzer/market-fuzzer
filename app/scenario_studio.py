@@ -54,6 +54,8 @@ def compile_scenario_pack(
         "compiler": "deterministic_scenario_studio_v1",
         "base_world_id": manifest["base_world_id"],
         "base_world_manifest_hash": base_world_manifest.get("manifest_hash"),
+        "calibration_pack_id": base_world_manifest.get("manifest", {}).get("calibration_pack_id"),
+        "calibration_checksum": base_world_manifest.get("manifest", {}).get("calibration_checksum"),
         "engine_profile": "demo_equities_v1",
         "seed": selected_seed,
         "public_world": base.model_dump(mode="json"),

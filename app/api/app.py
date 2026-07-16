@@ -37,7 +37,7 @@ from app.arena import (
     public_dataset,
     validate_submission_csv,
 )
-from app.calibration import build_demo_calibration_pack, calibrate_bootstrap
+from app.calibration import CalibrationPackV1, build_demo_calibration_pack, calibrate_bootstrap
 from app.compiler import compile_world
 from app.execution_arena import (
     CHALLENGE_ID,
@@ -295,6 +295,23 @@ def enterprise_world(world_id: str) -> dict[str, Any]:
         return _execution_store().synthetic_world(world_id)
     except KeyError as exc:
         raise HTTPException(404, "synthetic world not found") from exc
+
+
+@app.post("/api/enterprise/worlds/{world_id}/calibration")
+def enterprise_attach_calibration(world_id: str, pack: CalibrationPackV1, request: Request) -> dict[str, Any]:
+    actor = _enterprise_actor(request)
+    try:
+        return _execution_store().attach_calibration_pack(world_id, pack.model_dump(mode="json"), actor)
+    except KeyError as exc:
+        raise HTTPException(404, "synthetic world not found") from exc
+
+
+@app.get("/api/enterprise/calibration-packs/{pack_id}")
+def enterprise_calibration_pack(pack_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().calibration_pack(pack_id)
+    except KeyError as exc:
+        raise HTTPException(404, "calibration pack not found") from exc
 
 
 @app.get("/api/enterprise/scenario-packs")

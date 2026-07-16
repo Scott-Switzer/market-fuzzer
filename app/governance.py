@@ -82,8 +82,12 @@ def build_enterprise_validation_report(experiment: dict) -> EnterpriseValidation
         ),
         FitForUseVector(
             name="calibration_stability",
-            verdict="NOT_EVALUATED",
-            summary="No customer calibration ensemble is attached to this experiment.",
+            verdict="LIMITED" if result.get("calibration_pack_id") else "NOT_EVALUATED",
+            summary=(
+                "A versioned calibration pack is attached; bootstrap stability evidence is not yet persisted on the experiment."
+                if result.get("calibration_pack_id")
+                else "No calibration pack is attached to this experiment."
+            ),
         ),
         FitForUseVector(
             name="statistical_fidelity",
