@@ -53,7 +53,11 @@ class EnterpriseValidationReport(BaseModel):
 
 
 def build_enterprise_validation_report(experiment: dict) -> EnterpriseValidationReport:
-    result = experiment["result"]
+    result = experiment.get("result")
+    if result is None:
+        raise ValueError(
+            f"Experiment {experiment['experiment_id']!r} has no completed result; cannot build validation report."
+        )
     evidence_ids = [
         "evidence:"
         + hashlib.sha256(f"{experiment['experiment_id']}:{index}:{row['policy_id']}".encode()).hexdigest()[
@@ -101,11 +105,19 @@ def build_enterprise_validation_report(experiment: dict) -> EnterpriseValidation
             evidence_ids=evidence_ids,
         ),
     ]
+    verdicts = {vector.verdict for vector in vectors}
+    overall_verdict = (
+        "FAIL"
+        if "FAIL" in verdicts
+        else "LIMITED"
+        if "LIMITED" in verdicts or "NOT_EVALUATED" in verdicts
+        else "FIT"
+    )
     report = EnterpriseValidationReport(
         experiment_id=experiment["experiment_id"],
         evidence_manifest=manifest,
         vectors=vectors,
-        overall_verdict="LIMITED",
+        overall_verdict=overall_verdict,
         permitted_claims=["Compare registered strategies inside the declared synthetic scenario pack."],
         blocked_claims=["Claim live-market fidelity, profitability, production capacity, or best execution."],
         limitations=[

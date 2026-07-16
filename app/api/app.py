@@ -400,7 +400,10 @@ def enterprise_validate_experiment(experiment_id: str, request: Request) -> dict
         experiment = store.stress_experiment(experiment_id)
     except KeyError as exc:
         raise HTTPException(404, "experiment not found") from exc
-    report = build_enterprise_validation_report(experiment)
+    try:
+        report = build_enterprise_validation_report(experiment)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     return store.save_validation_report(
         f"validation-{experiment_id}", experiment_id, report.model_dump(mode="json"), actor
     )

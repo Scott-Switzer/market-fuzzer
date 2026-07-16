@@ -977,7 +977,7 @@ class ArenaStore:
         now = utc_now()
         with self.connection() as connection:
             connection.execute(
-                "INSERT OR REPLACE INTO validation_reports VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO validation_reports VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     report_id,
                     experiment_id,

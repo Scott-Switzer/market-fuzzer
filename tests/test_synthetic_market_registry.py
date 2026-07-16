@@ -1,6 +1,8 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from app.governance import build_enterprise_validation_report
 
 
 def test_enterprise_world_registry_persists_versioned_manifest(tmp_path, monkeypatch) -> None:
@@ -148,3 +150,35 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
     exported = client.get(f"/api/enterprise/experiments/{record['experiment_id']}/validation/export")
     assert exported.status_code == 200
     assert exported.headers["content-type"].startswith("application/json")
+
+
+def test_validation_rejects_incomplete_experiment_and_preserves_provenance(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("ARENA_TEST_AUTH", "1")
+    from app.execution_store import ArenaStore
+
+    store = ArenaStore(tmp_path / "registry.sqlite3")
+    store.save_stress_experiment(
+        "experiment-incomplete",
+        {"name": "Pending", "scenario_pack_id": "scenario-x", "strategy_ids": [], "seeds": [42]},
+        "first-actor",
+        {},
+    )
+    with pytest.raises(ValueError, match="no completed result"):
+        build_enterprise_validation_report(
+            {
+                "experiment_id": "experiment-incomplete",
+                "result": None,
+            }
+        )
+    first = store.save_validation_report(
+        "validation-experiment-incomplete", "experiment-incomplete", {"report_hash": "abc"}, "first-actor"
+    )
+    second = store.save_validation_report(
+        "validation-experiment-incomplete", "experiment-incomplete", {"report_hash": "def"}, "second-actor"
+    )
+    assert first["created_by"] == second["created_by"] == "first-actor"
+    assert second["report"]["report_hash"] == "abc"
+    # The store writes completed results by design; exercise the public not-found contract too.
+    client = TestClient(app)
+    assert client.post("/api/enterprise/experiments/does-not-exist/validate").status_code == 404
