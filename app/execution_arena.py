@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from hashlib import sha256
 from statistics import mean, pstdev
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -143,11 +143,13 @@ def policy_to_submission(policy: Policy, *, rationale: str | None = None) -> Exe
         else "pov"
     )
     return ExecutionPolicySubmission(
-        strategy_type=strategy_type,
+        strategy_type=cast(Literal["twap", "pov", "adaptive_pov"], strategy_type),
         target_participation=policy.participation_rate,
         max_participation=policy.max_participation,
         max_spread_bps=policy.max_spread_bps,
-        urgency_curve=policy.urgency_curve,
+        urgency_curve=cast(
+            Literal["uniform", "front_loaded", "back_loaded", "adaptive"], policy.urgency_curve
+        ),
         feed_latency_tolerance_ms=(
             policy.feed_latency_tolerance_ms if policy.feed_latency_tolerance_ms is not None else 10_000
         ),
