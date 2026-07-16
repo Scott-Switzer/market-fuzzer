@@ -86,3 +86,57 @@ def test_scenario_pack_compiles_to_reproducible_protected_worlds(tmp_path, monke
     assert first["compile_hash"] == second["compile_hash"]
     assert len(first["protected_worlds"]) == 1
     assert first["protected_worlds"][0]["world"]["events"][0]["simulation_step"] == 45
+
+
+def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("ARENA_TEST_AUTH", "1")
+    client = TestClient(app)
+    world = client.post(
+        "/api/enterprise/worlds",
+        json={
+            "name": "Stress lab baseline",
+            "description": "A reproducible baseline world for strategy stress experiments.",
+            "asset_universe": ["NOVA", "ORBIT", "VYNE"],
+            "agent_ecology": ["market_maker", "fundamental", "execution_agent"],
+        },
+    ).json()
+    pack = client.post(
+        "/api/enterprise/scenario-packs",
+        json={
+            "name": "Latency stress",
+            "description": "A bounded message-latency stress pack for execution strategy testing.",
+            "base_world_id": world["world_id"],
+            "intended_question": "Does the strategy remain controlled when order-entry latency rises?",
+            "interventions": [
+                {
+                    "intervention_type": "latency_shock",
+                    "severity": "moderate",
+                    "start_step": 40,
+                    "duration_steps": 10,
+                    "rationale": "Measure behavior when market messages arrive with delay.",
+                }
+            ],
+        },
+    ).json()
+    strategy = client.post(
+        "/api/enterprise/strategies",
+        json={
+            "name": "Guarded POV adapter",
+            "description": "A bounded guarded participation policy for execution stress testing.",
+            "builtin_policy_id": "guarded_pov",
+        },
+    ).json()
+    experiment = client.post(
+        "/api/enterprise/experiments",
+        json={
+            "name": "Guarded POV latency stress",
+            "strategy_ids": [strategy["strategy_id"]],
+            "scenario_pack_id": pack["scenario_pack_id"],
+            "seeds": [42],
+        },
+    )
+    assert experiment.status_code == 200
+    record = experiment.json()
+    assert record["status"] == "completed"
+    assert record["result"]["strategy_results"][0]["policy_id"] == "guarded_pov"

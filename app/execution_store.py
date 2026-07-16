@@ -167,6 +167,17 @@ class ArenaStore:
                     created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
                     FOREIGN KEY(base_world_id) REFERENCES synthetic_worlds(world_id)
                 );
+                CREATE TABLE IF NOT EXISTS strategies (
+                    strategy_id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
+                    strategy_type TEXT NOT NULL, builtin_policy_id TEXT, version_label TEXT NOT NULL,
+                    intended_use TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS stress_experiments (
+                    experiment_id TEXT PRIMARY KEY, name TEXT NOT NULL, scenario_pack_id TEXT NOT NULL,
+                    strategy_ids_json TEXT NOT NULL, seeds_json TEXT NOT NULL, status TEXT NOT NULL,
+                    result_json TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS idx_submission_challenge_user
                     ON policy_submissions(challenge_id, user_id);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_final_submission
@@ -873,3 +884,83 @@ class ArenaStore:
                 "SELECT scenario_pack_id FROM scenario_packs ORDER BY created_at DESC"
             ).fetchall()
         return [self.scenario_pack(str(row["scenario_pack_id"])) for row in rows]
+
+    def create_strategy(self, strategy_id: str, payload: dict[str, Any], actor: str) -> dict[str, Any]:
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute(
+                "INSERT INTO strategies VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    strategy_id,
+                    payload["name"],
+                    payload["description"],
+                    payload["strategy_type"],
+                    payload.get("builtin_policy_id"),
+                    payload["version_label"],
+                    payload["intended_use"],
+                    actor,
+                    now,
+                    now,
+                ),
+            )
+            self._audit_in_transaction(
+                connection, None, actor, "strategy_registered", {"strategy_id": strategy_id}, occurred_at=now
+            )
+        return self.strategy(strategy_id)
+
+    def strategy(self, strategy_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM strategies WHERE strategy_id = ?", (strategy_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(strategy_id)
+        return dict(row)
+
+    def strategies(self) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute("SELECT * FROM strategies ORDER BY created_at DESC").fetchall()
+        return [dict(row) for row in rows]
+
+    def save_stress_experiment(
+        self, experiment_id: str, payload: dict[str, Any], actor: str, result: dict[str, Any]
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute(
+                "INSERT INTO stress_experiments VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?)",
+                (
+                    experiment_id,
+                    payload["name"],
+                    payload["scenario_pack_id"],
+                    json.dumps(payload["strategy_ids"]),
+                    json.dumps(payload["seeds"]),
+                    json.dumps(result, sort_keys=True),
+                    actor,
+                    now,
+                    now,
+                ),
+            )
+            self._audit_in_transaction(
+                connection,
+                None,
+                actor,
+                "stress_experiment_completed",
+                {"experiment_id": experiment_id},
+                occurred_at=now,
+            )
+        return self.stress_experiment(experiment_id)
+
+    def stress_experiment(self, experiment_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM stress_experiments WHERE experiment_id = ?", (experiment_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(experiment_id)
+        value = dict(row)
+        value["strategy_ids"] = json.loads(value.pop("strategy_ids_json"))
+        value["seeds"] = json.loads(value.pop("seeds_json"))
+        value["result"] = json.loads(value.pop("result_json")) if value.get("result_json") else None
+        value.pop("result_json", None)
+        return value

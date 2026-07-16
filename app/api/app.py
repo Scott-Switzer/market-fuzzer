@@ -73,6 +73,7 @@ from app.product import (
 )
 from app.scenario_studio import compile_scenario_pack
 from app.schemas import WorldSpec
+from app.strategy_lab import StrategyCreate, StressExperimentCreate
 from app.synthetic_market import (
     SCENARIO_SCHEMA_VERSION,
     WORLD_SCHEMA_VERSION,
@@ -332,6 +333,62 @@ def enterprise_compile_scenario_pack(scenario_pack_id: str) -> dict[str, Any]:
         return compile_scenario_pack({**pack["manifest"], "scenario_pack_id": scenario_pack_id})
     except (KeyError, ValueError) as exc:
         raise HTTPException(422, f"scenario pack cannot be compiled: {exc}") from exc
+
+
+@app.get("/api/enterprise/strategies")
+def enterprise_strategies() -> dict[str, Any]:
+    return {"strategies": _execution_store().strategies()}
+
+
+@app.post("/api/enterprise/strategies")
+def enterprise_create_strategy(payload: StrategyCreate, request: Request) -> dict[str, Any]:
+    actor = _enterprise_actor(request)
+    if payload.strategy_type == "arena_policy" and payload.builtin_policy_id is None:
+        raise HTTPException(422, "arena_policy strategies require a registered built-in policy ID")
+    strategy_id = new_registry_id("strategy")
+    return _execution_store().create_strategy(strategy_id, payload.model_dump(mode="json"), actor)
+
+
+@app.get("/api/enterprise/strategies/{strategy_id}")
+def enterprise_strategy(strategy_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().strategy(strategy_id)
+    except KeyError as exc:
+        raise HTTPException(404, "strategy not found") from exc
+
+
+@app.post("/api/enterprise/experiments")
+def enterprise_run_experiment(payload: StressExperimentCreate, request: Request) -> dict[str, Any]:
+    actor = _enterprise_actor(request)
+    store = _execution_store()
+    try:
+        pack = store.scenario_pack(payload.scenario_pack_id)
+        strategies = [store.strategy(strategy_id) for strategy_id in payload.strategy_ids]
+    except KeyError as exc:
+        raise HTTPException(404, "scenario pack or strategy not found") from exc
+    if any(strategy["builtin_policy_id"] is None for strategy in strategies):
+        raise HTTPException(422, "only built-in policy adapters are executable in this milestone")
+    compiled = compile_scenario_pack({**pack["manifest"], "scenario_pack_id": payload.scenario_pack_id})
+    policy_ids = [str(strategy["builtin_policy_id"]) for strategy in strategies]
+    matrix = benchmark_matrix(seeds=tuple(payload.seeds), student_submissions=None)
+    selected = [row for row in matrix["rows"] if row["policy_id"] in policy_ids]
+    result = {
+        "experiment_type": "baseline_vs_protected_benchmark",
+        "compile_hash": compiled["compile_hash"],
+        "scenario_pack_id": payload.scenario_pack_id,
+        "strategy_results": selected,
+        "claim_boundary": "Results are deterministic measurements inside the declared synthetic benchmark worlds.",
+    }
+    experiment_id = new_registry_id("experiment")
+    return store.save_stress_experiment(experiment_id, payload.model_dump(mode="json"), actor, result)
+
+
+@app.get("/api/enterprise/experiments/{experiment_id}")
+def enterprise_experiment(experiment_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().stress_experiment(experiment_id)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment not found") from exc
 
 
 @app.get("/api/execution-challenge")

@@ -27,8 +27,12 @@ def compile_scenario_pack(manifest: dict[str, Any], *, seed: int = 42) -> dict[s
     for index, intervention in enumerate(manifest["interventions"]):
         intervention_type = intervention["intervention_type"]
         variant = SCENARIO_TO_ENGINE_VARIANT[intervention_type]
-        world, changes = mutate_scenario(base, variant)
+        engine_variant = "normal" if variant == "latency_shock" else variant
+        world, changes = mutate_scenario(base, engine_variant)
         data = deepcopy(world.model_dump(mode="python"))
+        if variant == "latency_shock":
+            data["exchange"]["latency_profile"] = "high"
+            changes = {"scenario": intervention_type, "changed": ["exchange latency profile becomes high"]}
         data["world_id"] = f"compiled-{manifest['scenario_pack_id']}-{index}"
         for event in data["events"]:
             event["simulation_step"] = intervention["start_step"]
