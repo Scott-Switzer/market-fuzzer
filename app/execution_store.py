@@ -150,6 +150,23 @@ class ArenaStore:
                     actor TEXT NOT NULL, action TEXT NOT NULL, occurred_at TEXT NOT NULL,
                     details_json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS synthetic_worlds (
+                    world_id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
+                    schema_version TEXT NOT NULL, status TEXT NOT NULL, created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS synthetic_world_versions (
+                    world_id TEXT NOT NULL, version INTEGER NOT NULL, manifest_json TEXT NOT NULL,
+                    manifest_hash TEXT NOT NULL, created_at TEXT NOT NULL,
+                    PRIMARY KEY(world_id, version), FOREIGN KEY(world_id) REFERENCES synthetic_worlds(world_id)
+                );
+                CREATE TABLE IF NOT EXISTS scenario_packs (
+                    scenario_pack_id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
+                    base_world_id TEXT NOT NULL, schema_version TEXT NOT NULL, manifest_json TEXT NOT NULL,
+                    manifest_hash TEXT NOT NULL, status TEXT NOT NULL, created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    FOREIGN KEY(base_world_id) REFERENCES synthetic_worlds(world_id)
+                );
                 CREATE INDEX IF NOT EXISTS idx_submission_challenge_user
                     ON policy_submissions(challenge_id, user_id);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_final_submission
@@ -746,3 +763,113 @@ class ArenaStore:
             value["details"] = json.loads(value.pop("details_json"))
             values.append(value)
         return values
+
+    def create_synthetic_world(
+        self, world_id: str, payload: dict[str, Any], actor: str, manifest_hash: str
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "INSERT INTO synthetic_worlds VALUES (?, ?, ?, ?, 'draft', ?, ?, ?)",
+                (
+                    world_id,
+                    payload["name"],
+                    payload["description"],
+                    payload["schema_version"],
+                    actor,
+                    now,
+                    now,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO synthetic_world_versions VALUES (?, 1, ?, ?, ?)",
+                (world_id, json.dumps(payload, sort_keys=True), manifest_hash, now),
+            )
+            self._audit_in_transaction(
+                connection,
+                None,
+                actor,
+                "synthetic_world_created",
+                {"world_id": world_id, "manifest_hash": manifest_hash},
+                occurred_at=now,
+            )
+        return self.synthetic_world(world_id)
+
+    def synthetic_world(self, world_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            world = connection.execute(
+                "SELECT * FROM synthetic_worlds WHERE world_id = ?", (world_id,)
+            ).fetchone()
+            version = connection.execute(
+                "SELECT * FROM synthetic_world_versions WHERE world_id = ? ORDER BY version DESC LIMIT 1",
+                (world_id,),
+            ).fetchone()
+        if world is None or version is None:
+            raise KeyError(world_id)
+        value = dict(world)
+        value["version"] = int(version["version"])
+        value["manifest"] = json.loads(version["manifest_json"])
+        value["manifest_hash"] = version["manifest_hash"]
+        return value
+
+    def synthetic_worlds(self) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT world_id FROM synthetic_worlds ORDER BY created_at DESC"
+            ).fetchall()
+        return [self.synthetic_world(str(row["world_id"])) for row in rows]
+
+    def create_scenario_pack(
+        self, scenario_pack_id: str, payload: dict[str, Any], actor: str, manifest_hash: str
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            exists = connection.execute(
+                "SELECT 1 FROM synthetic_worlds WHERE world_id = ?", (payload["base_world_id"],)
+            ).fetchone()
+            if exists is None:
+                raise KeyError(payload["base_world_id"])
+            connection.execute(
+                "INSERT INTO scenario_packs VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)",
+                (
+                    scenario_pack_id,
+                    payload["name"],
+                    payload["description"],
+                    payload["base_world_id"],
+                    payload["schema_version"],
+                    json.dumps(payload, sort_keys=True),
+                    manifest_hash,
+                    actor,
+                    now,
+                    now,
+                ),
+            )
+            self._audit_in_transaction(
+                connection,
+                None,
+                actor,
+                "scenario_pack_created",
+                {"scenario_pack_id": scenario_pack_id, "manifest_hash": manifest_hash},
+                occurred_at=now,
+            )
+        return self.scenario_pack(scenario_pack_id)
+
+    def scenario_pack(self, scenario_pack_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM scenario_packs WHERE scenario_pack_id = ?", (scenario_pack_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(scenario_pack_id)
+        value = dict(row)
+        value["manifest"] = json.loads(value.pop("manifest_json"))
+        return value
+
+    def scenario_packs(self) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT scenario_pack_id FROM scenario_packs ORDER BY created_at DESC"
+            ).fetchall()
+        return [self.scenario_pack(str(row["scenario_pack_id"])) for row in rows]

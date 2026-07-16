@@ -1,10 +1,15 @@
-# Quant Challenge Arena
+# Synthetic Market World
+
+**A governed synthetic market environment for strategy validation and adversarial stress testing.**
+
+Quant Challenge Arena is the training and assessment surface built on the
+platform. Open the enterprise entry point at `/synthetic-market-world`.
 
 **Problem.** A strategy can top a visible backtest by exploiting one friendly market and still fail when liquidity disappears, latency rises, order flow crowds, or an event changes the price path.
 
-**Product.** Quant Challenge Arena is a synthetic-exchange assessment platform. A learner configures a bounded declarative execution policy, practices in a visible limit-order-book world, submits a final policy, and receives a protected multi-world evaluation only after an instructor releases it. Deterministic code owns market events, orders, fills, metrics, scores, ranks, phase state, and release state.
+**Product.** Synthetic Market World lets a research or trading team register reproducible synthetic market worlds, apply controlled stress scenarios, run strategies against protected conditions, and produce governed evidence packages. Quant Challenge Arena is the learner-facing demonstration of that platform. Deterministic code owns market events, orders, fills, metrics, scores, ranks, phase state, and release state.
 
-**Audience.** The primary users are instructors and students; the same workflow can support candidate assessment and bounded quant-team training. It evaluates reasoning about execution robustness inside a fictional market. It does not prove alpha, production capacity, or live-trading safety.
+**Audience.** The primary users are prop-shop quant researchers, trading technology teams, and model-validation practitioners. Training, recruiting, and education are supported workflows. It evaluates strategy behavior inside declared synthetic markets; it does not prove alpha, production capacity, or live-trading safety.
 
 ## Three-step demo
 

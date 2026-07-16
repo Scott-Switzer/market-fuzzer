@@ -72,6 +72,16 @@ from app.product import (
     stable_id,
 )
 from app.schemas import WorldSpec
+from app.synthetic_market import (
+    SCENARIO_SCHEMA_VERSION,
+    WORLD_SCHEMA_VERSION,
+    ScenarioPackCreate,
+    SyntheticWorldCreate,
+    new_registry_id,
+)
+from app.synthetic_market import (
+    utc_now as synthetic_utc_now,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT_ROOT = Path(os.getenv("MARKET_FUZZER_EXPERIMENT_ROOT", "artifacts")).expanduser().resolve()
@@ -249,7 +259,66 @@ def health() -> dict:
         "engine": "compact_deterministic_pov_harness",
         "arena_engine": "deterministic_synthetic_regime_engine",
         "arena_schema_version": ARENA_SCHEMA_VERSION,
+        "enterprise_product": "Synthetic Market World",
+        "enterprise_registry": "v1",
     }
+
+
+@app.get("/synthetic-market-world")
+def synthetic_market_world_landing() -> FileResponse:
+    """Enterprise product entry point; the existing Arena remains at /."""
+    return FileResponse(ROOT / "static" / "synthetic-market-world.html")
+
+
+@app.get("/api/enterprise/worlds")
+def enterprise_worlds() -> dict[str, Any]:
+    return {"worlds": _execution_store().synthetic_worlds()}
+
+
+@app.post("/api/enterprise/worlds")
+def enterprise_create_world(payload: SyntheticWorldCreate, request: Request) -> dict[str, Any]:
+    actor = _enterprise_actor(request)
+    manifest = payload.model_dump(mode="json")
+    manifest["schema_version"] = WORLD_SCHEMA_VERSION
+    manifest["created_at"] = synthetic_utc_now()
+    manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+    world_id = new_registry_id("world")
+    return _execution_store().create_synthetic_world(world_id, manifest, actor, manifest_hash)
+
+
+@app.get("/api/enterprise/worlds/{world_id}")
+def enterprise_world(world_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().synthetic_world(world_id)
+    except KeyError as exc:
+        raise HTTPException(404, "synthetic world not found") from exc
+
+
+@app.get("/api/enterprise/scenario-packs")
+def enterprise_scenario_packs() -> dict[str, Any]:
+    return {"scenario_packs": _execution_store().scenario_packs()}
+
+
+@app.post("/api/enterprise/scenario-packs")
+def enterprise_create_scenario_pack(payload: ScenarioPackCreate, request: Request) -> dict[str, Any]:
+    actor = _enterprise_actor(request)
+    manifest = payload.model_dump(mode="json")
+    manifest["schema_version"] = SCENARIO_SCHEMA_VERSION
+    manifest["created_at"] = synthetic_utc_now()
+    manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+    scenario_pack_id = new_registry_id("scenario")
+    try:
+        return _execution_store().create_scenario_pack(scenario_pack_id, manifest, actor, manifest_hash)
+    except KeyError as exc:
+        raise HTTPException(404, "base synthetic world not found") from exc
+
+
+@app.get("/api/enterprise/scenario-packs/{scenario_pack_id}")
+def enterprise_scenario_pack(scenario_pack_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().scenario_pack(scenario_pack_id)
+    except KeyError as exc:
+        raise HTTPException(404, "scenario pack not found") from exc
 
 
 @app.get("/api/execution-challenge")
@@ -1335,6 +1404,16 @@ def _arena_identity_from_token(token: str) -> tuple[str, str] | None:
         return role, user_id
     except (binascii.Error, RuntimeError, ValueError, UnicodeDecodeError, sqlite3.Error):
         return None
+
+
+def _enterprise_actor(request: Request) -> str:
+    """Resolve a local actor while keeping enterprise writes auditable."""
+    role, user_id = _arena_identity(request)
+    if user_id != "anonymous-student":
+        return user_id
+    if os.getenv("ARENA_TEST_AUTH") == "1" and request.client and request.client.host == "testclient":
+        return f"test-{role}"
+    return "local-enterprise-demo"
 
 
 def _arena_identity(request: Request) -> tuple[str, str]:
