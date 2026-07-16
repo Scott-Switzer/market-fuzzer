@@ -71,6 +71,7 @@ from app.product import (
     scenario_hash,
     stable_id,
 )
+from app.scenario_studio import compile_scenario_pack
 from app.schemas import WorldSpec
 from app.synthetic_market import (
     SCENARIO_SCHEMA_VERSION,
@@ -319,6 +320,18 @@ def enterprise_scenario_pack(scenario_pack_id: str) -> dict[str, Any]:
         return _execution_store().scenario_pack(scenario_pack_id)
     except KeyError as exc:
         raise HTTPException(404, "scenario pack not found") from exc
+
+
+@app.post("/api/enterprise/scenario-packs/{scenario_pack_id}/compile")
+def enterprise_compile_scenario_pack(scenario_pack_id: str) -> dict[str, Any]:
+    try:
+        pack = _execution_store().scenario_pack(scenario_pack_id)
+    except KeyError as exc:
+        raise HTTPException(404, "scenario pack not found") from exc
+    try:
+        return compile_scenario_pack({**pack["manifest"], "scenario_pack_id": scenario_pack_id})
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(422, f"scenario pack cannot be compiled: {exc}") from exc
 
 
 @app.get("/api/execution-challenge")

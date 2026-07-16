@@ -48,3 +48,41 @@ def test_scenario_pack_requires_registered_world_and_preserves_manifest(tmp_path
         },
     )
     assert missing.status_code == 404
+
+
+def test_scenario_pack_compiles_to_reproducible_protected_worlds(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("ARENA_TEST_AUTH", "1")
+    client = TestClient(app)
+    world = client.post(
+        "/api/enterprise/worlds",
+        json={
+            "name": "Execution baseline",
+            "description": "A reproducible baseline world for controlled stress experiments.",
+            "asset_universe": ["NOVA", "ORBIT", "VYNE"],
+            "agent_ecology": ["market_maker", "fundamental", "execution_agent"],
+        },
+    ).json()
+    pack = client.post(
+        "/api/enterprise/scenario-packs",
+        json={
+            "name": "Liquidity resilience",
+            "description": "A bounded stress pack for displayed-depth withdrawal.",
+            "base_world_id": world["world_id"],
+            "intended_question": "Does an execution strategy remain controlled when displayed liquidity contracts?",
+            "interventions": [
+                {
+                    "intervention_type": "liquidity_withdrawal",
+                    "severity": "high",
+                    "start_step": 45,
+                    "duration_steps": 10,
+                    "rationale": "Measure execution behavior after displayed liquidity withdraws.",
+                }
+            ],
+        },
+    ).json()
+    first = client.post(f"/api/enterprise/scenario-packs/{pack['scenario_pack_id']}/compile").json()
+    second = client.post(f"/api/enterprise/scenario-packs/{pack['scenario_pack_id']}/compile").json()
+    assert first["compile_hash"] == second["compile_hash"]
+    assert len(first["protected_worlds"]) == 1
+    assert first["protected_worlds"][0]["world"]["events"][0]["simulation_step"] == 45
