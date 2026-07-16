@@ -178,6 +178,12 @@ class ArenaStore:
                     strategy_ids_json TEXT NOT NULL, seeds_json TEXT NOT NULL, status TEXT NOT NULL,
                     result_json TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS validation_reports (
+                    report_id TEXT PRIMARY KEY, experiment_id TEXT UNIQUE NOT NULL,
+                    report_json TEXT NOT NULL, report_hash TEXT NOT NULL,
+                    created_by TEXT NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY(experiment_id) REFERENCES stress_experiments(experiment_id)
+                );
                 CREATE INDEX IF NOT EXISTS idx_submission_challenge_user
                     ON policy_submissions(challenge_id, user_id);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_final_submission
@@ -963,4 +969,41 @@ class ArenaStore:
         value["seeds"] = json.loads(value.pop("seeds_json"))
         value["result"] = json.loads(value.pop("result_json")) if value.get("result_json") else None
         value.pop("result_json", None)
+        return value
+
+    def save_validation_report(
+        self, report_id: str, experiment_id: str, report: dict[str, Any], actor: str
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO validation_reports VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    report_id,
+                    experiment_id,
+                    json.dumps(report, sort_keys=True),
+                    report["report_hash"],
+                    actor,
+                    now,
+                ),
+            )
+            self._audit_in_transaction(
+                connection,
+                None,
+                actor,
+                "validation_report_saved",
+                {"report_id": report_id, "experiment_id": experiment_id},
+                occurred_at=now,
+            )
+        return self.validation_report(experiment_id)
+
+    def validation_report(self, experiment_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM validation_reports WHERE experiment_id = ?", (experiment_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(experiment_id)
+        value = dict(row)
+        value["report"] = json.loads(value.pop("report_json"))
         return value

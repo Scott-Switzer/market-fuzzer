@@ -140,3 +140,11 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
     record = experiment.json()
     assert record["status"] == "completed"
     assert record["result"]["strategy_results"][0]["policy_id"] == "guarded_pov"
+    validation = client.post(f"/api/enterprise/experiments/{record['experiment_id']}/validate")
+    assert validation.status_code == 200
+    report = validation.json()["report"]
+    assert report["overall_verdict"] == "LIMITED"
+    assert len(report["evidence_manifest"]["evidence_ids"]) == 1
+    exported = client.get(f"/api/enterprise/experiments/{record['experiment_id']}/validation/export")
+    assert exported.status_code == 200
+    assert exported.headers["content-type"].startswith("application/json")

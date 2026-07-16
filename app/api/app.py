@@ -61,6 +61,7 @@ from app.execution_challenge_designer import (
 from app.execution_feedback import build_execution_evidence, generate_execution_feedback
 from app.execution_store import ArenaPhaseError, ArenaQuotaError, ArenaStore
 from app.experiments import run_batch, run_single, run_validation_campaign
+from app.governance import build_enterprise_validation_report
 from app.product import (
     DEFAULT_PROPERTIES,
     STORE,
@@ -389,6 +390,42 @@ def enterprise_experiment(experiment_id: str) -> dict[str, Any]:
         return _execution_store().stress_experiment(experiment_id)
     except KeyError as exc:
         raise HTTPException(404, "experiment not found") from exc
+
+
+@app.post("/api/enterprise/experiments/{experiment_id}/validate")
+def enterprise_validate_experiment(experiment_id: str, request: Request) -> dict[str, Any]:
+    actor = _enterprise_actor(request)
+    store = _execution_store()
+    try:
+        experiment = store.stress_experiment(experiment_id)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment not found") from exc
+    report = build_enterprise_validation_report(experiment)
+    return store.save_validation_report(
+        f"validation-{experiment_id}", experiment_id, report.model_dump(mode="json"), actor
+    )
+
+
+@app.get("/api/enterprise/experiments/{experiment_id}/validation")
+def enterprise_validation_report(experiment_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().validation_report(experiment_id)
+    except KeyError as exc:
+        raise HTTPException(404, "validation report not found") from exc
+
+
+@app.get("/api/enterprise/experiments/{experiment_id}/validation/export")
+def enterprise_validation_export(experiment_id: str) -> Response:
+    try:
+        record = _execution_store().validation_report(experiment_id)
+    except KeyError as exc:
+        raise HTTPException(404, "validation report not found") from exc
+    payload = json.dumps(record["report"], indent=2, sort_keys=True)
+    return Response(
+        content=payload,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{experiment_id}-validation.json"'},
+    )
 
 
 @app.get("/api/execution-challenge")
