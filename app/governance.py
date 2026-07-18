@@ -130,9 +130,19 @@ def build_enterprise_validation_report(experiment: dict) -> EnterpriseValidation
         overall_verdict=cast(Literal["FIT", "LIMITED", "FAIL", "NOT_EVALUATED"], overall_verdict),
         permitted_claims=["Compare registered strategies inside the declared synthetic scenario pack."],
         blocked_claims=["Claim live-market fidelity, profitability, production capacity, or best execution."],
-        limitations=[
-            "Calibration and statistical fidelity were not evaluated because no reference pack was attached."
-        ],
+        limitations=(
+            [
+                "Calibration stability passed for the attached aggregate-only pack; statistical fidelity still requires held-out comparison evidence."
+            ]
+            if result.get("calibration_stable")
+            else [
+                "Calibration was attached but its held-out stability check did not pass; statistical fidelity remains unevaluated."
+            ]
+            if result.get("calibration_pack_id")
+            else [
+                "Calibration and statistical fidelity were not evaluated because no reference pack was attached."
+            ]
+        ),
     )
     report.report_hash = hashlib.sha256(
         json.dumps(report.model_dump(mode="json", exclude={"report_hash"}), sort_keys=True).encode()

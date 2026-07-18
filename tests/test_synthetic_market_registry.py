@@ -93,6 +93,7 @@ def test_scenario_pack_compiles_to_reproducible_protected_worlds(tmp_path, monke
         json={
             "name": "Execution baseline",
             "description": "A reproducible baseline world for controlled stress experiments.",
+            "seed": 77,
             "asset_universe": ["NOVA", "ORBIT", "VYNE"],
             "agent_ecology": ["market_maker", "fundamental", "execution_agent"],
         },
@@ -119,7 +120,7 @@ def test_scenario_pack_compiles_to_reproducible_protected_worlds(tmp_path, monke
     second = client.post(f"/api/enterprise/scenario-packs/{pack['scenario_pack_id']}/compile").json()
     assert first["compile_hash"] == second["compile_hash"]
     assert len(first["protected_worlds"]) == 1
-    assert first["seed"] == 42
+    assert first["seed"] == 77
     assert first["base_world_manifest_hash"] == world["manifest_hash"]
     assert first["protected_worlds"][0]["world"]["events"][0]["simulation_step"] == 45
 

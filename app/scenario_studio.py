@@ -28,7 +28,8 @@ def compile_scenario_pack(
     seed: int | None = None,
 ) -> dict[str, Any]:
     """Compile only allow-listed intents; never accept arbitrary world numbers."""
-    selected_seed = int(base_world_manifest.get("seed", 42) if seed is None else seed)
+    registered_manifest = base_world_manifest.get("manifest", base_world_manifest)
+    selected_seed = int(registered_manifest.get("seed", 42) if seed is None else seed)
     base = build_demo_world(selected_seed)
     selected_calibration = None
     if calibration_result is not None:
