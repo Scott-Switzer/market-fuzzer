@@ -527,25 +527,142 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
     except KeyError as exc:
         raise HTTPException(404, "experiment job not found") from exc
     if job["status"] == "completed":
-        return job
-    total = len(job["payload"]["seeds"])
+        try:
+            return job | {"artifact": store.experiment_artifact(job_id, "experiment-result")}
+        except KeyError:
+            return job
+    payload = StressExperimentCreate.model_validate(job["payload"])
+    try:
+        pack = store.scenario_pack(payload.scenario_pack_id)
+        base_world = store.synthetic_world(str(pack["base_world_id"]))
+        strategies = [store.strategy(strategy_id) for strategy_id in payload.strategy_ids]
+    except KeyError as exc:
+        raise HTTPException(404, "scenario pack or strategy not found") from exc
+    if any(strategy["builtin_policy_id"] is None for strategy in strategies):
+        raise HTTPException(422, "only built-in policy adapters are executable in this milestone")
+    calibration_result = (
+        store.calibration_run(str(base_world["manifest"]["calibration_run_id"]))["result"]
+        if base_world["manifest"].get("calibration_run_id")
+        else None
+    )
+    compiled = compile_scenario_pack(
+        {**pack["manifest"], "scenario_pack_id": payload.scenario_pack_id},
+        base_world_manifest=base_world,
+        calibration_result=calibration_result,
+    )
+    cell_total = len(payload.strategy_ids) * len(payload.seeds)
     store.update_experiment_job(
-        job_id, status="running", progress={"completed_cells": 0, "total_cells": total, "percent": 0}
+        job_id,
+        status="running",
+        progress={
+            "completed_cells": sum(cell["status"] == "completed" for cell in job["cells"]),
+            "total_cells": cell_total,
+            "percent": round(
+                100 * sum(cell["status"] == "completed" for cell in job["cells"]) / cell_total
+            ),
+        },
     )
     try:
-        experiment = enterprise_run_experiment(StressExperimentCreate.model_validate(job["payload"]), request)
+        completed_rows: list[dict[str, Any]] = []
+        for strategy in sorted(strategies, key=lambda item: str(item["strategy_id"])):
+            strategy_id = str(strategy["strategy_id"])
+            builtin_policy_id = str(strategy["builtin_policy_id"])
+            for seed in sorted(payload.seeds):
+                existing = next(
+                    (
+                        cell
+                        for cell in job["cells"]
+                        if cell["strategy_id"] == strategy_id
+                        and cell["scenario_hash"] == compiled["compile_hash"]
+                        and cell["seed"] == seed
+                        and cell["status"] == "completed"
+                    ),
+                    None,
+                )
+                if existing is not None and existing["result"] is not None:
+                    completed_rows.append(existing["result"])
+                    continue
+                try:
+                    matrix = benchmark_matrix(
+                        seeds=(seed,),
+                        variants=("latency_shock",),
+                        student_submissions=None,
+                        policy_ids=(builtin_policy_id,),
+                    )
+                    row = matrix["rows"][0]
+                    world_hash = str(row["world_results"][0]["world_hash"])
+                    store.upsert_experiment_cell(
+                        new_registry_id("cell"),
+                        job_id,
+                        strategy_id=strategy_id,
+                        scenario_hash=str(compiled["compile_hash"]),
+                        world_hash=world_hash,
+                        seed=seed,
+                        status="completed",
+                        result={**row, "strategy_id": strategy_id, "seed": seed},
+                    )
+                    completed_rows.append({**row, "strategy_id": strategy_id, "seed": seed})
+                except Exception as exc:
+                    store.upsert_experiment_cell(
+                        new_registry_id("cell"),
+                        job_id,
+                        strategy_id=strategy_id,
+                        scenario_hash=str(compiled["compile_hash"]),
+                        world_hash="unresolved",
+                        seed=seed,
+                        status="failed",
+                        error=str(exc),
+                    )
+                    raise
+                cells = store.experiment_cells(job_id)
+                done = sum(cell["status"] == "completed" for cell in cells)
+                store.update_experiment_job(
+                    job_id,
+                    status="running",
+                    progress={"completed_cells": done, "total_cells": cell_total, "percent": round(100 * done / cell_total)},
+                )
+        completed_rows.sort(key=lambda row: (str(row["strategy_id"]), int(row["seed"])))
+        experiment = store.save_stress_experiment(
+            new_registry_id("experiment"),
+            payload.model_dump(mode="json"),
+            _enterprise_actor(request),
+            {
+                "experiment_type": "baseline_vs_protected_benchmark",
+                "compile_hash": compiled["compile_hash"],
+                "scenario_pack_id": payload.scenario_pack_id,
+                "strategy_results": completed_rows,
+                "cell_provenance": [
+                    {
+                        "cell_id": cell["cell_id"],
+                        "strategy_id": cell["strategy_id"],
+                        "scenario_hash": cell["scenario_hash"],
+                        "world_hash": cell["world_hash"],
+                        "seed": cell["seed"],
+                        "result_hash": cell["result_hash"],
+                    }
+                    for cell in store.experiment_cells(job_id)
+                    if cell["status"] == "completed"
+                ],
+                "claim_boundary": "Results are deterministic measurements inside the declared synthetic benchmark worlds.",
+                "calibration_ensemble": compiled.get("calibration_ensemble", []),
+            },
+        )
         artifact = store.save_experiment_artifact(
             new_registry_id("artifact"), job_id, "experiment-result", experiment
         )
         return store.update_experiment_job(
             job_id,
             status="completed",
-            progress={"completed_cells": total, "total_cells": total, "percent": 100},
+            progress={"completed_cells": cell_total, "total_cells": cell_total, "percent": 100},
             experiment_id=experiment["experiment_id"],
         ) | {"artifact": artifact}
     except Exception:
+        cells = store.experiment_cells(job_id)
+        done = sum(cell["status"] == "completed" for cell in cells)
         store.update_experiment_job(
-            job_id, status="failed", progress={"completed_cells": 0, "total_cells": total, "percent": 0}
+            job_id,
+            status="failed",
+            progress={"completed_cells": done, "total_cells": cell_total, "percent": round(100 * done / cell_total)},
         )
         raise
 

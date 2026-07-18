@@ -184,6 +184,16 @@ class ArenaStore:
                     created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
                     FOREIGN KEY(experiment_id) REFERENCES stress_experiments(experiment_id)
                 );
+                CREATE TABLE IF NOT EXISTS experiment_cells (
+                    cell_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, strategy_id TEXT NOT NULL,
+                    scenario_hash TEXT NOT NULL, world_hash TEXT NOT NULL, seed INTEGER NOT NULL,
+                    status TEXT NOT NULL, result_json TEXT, result_hash TEXT, error TEXT,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    UNIQUE(job_id, strategy_id, scenario_hash, world_hash, seed),
+                    FOREIGN KEY(job_id) REFERENCES experiment_jobs(job_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_experiment_cells_job
+                    ON experiment_cells(job_id, status, strategy_id, seed);
                 CREATE TABLE IF NOT EXISTS experiment_artifacts (
                     artifact_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, kind TEXT NOT NULL,
                     content_json TEXT NOT NULL, content_hash TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -1152,6 +1162,7 @@ class ArenaStore:
         value = dict(row)
         value["payload"] = json.loads(value.pop("payload_json"))
         value["progress"] = json.loads(value.pop("progress_json"))
+        value["cells"] = self.experiment_cells(job_id)
         return value
 
     def experiment_jobs(self, *, limit: int = 50) -> list[dict[str, Any]]:
@@ -1162,6 +1173,65 @@ class ArenaStore:
                 "SELECT job_id FROM experiment_jobs ORDER BY created_at DESC LIMIT ?", (limit,)
             ).fetchall()
         return [self.experiment_job(str(row["job_id"])) for row in rows]
+
+    def upsert_experiment_cell(
+        self,
+        cell_id: str,
+        job_id: str,
+        *,
+        strategy_id: str,
+        scenario_hash: str,
+        world_hash: str,
+        seed: int,
+        status: str,
+        result: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        encoded = json.dumps(result, sort_keys=True) if result is not None else None
+        result_hash = hashlib.sha256(encoded.encode()).hexdigest() if encoded is not None else None
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO experiment_cells
+                    (cell_id, job_id, strategy_id, scenario_hash, world_hash, seed, status,
+                     result_json, result_hash, error, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_id, strategy_id, scenario_hash, world_hash, seed) DO UPDATE SET
+                    status = excluded.status, result_json = excluded.result_json,
+                    result_hash = excluded.result_hash, error = excluded.error,
+                    updated_at = excluded.updated_at
+                """,
+                (cell_id, job_id, strategy_id, scenario_hash, world_hash, seed, status,
+                 encoded, result_hash, error, now, now),
+            )
+            row = connection.execute(
+                """
+                SELECT * FROM experiment_cells
+                WHERE job_id = ? AND strategy_id = ? AND scenario_hash = ?
+                  AND world_hash = ? AND seed = ?
+                """,
+                (job_id, strategy_id, scenario_hash, world_hash, seed),
+            ).fetchone()
+        assert row is not None
+        return self._experiment_cell_value(row)
+
+    @staticmethod
+    def _experiment_cell_value(row: sqlite3.Row) -> dict[str, Any]:
+        value = dict(row)
+        value["result"] = json.loads(value.pop("result_json")) if value.get("result_json") else None
+        return value
+
+    def experiment_cells(self, job_id: str) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM experiment_cells
+                WHERE job_id = ? ORDER BY strategy_id, seed, world_hash
+                """,
+                (job_id,),
+            ).fetchall()
+        return [self._experiment_cell_value(row) for row in rows]
 
     def save_experiment_artifact(
         self, artifact_id: str, job_id: str, kind: str, content: dict[str, Any]
