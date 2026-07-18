@@ -71,6 +71,17 @@ def test_store_survives_restart_with_phase_submission_evaluation_and_audit(tmp_p
     }
 
 
+def test_experiment_job_claim_is_atomic_and_allows_failed_retry(tmp_path) -> None:
+    store = ArenaStore(tmp_path / "job-claim.sqlite3")
+    store.create_experiment_job("job-1", {"name": "retryable"}, "creator")
+    progress = {"completed_cells": 0, "total_cells": 1, "percent": 0}
+
+    assert store.claim_experiment_job("job-1", progress) is True
+    assert store.claim_experiment_job("job-1", progress) is False
+    store.update_experiment_job("job-1", status="failed", progress=progress)
+    assert store.claim_experiment_job("job-1", progress) is True
+
+
 def test_illegal_phase_transition_is_rejected(tmp_path) -> None:
     store = ArenaStore(tmp_path / "phase.sqlite3")
     store.ensure_default_challenge(CHALLENGE_ID, list(HIDDEN_VARIANTS))

@@ -549,6 +549,8 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
             return job | {"artifact": store.experiment_artifact(job_id, "experiment-result")}
         except KeyError:
             return job
+    if job["status"] == "running":
+        raise HTTPException(409, "experiment job is already running")
     payload = StressExperimentCreate.model_validate(job["payload"])
     try:
         pack = store.scenario_pack(payload.scenario_pack_id)
@@ -576,15 +578,18 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
         len(payload.strategy_ids) * len(compiled["protected_worlds"])
         for compiled in compiled_by_seed.values()
     )
-    store.update_experiment_job(
-        job_id,
-        status="running",
-        progress={
-            "completed_cells": sum(cell["status"] == "completed" for cell in job["cells"]),
-            "total_cells": cell_total,
-            "percent": round(100 * sum(cell["status"] == "completed" for cell in job["cells"]) / cell_total),
-        },
-    )
+    completed_before = sum(cell["status"] == "completed" for cell in job["cells"])
+    initial_progress = {
+        "completed_cells": completed_before,
+        "total_cells": cell_total,
+        "percent": round(100 * completed_before / cell_total) if cell_total else 0,
+    }
+    if not store.claim_experiment_job(job_id, initial_progress):
+        raise HTTPException(409, "experiment job is already running")
+    if cell_total == 0:
+        store.update_experiment_job(job_id, status="failed", progress=initial_progress)
+        raise HTTPException(422, "scenario pack compiled to no protected worlds")
+    job = store.experiment_job(job_id)
     try:
         completed_rows: list[dict[str, Any]] = []
         for strategy in sorted(strategies, key=lambda item: str(item["strategy_id"])):
@@ -680,7 +685,7 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
         experiment = store.save_stress_experiment(
             new_registry_id("experiment"),
             payload.model_dump(mode="json"),
-            _enterprise_actor(request),
+            job["created_by"],
             {
                 "experiment_type": "baseline_vs_protected_benchmark",
                 "compile_hash": compiled["compile_hash"],
@@ -727,7 +732,7 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
                 ),
                 "seeds": sorted({cell["seed"] for cell in store.experiment_cells(job_id)}),
                 "strategy_ids": sorted({cell["strategy_id"] for cell in store.experiment_cells(job_id)}),
-                "creator": _enterprise_actor(request),
+                "creator": job["created_by"],
             },
         )
         return store.update_experiment_job(

@@ -1186,6 +1186,27 @@ class ArenaStore:
             raise KeyError(job_id)
         return self.experiment_job(job_id)
 
+    def claim_experiment_job(self, job_id: str, progress: dict[str, Any]) -> bool:
+        """Atomically claim a queued or failed job for one resume attempt."""
+        with self.connection() as connection:
+            updated = connection.execute(
+                """
+                UPDATE experiment_jobs
+                SET status = 'running', progress_json = ?, updated_at = ?
+                WHERE job_id = ? AND status IN ('queued', 'failed')
+                """,
+                (json.dumps(progress, sort_keys=True), utc_now(), job_id),
+            )
+        if updated.rowcount == 1:
+            return True
+        with self.connection() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM experiment_jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+        if exists is None:
+            raise KeyError(job_id)
+        return False
+
     def experiment_job(self, job_id: str) -> dict[str, Any]:
         with self.connection() as connection:
             row = connection.execute("SELECT * FROM experiment_jobs WHERE job_id = ?", (job_id,)).fetchone()
