@@ -21,11 +21,37 @@ SCENARIO_TO_ENGINE_VARIANT = {
 
 
 def compile_scenario_pack(
-    manifest: dict[str, Any], *, base_world_manifest: dict[str, Any], seed: int | None = None
+    manifest: dict[str, Any],
+    *,
+    base_world_manifest: dict[str, Any],
+    calibration_result: dict[str, Any] | None = None,
+    seed: int | None = None,
 ) -> dict[str, Any]:
     """Compile only allow-listed intents; never accept arbitrary world numbers."""
     selected_seed = int(base_world_manifest.get("seed", 42) if seed is None else seed)
     base = build_demo_world(selected_seed)
+    selected_calibration = None
+    if calibration_result is not None:
+        accepted = calibration_result.get("accepted_parameter_sets", [])
+        if accepted:
+            selected_calibration = accepted[0]
+            parameters = selected_calibration["parameters"]
+            data = deepcopy(base.model_dump(mode="python"))
+            data["exchange"]["baseline_depth"] = max(10, min(1_000_000, int(parameters["base_order_size"])))
+            spread_ticks = max(1, min(20, round(12.0 / max(parameters["limit_intensity"], 0.1))))
+            for population in data["agents"]["populations"]:
+                if population["type"] == "market_maker":
+                    population["parameters"]["spread_ticks"] = spread_ticks
+                elif population["type"] == "momentum":
+                    population["parameters"]["crowding"] = max(
+                        0.1, min(5.0, parameters["flow_persistence"] + 1.0)
+                    )
+            for asset in data["assets"]:
+                asset["idiosyncratic_volatility"] = max(
+                    0.0001,
+                    min(0.2, asset["idiosyncratic_volatility"] * parameters["volatility_sensitivity"]),
+                )
+            base = WorldSpec.model_validate(data)
     compiled: list[dict[str, Any]] = []
     for index, intervention in enumerate(manifest["interventions"]):
         intervention_type = intervention["intervention_type"]
@@ -58,6 +84,9 @@ def compile_scenario_pack(
         "calibration_checksum": base_world_manifest.get("manifest", {}).get("calibration_checksum"),
         "calibration_run_id": base_world_manifest.get("manifest", {}).get("calibration_run_id"),
         "calibration_stable": base_world_manifest.get("manifest", {}).get("calibration_stable", False),
+        "calibration_parameter_set_id": selected_calibration["parameter_set_id"]
+        if selected_calibration
+        else None,
         "engine_profile": "demo_equities_v1",
         "seed": selected_seed,
         "public_world": base.model_dump(mode="json"),

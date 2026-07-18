@@ -365,9 +365,14 @@ def enterprise_compile_scenario_pack(scenario_pack_id: str) -> dict[str, Any]:
     except KeyError as exc:
         raise HTTPException(404, "scenario pack or base world not found") from exc
     try:
+        calibration_run = None
+        calibration_run_id = base_world["manifest"].get("calibration_run_id")
+        if calibration_run_id:
+            calibration_run = _execution_store().calibration_run(str(calibration_run_id))["result"]
         return compile_scenario_pack(
             {**pack["manifest"], "scenario_pack_id": scenario_pack_id},
             base_world_manifest=base_world,
+            calibration_result=calibration_run,
         )
     except (KeyError, ValueError) as exc:
         raise HTTPException(422, f"scenario pack cannot be compiled: {exc}") from exc
@@ -410,6 +415,11 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
     compiled = compile_scenario_pack(
         {**pack["manifest"], "scenario_pack_id": payload.scenario_pack_id},
         base_world_manifest=base_world,
+        calibration_result=(
+            store.calibration_run(str(base_world["manifest"]["calibration_run_id"]))["result"]
+            if base_world["manifest"].get("calibration_run_id")
+            else None
+        ),
     )
     policy_ids = [str(strategy["builtin_policy_id"]) for strategy in strategies]
     matrix = benchmark_matrix(seeds=tuple(payload.seeds), student_submissions=None)
