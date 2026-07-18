@@ -518,9 +518,19 @@ def enterprise_release_scenario_pack(scenario_pack_id: str, request: Request) ->
     except KeyError as exc:
         raise HTTPException(404, "scenario pack not found") from exc
     try:
-        return store.approve_scenario_pack(scenario_pack_id, _enterprise_actor(request))
+        return store.approve_scenario_pack(
+            new_registry_id("release"), scenario_pack_id, _enterprise_actor(request)
+        )
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+
+
+@app.get("/api/enterprise/scenario-packs/{scenario_pack_id}/release-manifest")
+def enterprise_scenario_pack_release_manifest(scenario_pack_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().scenario_pack_release(scenario_pack_id)
+    except KeyError as exc:
+        raise HTTPException(404, "scenario pack release manifest not found") from exc
 
 
 @app.get("/api/enterprise/strategies")

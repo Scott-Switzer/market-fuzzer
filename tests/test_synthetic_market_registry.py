@@ -189,6 +189,12 @@ def test_governed_regression_suite_persists_evidence_and_gates_release(tmp_path,
     assert released.status_code == 200
     assert released.json()["status"] == "approved"
     assert released.json()["release_gate"]["run_id"] == run_record["run_id"]
+    release_manifest = client.get(
+        f"/api/enterprise/scenario-packs/{pack['scenario_pack_id']}/release-manifest"
+    )
+    assert release_manifest.status_code == 200
+    assert release_manifest.json()["run_hash"] == run_record["run_hash"]
+    assert len(release_manifest.json()["manifest_hash"]) == 64
     assert (
         client.post(f"/api/enterprise/scenario-packs/{pack['scenario_pack_id']}/release").status_code == 409
     )

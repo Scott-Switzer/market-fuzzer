@@ -181,6 +181,12 @@ class ArenaStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_regression_runs_suite
                     ON regression_runs(suite_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS scenario_pack_releases (
+                    release_id TEXT PRIMARY KEY, scenario_pack_id TEXT UNIQUE NOT NULL,
+                    manifest_hash TEXT NOT NULL, suite_id TEXT NOT NULL, run_id TEXT NOT NULL,
+                    run_hash TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY(scenario_pack_id) REFERENCES scenario_packs(scenario_pack_id)
+                );
                 CREATE TABLE IF NOT EXISTS strategies (
                     strategy_id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
                     strategy_type TEXT NOT NULL, builtin_policy_id TEXT, version_label TEXT NOT NULL,
@@ -1052,7 +1058,7 @@ class ArenaStore:
             ).fetchall()
         return [self.scenario_pack(str(row["scenario_pack_id"])) for row in rows]
 
-    def approve_scenario_pack(self, scenario_pack_id: str, actor: str) -> dict[str, Any]:
+    def approve_scenario_pack(self, release_id: str, scenario_pack_id: str, actor: str) -> dict[str, Any]:
         now = utc_now()
         with self.connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -1090,6 +1096,24 @@ class ArenaStore:
                 if row is None:
                     raise KeyError(scenario_pack_id)
                 raise ValueError(f"scenario pack is already {row['status']}")
+            pack = connection.execute(
+                "SELECT manifest_hash FROM scenario_packs WHERE scenario_pack_id = ?",
+                (scenario_pack_id,),
+            ).fetchone()
+            assert pack is not None
+            release_manifest = {
+                "release_id": release_id,
+                "scenario_pack_id": scenario_pack_id,
+                "scenario_pack_manifest_hash": pack["manifest_hash"],
+                "suite_id": evidence["suite_id"],
+                "run_id": evidence["run_id"],
+                "run_hash": evidence["run_hash"],
+                "created_by": actor,
+                "created_at": now,
+            }
+            release_manifest_hash = hashlib.sha256(
+                json.dumps(release_manifest, sort_keys=True).encode()
+            ).hexdigest()
             self._audit_in_transaction(
                 connection,
                 None,
@@ -1103,14 +1127,43 @@ class ArenaStore:
                 },
                 occurred_at=now,
             )
+            connection.execute(
+                """
+                INSERT INTO scenario_pack_releases
+                    (release_id, scenario_pack_id, manifest_hash, suite_id, run_id,
+                     run_hash, created_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    release_id,
+                    scenario_pack_id,
+                    release_manifest_hash,
+                    str(evidence["suite_id"]),
+                    str(evidence["run_id"]),
+                    str(evidence["run_hash"]),
+                    actor,
+                    now,
+                ),
+            )
         return self.scenario_pack(scenario_pack_id) | {
             "release_gate": {
                 "status": "approved",
                 "suite_id": evidence["suite_id"],
                 "run_id": evidence["run_id"],
                 "run_hash": evidence["run_hash"],
-            }
+            },
+            "release_manifest": self.scenario_pack_release(scenario_pack_id),
         }
+
+    def scenario_pack_release(self, scenario_pack_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM scenario_pack_releases WHERE scenario_pack_id = ?",
+                (scenario_pack_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(scenario_pack_id)
+        return dict(row)
 
     def create_regression_suite(self, suite_id: str, payload: dict[str, Any], actor: str) -> dict[str, Any]:
         now = utc_now()
