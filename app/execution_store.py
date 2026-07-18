@@ -1052,9 +1052,7 @@ class ArenaStore:
             ).fetchall()
         return [self.scenario_pack(str(row["scenario_pack_id"])) for row in rows]
 
-    def create_regression_suite(
-        self, suite_id: str, payload: dict[str, Any], actor: str
-    ) -> dict[str, Any]:
+    def create_regression_suite(self, suite_id: str, payload: dict[str, Any], actor: str) -> dict[str, Any]:
         now = utc_now()
         with self.connection() as connection:
             connection.execute(
@@ -1068,7 +1066,7 @@ class ArenaStore:
                     suite_id,
                     payload["name"],
                     payload["scenario_pack_id"],
-                    json.dumps(payload["required_cases"], sort_keys=True),
+                    json.dumps(sorted(payload["required_cases"])),
                     actor,
                     now,
                     now,
@@ -1133,9 +1131,7 @@ class ArenaStore:
 
     def regression_run(self, run_id: str) -> dict[str, Any]:
         with self.connection() as connection:
-            row = connection.execute(
-                "SELECT * FROM regression_runs WHERE run_id = ?", (run_id,)
-            ).fetchone()
+            row = connection.execute("SELECT * FROM regression_runs WHERE run_id = ?", (run_id,)).fetchone()
         if row is None:
             raise KeyError(run_id)
         value = dict(row)

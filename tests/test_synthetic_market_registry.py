@@ -148,7 +148,7 @@ def test_governed_regression_suite_persists_evidence_and_gates_release(tmp_path,
             "intended_question": "Does the declared latency intervention remain reproducible?",
             "interventions": [
                 {
-                    "intervention_type": "latency_shock",
+                    "intervention_type": "liquidity_withdrawal",
                     "severity": "moderate",
                     "start_step": 25,
                     "duration_steps": 5,
@@ -165,7 +165,10 @@ def test_governed_regression_suite_persists_evidence_and_gates_release(tmp_path,
     suite_record = suite.json()
     assert suite_record["status"] == "draft"
     assert len(suite_record["required_cases"]) == 4
-    assert client.post(f"/api/enterprise/regression-suites/{suite_record['suite_id']}/release-check").status_code == 409
+    assert (
+        client.get(f"/api/enterprise/regression-suites/{suite_record['suite_id']}/release-check").status_code
+        == 409
+    )
 
     run = client.post(f"/api/enterprise/regression-suites/{suite_record['suite_id']}/run")
     assert run.status_code == 200
@@ -173,7 +176,7 @@ def test_governed_regression_suite_persists_evidence_and_gates_release(tmp_path,
     assert run_record["status"] == "passed"
     assert run_record["passed_cases"] == run_record["total_cases"] == 4
     assert len(run_record["run_hash"]) == 64
-    eligible = client.post(f"/api/enterprise/regression-suites/{suite_record['suite_id']}/release-check")
+    eligible = client.get(f"/api/enterprise/regression-suites/{suite_record['suite_id']}/release-check")
     assert eligible.status_code == 200
     assert eligible.json()["release_status"] == "eligible"
 
@@ -191,7 +194,7 @@ def test_governed_regression_suite_persists_evidence_and_gates_release(tmp_path,
     failed_run = client.post(f"/api/enterprise/regression-suites/{suite_record['suite_id']}/run")
     assert failed_run.status_code == 200
     assert failed_run.json()["status"] == "failed"
-    blocked = client.post(f"/api/enterprise/regression-suites/{suite_record['suite_id']}/release-check")
+    blocked = client.get(f"/api/enterprise/regression-suites/{suite_record['suite_id']}/release-check")
     assert blocked.status_code == 409
 
 

@@ -392,9 +392,7 @@ def enterprise_regression_suites() -> dict[str, Any]:
 
 
 @app.post("/api/enterprise/regression-suites")
-def enterprise_create_regression_suite(
-    payload: RegressionSuiteCreate, request: Request
-) -> dict[str, Any]:
+def enterprise_create_regression_suite(payload: RegressionSuiteCreate, request: Request) -> dict[str, Any]:
     store = _execution_store()
     try:
         store.scenario_pack(payload.scenario_pack_id)
@@ -456,10 +454,14 @@ def enterprise_run_regression_suite(suite_id: str, request: Request) -> dict[str
         },
         "intervention_steps_preserved": {
             "passed": all(
-                all(event.get("simulation_step") == world["intent"]["start_step"] for event in world["world"].get("events", []))
+                bool(world["world"].get("events"))
+                and all(
+                    event.get("simulation_step") == world["intent"]["start_step"]
+                    for event in world["world"].get("events", [])
+                )
                 for world in protected_worlds
             ),
-            "detail": "Compiled events retain each declared intervention start step.",
+            "detail": "Every compiled world contains events at its declared intervention start step.",
         },
         "base_manifest_stable": {
             "passed": first.get("base_world_manifest_hash") == base_world.get("manifest_hash"),
@@ -472,8 +474,7 @@ def enterprise_run_regression_suite(suite_id: str, request: Request) -> dict[str
         "compile_hash": first.get("compile_hash"),
         "world_hashes": world_hashes,
         "cases": [
-            {"case": case, **cases[case], "required": case in suite["required_cases"]}
-            for case in cases
+            {"case": case, **cases[case], "required": case in suite["required_cases"]} for case in cases
         ],
     }
     required_results = [cases[case]["passed"] for case in suite["required_cases"]]
@@ -488,7 +489,7 @@ def enterprise_run_regression_suite(suite_id: str, request: Request) -> dict[str
     )
 
 
-@app.post("/api/enterprise/regression-suites/{suite_id}/release-check")
+@app.get("/api/enterprise/regression-suites/{suite_id}/release-check")
 def enterprise_regression_release_check(suite_id: str) -> dict[str, Any]:
     try:
         suite = _execution_store().regression_suite(suite_id)
