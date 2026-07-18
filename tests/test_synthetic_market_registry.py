@@ -1,8 +1,11 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
 from app.calibration import build_demo_calibration_pack
+from app.execution_store import ArenaStore
 from app.governance import build_enterprise_validation_report
 
 
@@ -186,6 +189,19 @@ def test_governed_regression_suite_persists_evidence_and_gates_release(tmp_path,
     assert released.status_code == 200
     assert released.json()["status"] == "approved"
     assert released.json()["release_gate"]["run_id"] == run_record["run_id"]
+    assert (
+        client.post(f"/api/enterprise/scenario-packs/{pack['scenario_pack_id']}/release").status_code == 409
+    )
+    audit_store = ArenaStore(tmp_path / "registry.sqlite3")
+    with audit_store.connection() as connection:
+        approval_audit = connection.execute(
+            "SELECT details_json FROM audit_events WHERE action = 'scenario_pack_approved'"
+        ).fetchone()
+    assert approval_audit is not None
+    audit_details = json.loads(approval_audit["details_json"])
+    assert audit_details["suite_id"] == suite_record["suite_id"]
+    assert audit_details["run_id"] == run_record["run_id"]
+    assert audit_details["run_hash"] == run_record["run_hash"]
 
     import importlib
 
