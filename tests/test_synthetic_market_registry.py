@@ -156,7 +156,7 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
             ],
         },
     ).json()
-    strategy = client.post(
+    client.post(
         "/api/enterprise/strategies",
         json={
             "name": "Guarded POV adapter",
@@ -164,11 +164,33 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
             "builtin_policy_id": "guarded_pov",
         },
     ).json()
+    external_strategy_response = client.post(
+        "/api/enterprise/strategies",
+        json={
+            "name": "External deterministic adapter",
+            "description": "A bounded external adapter contract routed through the deterministic engine.",
+            "strategy_type": "external_adapter",
+            "external_adapter": {
+                "adapter_id": "declarative_in_process_v1",
+                "adapter_version": "1.0.0",
+                "policy_id": "guarded_pov",
+                "input_observation_schema": "market_observation_v1",
+                "output_action_schema": "execution_action_v1",
+                "timeout_ms": 250,
+                "error_policy": "fail_cell",
+            },
+        },
+    )
+    assert external_strategy_response.status_code == 200
+    external_strategy = external_strategy_response.json()
+    assert external_strategy["strategy_type"] == "external_adapter"
+    assert external_strategy["builtin_policy_id"] == "guarded_pov"
+    assert len(external_strategy["adapter_hash"]) == 64
     experiment = client.post(
         "/api/enterprise/experiments",
         json={
             "name": "Guarded POV latency stress",
-            "strategy_ids": [strategy["strategy_id"]],
+            "strategy_ids": [external_strategy["strategy_id"]],
             "scenario_pack_id": pack["scenario_pack_id"],
             "seeds": [42],
         },
@@ -181,7 +203,7 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
         "/api/enterprise/experiment-jobs",
         json={
             "name": "Resumable latency stress",
-            "strategy_ids": [strategy["strategy_id"]],
+            "strategy_ids": [external_strategy["strategy_id"]],
             "scenario_pack_id": pack["scenario_pack_id"],
             "seeds": [43],
         },
@@ -198,6 +220,8 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
     assert len(resumed_record["cells"]) == 1
     assert resumed_record["cells"][0]["status"] == "completed"
     assert resumed_record["cells"][0]["result"]["execution_source"] == "compiled_scenario_pack"
+    assert resumed_record["cells"][0]["result"]["adapter_provenance"]["strategy_type"] == "external_adapter"
+    assert len(resumed_record["cells"][0]["result"]["adapter_provenance"]["adapter_hash"]) == 64
     assert len(resumed_record["cells"][0]["scenario_hash"]) == 64
     assert len(resumed_record["cells"][0]["result_hash"]) == 64
     assert resumed_record["artifact"]["content_hash"]
@@ -208,6 +232,17 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
     experiment_detail = client.get(f"/api/enterprise/experiments/{resumed_record['experiment_id']}").json()
     assert experiment_detail["result"]["strategy_results"][0]["execution_source"] == "compiled_scenario_pack"
     assert experiment_detail["result"]["arena_baseline_comparator"]["rows"]
+    artifact_detail = client.get(
+        f"/api/enterprise/experiments/{resumed_record['experiment_id']}/artifacts/experiment-result"
+    )
+    assert artifact_detail.status_code == 200
+    assert artifact_detail.json()["manifest"]["schema_version"] == "artifact-manifest-v1"
+    assert len(artifact_detail.json()["manifest"]["world_hashes"]) == 1
+    download = client.get(
+        f"/api/enterprise/experiments/{resumed_record['experiment_id']}/artifacts/experiment-result/download"
+    )
+    assert download.status_code == 200
+    assert "attachment" in download.headers["content-disposition"]
     jobs = client.get("/api/enterprise/experiment-jobs?limit=5")
     assert jobs.status_code == 200
     assert jobs.json()["jobs"][0]["status"] == "completed"

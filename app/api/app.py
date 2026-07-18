@@ -395,8 +395,13 @@ def enterprise_create_strategy(payload: StrategyCreate, request: Request) -> dic
     actor = _enterprise_actor(request)
     if payload.strategy_type == "arena_policy" and payload.builtin_policy_id is None:
         raise HTTPException(422, "arena_policy strategies require a registered built-in policy ID")
+    if payload.strategy_type == "external_adapter" and payload.external_adapter is None:
+        raise HTTPException(422, "external_adapter strategies require a bounded adapter contract")
     strategy_id = new_registry_id("strategy")
-    return _execution_store().create_strategy(strategy_id, payload.model_dump(mode="json"), actor)
+    record = payload.model_dump(mode="json")
+    if payload.external_adapter is not None:
+        record["builtin_policy_id"] = payload.external_adapter.policy_id
+    return _execution_store().create_strategy(strategy_id, record, actor)
 
 
 @app.get("/api/enterprise/strategies/{strategy_id}")
@@ -476,6 +481,22 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
         policy_ids=tuple(policy_ids),
     )
     selected = matrix["rows"]
+    strategy_by_policy = {
+        str(strategy["builtin_policy_id"]): strategy for strategy in strategies
+    }
+    selected = [
+        row
+        | {
+            "adapter_provenance": {
+                "strategy_type": strategy_by_policy[str(row["policy_id"])]["strategy_type"],
+                "adapter_hash": strategy_by_policy[str(row["policy_id"])].get("adapter_hash"),
+                "adapter_contract": strategy_by_policy[str(row["policy_id"])].get(
+                    "external_adapter"
+                ),
+            }
+        }
+        for row in selected
+    ]
     result = {
         "experiment_type": "baseline_vs_protected_benchmark",
         "compile_hash": compiled["compile_hash"],
@@ -603,6 +624,11 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
                             source_world_hash=world_hash,
                             scenario_pack_id=payload.scenario_pack_id,
                         )
+                        adapter_provenance = {
+                            "strategy_type": strategy["strategy_type"],
+                            "adapter_hash": strategy.get("adapter_hash"),
+                            "adapter_contract": strategy.get("external_adapter"),
+                        }
                         store.upsert_experiment_cell(
                             new_registry_id("cell"),
                             job_id,
@@ -611,9 +637,21 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
                             world_hash=world_hash,
                             seed=seed,
                             status="completed",
-                            result={**row, "strategy_id": strategy_id, "seed": seed},
+                            result={
+                                **row,
+                                "strategy_id": strategy_id,
+                                "seed": seed,
+                                "adapter_provenance": adapter_provenance,
+                            },
                         )
-                        completed_rows.append({**row, "strategy_id": strategy_id, "seed": seed})
+                        completed_rows.append(
+                            {
+                                **row,
+                                "strategy_id": strategy_id,
+                                "seed": seed,
+                                "adapter_provenance": adapter_provenance,
+                            }
+                        )
                     except Exception as exc:
                         store.upsert_experiment_cell(
                             new_registry_id("cell"),
@@ -668,7 +706,23 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
             },
         )
         artifact = store.save_experiment_artifact(
-            new_registry_id("artifact"), job_id, "experiment-result", experiment
+            new_registry_id("artifact"),
+            job_id,
+            "experiment-result",
+            experiment,
+            manifest={
+                "experiment_id": experiment["experiment_id"],
+                "scenario_pack_id": payload.scenario_pack_id,
+                "scenario_hashes": sorted(
+                    {cell["scenario_hash"] for cell in store.experiment_cells(job_id) if cell["status"] == "completed"}
+                ),
+                "world_hashes": sorted(
+                    {cell["world_hash"] for cell in store.experiment_cells(job_id) if cell["status"] == "completed"}
+                ),
+                "seeds": sorted({cell["seed"] for cell in store.experiment_cells(job_id)}),
+                "strategy_ids": sorted({cell["strategy_id"] for cell in store.experiment_cells(job_id)}),
+                "creator": _enterprise_actor(request),
+            },
         )
         return store.update_experiment_job(
             job_id,
@@ -693,6 +747,27 @@ def enterprise_experiment_artifact(job_id: str, kind: str) -> dict[str, Any]:
         return _execution_store().experiment_artifact(job_id, kind)
     except KeyError as exc:
         raise HTTPException(404, "experiment artifact not found") from exc
+
+
+@app.get("/api/enterprise/experiments/{experiment_id}/artifacts/{kind}")
+def enterprise_experiment_artifact_by_experiment(experiment_id: str, kind: str) -> dict[str, Any]:
+    try:
+        return _execution_store().experiment_artifact_for_experiment(experiment_id, kind)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment artifact not found") from exc
+
+
+@app.get("/api/enterprise/experiments/{experiment_id}/artifacts/{kind}/download")
+def enterprise_experiment_artifact_download(experiment_id: str, kind: str) -> Response:
+    try:
+        artifact = _execution_store().experiment_artifact_for_experiment(experiment_id, kind)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment artifact not found") from exc
+    return Response(
+        content=json.dumps(artifact["content"], indent=2, sort_keys=True),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{experiment_id}-{kind}.json"'},
+    )
 
 
 @app.get("/api/enterprise/experiments/{experiment_id}")

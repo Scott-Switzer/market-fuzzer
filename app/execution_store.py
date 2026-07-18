@@ -173,6 +173,11 @@ class ArenaStore:
                     intended_use TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS strategy_adapters (
+                    strategy_id TEXT PRIMARY KEY, contract_json TEXT NOT NULL,
+                    adapter_hash TEXT NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY(strategy_id) REFERENCES strategies(strategy_id)
+                );
                 CREATE TABLE IF NOT EXISTS stress_experiments (
                     experiment_id TEXT PRIMARY KEY, name TEXT NOT NULL, scenario_pack_id TEXT NOT NULL,
                     strategy_ids_json TEXT NOT NULL, seeds_json TEXT NOT NULL, status TEXT NOT NULL,
@@ -198,6 +203,12 @@ class ArenaStore:
                     artifact_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, kind TEXT NOT NULL,
                     content_json TEXT NOT NULL, content_hash TEXT NOT NULL, created_at TEXT NOT NULL,
                     UNIQUE(job_id, kind), FOREIGN KEY(job_id) REFERENCES experiment_jobs(job_id)
+                );
+                CREATE TABLE IF NOT EXISTS artifact_manifests (
+                    manifest_id TEXT PRIMARY KEY, artifact_id TEXT UNIQUE NOT NULL,
+                    manifest_json TEXT NOT NULL, manifest_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(artifact_id) REFERENCES experiment_artifacts(artifact_id)
                 );
                 CREATE TABLE IF NOT EXISTS validation_reports (
                     report_id TEXT PRIMARY KEY, experiment_id TEXT UNIQUE NOT NULL,
@@ -1029,6 +1040,11 @@ class ArenaStore:
 
     def create_strategy(self, strategy_id: str, payload: dict[str, Any], actor: str) -> dict[str, Any]:
         now = utc_now()
+        adapter = payload.get("external_adapter")
+        adapter_hash = None
+        if adapter is not None:
+            encoded = json.dumps(adapter, sort_keys=True, separators=(",", ":"))
+            adapter_hash = hashlib.sha256(encoded.encode()).hexdigest()
         with self.connection() as connection:
             connection.execute(
                 "INSERT INTO strategies VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1045,6 +1061,11 @@ class ArenaStore:
                     now,
                 ),
             )
+            if adapter is not None and adapter_hash is not None:
+                connection.execute(
+                    "INSERT INTO strategy_adapters VALUES (?, ?, ?, ?)",
+                    (strategy_id, json.dumps(adapter, sort_keys=True), adapter_hash, now),
+                )
             self._audit_in_transaction(
                 connection, None, actor, "strategy_registered", {"strategy_id": strategy_id}, occurred_at=now
             )
@@ -1057,12 +1078,21 @@ class ArenaStore:
             ).fetchone()
         if row is None:
             raise KeyError(strategy_id)
-        return dict(row)
+        value = dict(row)
+        with self.connection() as connection:
+            adapter = connection.execute(
+                "SELECT contract_json, adapter_hash FROM strategy_adapters WHERE strategy_id = ?",
+                (strategy_id,),
+            ).fetchone()
+        if adapter is not None:
+            value["external_adapter"] = json.loads(adapter["contract_json"])
+            value["adapter_hash"] = adapter["adapter_hash"]
+        return value
 
     def strategies(self) -> list[dict[str, Any]]:
         with self.connection() as connection:
-            rows = connection.execute("SELECT * FROM strategies ORDER BY created_at DESC").fetchall()
-        return [dict(row) for row in rows]
+            rows = connection.execute("SELECT strategy_id FROM strategies ORDER BY created_at DESC").fetchall()
+        return [self.strategy(str(row["strategy_id"])) for row in rows]
 
     def save_stress_experiment(
         self, experiment_id: str, payload: dict[str, Any], actor: str, result: dict[str, Any]
@@ -1234,7 +1264,12 @@ class ArenaStore:
         return [self._experiment_cell_value(row) for row in rows]
 
     def save_experiment_artifact(
-        self, artifact_id: str, job_id: str, kind: str, content: dict[str, Any]
+        self,
+        artifact_id: str,
+        job_id: str,
+        kind: str,
+        content: dict[str, Any],
+        manifest: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         encoded = json.dumps(content, sort_keys=True, separators=(",", ":"))
         record = {
@@ -1250,6 +1285,27 @@ class ArenaStore:
                 "INSERT OR REPLACE INTO experiment_artifacts VALUES (?, ?, ?, ?, ?, ?)",
                 (artifact_id, job_id, kind, encoded, record["content_hash"], record["created_at"]),
             )
+            manifest_value = {
+                "schema_version": "artifact-manifest-v1",
+                "job_id": job_id,
+                "artifact_id": artifact_id,
+                "artifact_kind": kind,
+                "content_hash": record["content_hash"],
+                "created_at": record["created_at"],
+                **(manifest or {}),
+            }
+            manifest_encoded = json.dumps(manifest_value, sort_keys=True, separators=(",", ":"))
+            connection.execute(
+                "INSERT OR REPLACE INTO artifact_manifests VALUES (?, ?, ?, ?, ?)",
+                (
+                    f"manifest-{artifact_id}",
+                    artifact_id,
+                    manifest_encoded,
+                    hashlib.sha256(manifest_encoded.encode()).hexdigest(),
+                    record["created_at"],
+                ),
+            )
+            record["manifest"] = manifest_value
         return record
 
     def experiment_artifact(self, job_id: str, kind: str) -> dict[str, Any]:
@@ -1261,6 +1317,38 @@ class ArenaStore:
             raise KeyError((job_id, kind))
         value = dict(row)
         value["content"] = json.loads(value.pop("content_json"))
+        with self.connection() as connection:
+            manifest = connection.execute(
+                "SELECT manifest_json, manifest_hash FROM artifact_manifests WHERE artifact_id = ?",
+                (value["artifact_id"],),
+            ).fetchone()
+        if manifest is not None:
+            value["manifest"] = json.loads(manifest["manifest_json"])
+            value["manifest_hash"] = manifest["manifest_hash"]
+        return value
+
+    def experiment_artifact_for_experiment(self, experiment_id: str, kind: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT a.* FROM experiment_artifacts a
+                JOIN experiment_jobs j ON j.job_id = a.job_id
+                WHERE j.experiment_id = ? AND a.kind = ?
+                """,
+                (experiment_id, kind),
+            ).fetchone()
+        if row is None:
+            raise KeyError((experiment_id, kind))
+        value = dict(row)
+        value["content"] = json.loads(value.pop("content_json"))
+        with self.connection() as connection:
+            manifest = connection.execute(
+                "SELECT manifest_json, manifest_hash FROM artifact_manifests WHERE artifact_id = ?",
+                (value["artifact_id"],),
+            ).fetchone()
+        if manifest is not None:
+            value["manifest"] = json.loads(manifest["manifest_json"])
+            value["manifest_hash"] = manifest["manifest_hash"]
         return value
 
     def save_validation_report(
