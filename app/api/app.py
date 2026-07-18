@@ -8,7 +8,6 @@ import json
 import os
 import sqlite3
 import time
-from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
@@ -451,11 +450,15 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
                     "completion_pct": simulation.summary["completion_pct"],
                 }
 
-            with ThreadPoolExecutor(
-                max_workers=max(1, min(4, len(ensemble_compiled["protected_worlds"])))
-            ) as pool:
-                world_results = list(pool.map(run_cell, ensemble_compiled["protected_worlds"]))
-            world_results.sort(key=lambda result: result["world_hash"])
+            # Keep execution single-threaded until the simulator has an explicit
+            # worker boundary; this preserves restart safety and avoids sharing
+            # mutable engine state across request threads.
+            world_results = [
+                run_cell(protected)
+                for protected in sorted(
+                    ensemble_compiled["protected_worlds"], key=lambda item: item["world_hash"]
+                )
+            ]
             ensemble_runs.append(
                 {
                     "parameter_set_id": parameter_set["parameter_set_id"],
