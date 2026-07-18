@@ -56,6 +56,8 @@ def compile_scenario_pack(
         "base_world_manifest_hash": base_world_manifest.get("manifest_hash"),
         "calibration_pack_id": base_world_manifest.get("manifest", {}).get("calibration_pack_id"),
         "calibration_checksum": base_world_manifest.get("manifest", {}).get("calibration_checksum"),
+        "calibration_run_id": base_world_manifest.get("manifest", {}).get("calibration_run_id"),
+        "calibration_stable": base_world_manifest.get("manifest", {}).get("calibration_stable", False),
         "engine_profile": "demo_equities_v1",
         "seed": selected_seed,
         "public_world": base.model_dump(mode="json"),

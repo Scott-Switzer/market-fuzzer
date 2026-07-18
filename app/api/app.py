@@ -300,8 +300,16 @@ def enterprise_world(world_id: str) -> dict[str, Any]:
 @app.post("/api/enterprise/worlds/{world_id}/calibration")
 def enterprise_attach_calibration(world_id: str, pack: CalibrationPackV1, request: Request) -> dict[str, Any]:
     actor = _enterprise_actor(request)
+    calibration = calibrate_bootstrap(pack, mode="quick")
+    calibration_run_id = new_registry_id("calibration-run")
     try:
-        return _execution_store().attach_calibration_pack(world_id, pack.model_dump(mode="json"), actor)
+        return _execution_store().attach_calibration_pack(
+            world_id,
+            pack.model_dump(mode="json"),
+            actor,
+            calibration.model_dump(mode="json"),
+            calibration_run_id,
+        )
     except KeyError as exc:
         raise HTTPException(404, "synthetic world not found") from exc
 
@@ -312,6 +320,14 @@ def enterprise_calibration_pack(pack_id: str) -> dict[str, Any]:
         return _execution_store().calibration_pack(pack_id)
     except KeyError as exc:
         raise HTTPException(404, "calibration pack not found") from exc
+
+
+@app.get("/api/enterprise/calibration-runs/{calibration_run_id}")
+def enterprise_calibration_run(calibration_run_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().calibration_run(calibration_run_id)
+    except KeyError as exc:
+        raise HTTPException(404, "calibration run not found") from exc
 
 
 @app.get("/api/enterprise/scenario-packs")

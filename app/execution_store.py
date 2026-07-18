@@ -193,6 +193,12 @@ class ArenaStore:
                     attached_by TEXT NOT NULL, FOREIGN KEY(world_id) REFERENCES synthetic_worlds(world_id),
                     FOREIGN KEY(pack_id) REFERENCES calibration_packs(pack_id)
                 );
+                CREATE TABLE IF NOT EXISTS calibration_runs (
+                    calibration_run_id TEXT PRIMARY KEY, pack_id TEXT NOT NULL,
+                    mode TEXT NOT NULL, result_json TEXT NOT NULL, result_hash TEXT NOT NULL,
+                    created_by TEXT NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY(pack_id) REFERENCES calibration_packs(pack_id)
+                );
                 CREATE INDEX IF NOT EXISTS idx_submission_challenge_user
                     ON policy_submissions(challenge_id, user_id);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_final_submission
@@ -846,10 +852,19 @@ class ArenaStore:
             ).fetchall()
         return [self.synthetic_world(str(row["world_id"])) for row in rows]
 
-    def attach_calibration_pack(self, world_id: str, pack: dict[str, Any], actor: str) -> dict[str, Any]:
+    def attach_calibration_pack(
+        self,
+        world_id: str,
+        pack: dict[str, Any],
+        actor: str,
+        calibration_run: dict[str, Any],
+        calibration_run_id: str,
+    ) -> dict[str, Any]:
         now = utc_now()
         payload = json.dumps(pack, sort_keys=True, separators=(",", ":"))
         checksum = str(pack["checksum"])
+        run_payload = json.dumps(calibration_run, sort_keys=True, separators=(",", ":"))
+        run_hash = hashlib.sha256(run_payload.encode()).hexdigest()
         with self.connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             world = connection.execute(
@@ -861,6 +876,18 @@ class ArenaStore:
                 "INSERT OR IGNORE INTO calibration_packs VALUES (?, ?, ?, ?, ?)",
                 (pack["pack_id"], payload, checksum, actor, now),
             )
+            connection.execute(
+                "INSERT OR IGNORE INTO calibration_runs VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    calibration_run_id,
+                    pack["pack_id"],
+                    calibration_run["mode"],
+                    run_payload,
+                    run_hash,
+                    actor,
+                    now,
+                ),
+            )
             latest = connection.execute(
                 "SELECT version, manifest_json FROM synthetic_world_versions WHERE world_id = ? ORDER BY version DESC LIMIT 1",
                 (world_id,),
@@ -870,6 +897,8 @@ class ArenaStore:
             manifest = json.loads(latest["manifest_json"])
             manifest["calibration_pack_id"] = pack["pack_id"]
             manifest["calibration_checksum"] = checksum
+            manifest["calibration_run_id"] = calibration_run_id
+            manifest["calibration_stable"] = bool(calibration_run["heldout_stability"]["stable"])
             manifest["updated_at"] = now
             manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
             connection.execute(
@@ -891,7 +920,12 @@ class ArenaStore:
                 None,
                 actor,
                 "calibration_pack_attached",
-                {"world_id": world_id, "pack_id": pack["pack_id"], "manifest_hash": manifest_hash},
+                {
+                    "world_id": world_id,
+                    "pack_id": pack["pack_id"],
+                    "calibration_run_id": calibration_run_id,
+                    "manifest_hash": manifest_hash,
+                },
                 occurred_at=now,
             )
         return self.synthetic_world(world_id)
@@ -905,6 +939,17 @@ class ArenaStore:
             raise KeyError(pack_id)
         value = dict(row)
         value["pack"] = json.loads(value.pop("pack_json"))
+        return value
+
+    def calibration_run(self, calibration_run_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM calibration_runs WHERE calibration_run_id = ?", (calibration_run_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(calibration_run_id)
+        value = dict(row)
+        value["result"] = json.loads(value.pop("result_json"))
         return value
 
     def create_scenario_pack(

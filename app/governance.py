@@ -82,9 +82,15 @@ def build_enterprise_validation_report(experiment: dict) -> EnterpriseValidation
         ),
         FitForUseVector(
             name="calibration_stability",
-            verdict="LIMITED" if result.get("calibration_pack_id") else "NOT_EVALUATED",
+            verdict="FIT"
+            if result.get("calibration_stable")
+            else "LIMITED"
+            if result.get("calibration_pack_id")
+            else "NOT_EVALUATED",
             summary=(
-                "A versioned calibration pack is attached; bootstrap stability evidence is not yet persisted on the experiment."
+                "A versioned calibration pack is attached and its held-out bootstrap stability check passed."
+                if result.get("calibration_stable")
+                else "A versioned calibration pack is attached; its held-out bootstrap stability check did not pass."
                 if result.get("calibration_pack_id")
                 else "No calibration pack is attached to this experiment."
             ),

@@ -49,6 +49,13 @@ def test_real_calibration_pack_attaches_as_a_new_world_version(tmp_path, monkeyp
     calibrated = attached.json()
     assert calibrated["version"] == 2
     assert calibrated["manifest"]["calibration_pack_id"] == pack["pack_id"]
+    assert calibrated["manifest"]["calibration_run_id"].startswith("calibration-run-")
+    assert (
+        client.get(
+            f"/api/enterprise/calibration-runs/{calibrated['manifest']['calibration_run_id']}"
+        ).status_code
+        == 200
+    )
     assert client.get(f"/api/enterprise/calibration-packs/{pack['pack_id']}").status_code == 200
 
 
