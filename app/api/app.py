@@ -274,6 +274,11 @@ def synthetic_market_world_landing() -> FileResponse:
     return FileResponse(ROOT / "static" / "synthetic-market-world.html")
 
 
+@app.get("/strategy-stress-lab")
+def strategy_stress_lab_landing() -> FileResponse:
+    return FileResponse(ROOT / "static" / "stress-lab.html")
+
+
 @app.get("/api/enterprise/worlds")
 def enterprise_worlds() -> dict[str, Any]:
     return {"worlds": _execution_store().synthetic_worlds()}
@@ -468,6 +473,11 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
     }
     experiment_id = new_registry_id("experiment")
     return store.save_stress_experiment(experiment_id, payload.model_dump(mode="json"), actor, result)
+
+
+@app.get("/api/enterprise/experiments")
+def enterprise_experiments() -> dict[str, Any]:
+    return {"experiments": _execution_store().stress_experiments()}
 
 
 @app.get("/api/enterprise/experiments/{experiment_id}")

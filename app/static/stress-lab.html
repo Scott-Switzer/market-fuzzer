@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Strategy Stress Lab · Synthetic Market World</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <style>
+      .lab-shell{max-width:1180px;margin:0 auto;padding:38px 22px 70px}.lab-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.lab-grid .wide{grid-column:1/-1}.lab-form{display:grid;gap:12px}.lab-form label{display:grid;gap:6px;font-weight:700}.lab-form input,.lab-form select{padding:11px;border:1px solid #ccd3dd;border-radius:8px;background:#fff}.lab-form button{justify-self:start}.lab-table{width:100%;border-collapse:collapse}.lab-table th,.lab-table td{text-align:left;padding:10px;border-bottom:1px solid #e5e9ef;font-size:.9rem}.lab-table th{color:#55606f}.lab-status{min-height:24px}.report-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.report-metric{padding:12px;border:1px solid #e3e7ee;border-radius:8px}.report-metric b{display:block;font-size:1.25rem}.muted{color:#667085}@media(max-width:760px){.lab-grid{grid-template-columns:1fr}.lab-grid .wide{grid-column:auto}.report-grid{grid-template-columns:1fr}}
+    </style>
+  </head>
+  <body>
+    <header><a class="brand" href="/synthetic-market-world">SYNTHETIC <i>MARKET WORLD</i></a><nav><a href="/synthetic-market-world">World Registry</a><a href="/">Arena</a><a href="/market-fuzzer">Market Fuzzer ↗</a></nav></header>
+    <main class="lab-shell">
+      <p class="eyebrow">ENTERPRISE STRATEGY VALIDATION</p>
+      <h1>Strategy Stress Lab</h1>
+      <p class="muted">Run registered strategies through governed scenario packs, then inspect deterministic evidence and calibration uncertainty.</p>
+      <div class="lab-grid">
+        <section class="panel"><div class="card-label">REGISTER STRATEGY</div><form id="strategy-form" class="lab-form"><label>Name<input id="strategy-name" required value="Guarded POV adapter" /></label><label>Description<input id="strategy-description" required value="A bounded execution policy for stress testing." /></label><label>Built-in adapter<select id="strategy-policy"><option value="guarded_pov">Guarded POV</option><option value="aggressive_pov">Aggressive POV</option><option value="twap">TWAP</option><option value="completion_first">Completion first</option></select></label><button class="primary" type="submit">Register strategy</button></form><p id="strategy-status" class="lab-status muted"></p></section>
+        <section class="panel"><div class="card-label">RUN EXPERIMENT</div><form id="experiment-form" class="lab-form"><label>Experiment name<input id="experiment-name" required value="Execution resilience sweep" /></label><label>Scenario pack<select id="scenario-select" required></select></label><label>Strategy<select id="strategy-select" required></select></label><label>Seeds<input id="seed-input" value="41,42" /></label><button class="primary" type="submit">Run stress experiment</button></form><p id="experiment-status" class="lab-status muted"></p></section>
+        <section class="panel wide"><div class="card-label">EXPERIMENT HISTORY</div><table class="lab-table"><thead><tr><th>Experiment</th><th>Status</th><th>Scenario</th><th>Actions</th></tr></thead><tbody id="experiment-rows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table></section>
+        <section id="report-panel" class="panel wide" hidden><div class="card-label">GOVERNED REPORT</div><div id="report-content"></div></section>
+      </div>
+    </main>
+    <script>
+      const $=id=>document.getElementById(id); const api=async(url,opts={})=>{const r=await fetch(url,{headers:{"Content-Type":"application/json",...(opts.headers||{})},...opts});const body=await r.json().catch(()=>({}));if(!r.ok)throw Error(body.detail||`Request failed (${r.status})`);return body};
+      let worlds=[],packs=[],strategies=[],experiments=[];
+      const esc=x=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+      async function load(){[worlds,packs,strategies,experiments]=await Promise.all([api('/api/enterprise/worlds').then(x=>x.worlds),api('/api/enterprise/scenario-packs').then(x=>x.scenario_packs),api('/api/enterprise/strategies').then(x=>x.strategies),api('/api/enterprise/experiments').then(x=>x.experiments)]);$('scenario-select').innerHTML=packs.length?packs.map(x=>`<option value="${esc(x.scenario_pack_id)}">${esc(x.name)}</option>`).join(''):'<option value="">No scenario packs registered</option>';renderStrategies();renderExperiments()}
+      function renderStrategies(){$('strategy-select').innerHTML=strategies.length?strategies.map(x=>`<option value="${esc(x.strategy_id)}">${esc(x.name)} · ${esc(x.version_label)}</option>`).join(''):'<option value="">Register a strategy first</option>'}
+      function renderExperiments(){$('experiment-rows').innerHTML=experiments.length?experiments.map(x=>`<tr><td>${esc(x.name)}</td><td>${esc(x.status)}</td><td><code>${esc(x.scenario_pack_id)}</code></td><td><button data-id="${esc(x.experiment_id)}" class="view-report">Validate / view report</button></td></tr>`).join(''):'<tr><td colspan="4" class="muted">No experiments yet.</td></tr>';document.querySelectorAll('.view-report').forEach(b=>b.onclick=()=>viewReport(b.dataset.id))}
+      $('strategy-form').onsubmit=async e=>{e.preventDefault();$('strategy-status').textContent='Registering…';try{await api('/api/enterprise/strategies',{method:'POST',body:JSON.stringify({name:$('strategy-name').value,description:$('strategy-description').value,strategy_type:'arena_policy',builtin_policy_id:$('strategy-policy').value})});$('strategy-status').textContent='Strategy registered.';await load()}catch(err){$('strategy-status').textContent=err.message}}
+      $('experiment-form').onsubmit=async e=>{e.preventDefault();$('experiment-status').textContent='Running deterministic ensemble…';try{await api('/api/enterprise/experiments',{method:'POST',body:JSON.stringify({name:$('experiment-name').value,strategy_ids:[$('strategy-select').value],scenario_pack_id:$('scenario-select').value,seeds:$('seed-input').value.split(',').map(x=>Number(x.trim()))})});$('experiment-status').textContent='Experiment completed and persisted.';await load()}catch(err){$('experiment-status').textContent=err.message}}
+      async function viewReport(id){$('report-panel').hidden=false;$('report-content').innerHTML='<p class="muted">Building governed report…</p>';try{let r=await api(`/api/enterprise/experiments/${id}/validation`,{method:'GET'}).catch(()=>api(`/api/enterprise/experiments/${id}/validate`,{method:'POST'}));let report=r.report;let ensemble=report.calibration_ensemble;let metrics=(ensemble.metrics||[]).map(x=>`<div class="report-metric"><small>${esc(x.metric)}</small><b>${x.mean.toFixed(3)}</b><span class="muted">p05 ${x.p05.toFixed(3)} · p95 ${x.p95.toFixed(3)}</span></div>`).join('');$('report-content').innerHTML=`<h2>Verdict: ${esc(report.overall_verdict)}</h2><p>${esc(report.limitations.join(' '))}</p><div class="report-grid">${metrics||'<p class="muted">No ensemble metrics attached.</p>'}</div><p><code>Report hash: ${esc(report.report_hash)}</code></p><a class="button primary" href="/api/enterprise/experiments/${id}/validation/export">Export JSON evidence</a>`}catch(err){$('report-content').innerHTML=`<p>${esc(err.message)}</p>`}}
+      load().catch(err=>{$('experiment-status').textContent=err.message});
+    </script>
+  </body>
+</html>

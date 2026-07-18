@@ -1086,6 +1086,13 @@ class ArenaStore:
         value.pop("result_json", None)
         return value
 
+    def stress_experiments(self) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT experiment_id FROM stress_experiments ORDER BY created_at DESC"
+            ).fetchall()
+        return [self.stress_experiment(str(row["experiment_id"])) for row in rows]
+
     def save_validation_report(
         self, report_id: str, experiment_id: str, report: dict[str, Any], actor: str
     ) -> dict[str, Any]:
