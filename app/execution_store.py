@@ -178,6 +178,17 @@ class ArenaStore:
                     strategy_ids_json TEXT NOT NULL, seeds_json TEXT NOT NULL, status TEXT NOT NULL,
                     result_json TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS experiment_jobs (
+                    job_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL, status TEXT NOT NULL,
+                    progress_json TEXT NOT NULL, experiment_id TEXT, created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    FOREIGN KEY(experiment_id) REFERENCES stress_experiments(experiment_id)
+                );
+                CREATE TABLE IF NOT EXISTS experiment_artifacts (
+                    artifact_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, kind TEXT NOT NULL,
+                    content_json TEXT NOT NULL, content_hash TEXT NOT NULL, created_at TEXT NOT NULL,
+                    UNIQUE(job_id, kind), FOREIGN KEY(job_id) REFERENCES experiment_jobs(job_id)
+                );
                 CREATE TABLE IF NOT EXISTS validation_reports (
                     report_id TEXT PRIMARY KEY, experiment_id TEXT UNIQUE NOT NULL,
                     report_json TEXT NOT NULL, report_hash TEXT NOT NULL,
@@ -1110,6 +1121,68 @@ class ArenaStore:
                 value["has_result"] = bool(result_json)
             results.append(value)
         return results
+
+    def create_experiment_job(self, job_id: str, payload: dict[str, Any], actor: str) -> dict[str, Any]:
+        now = utc_now()
+        progress = {"completed_cells": 0, "total_cells": 0, "percent": 0}
+        with self.connection() as connection:
+            connection.execute(
+                "INSERT INTO experiment_jobs VALUES (?, ?, 'queued', ?, NULL, ?, ?, ?)",
+                (job_id, json.dumps(payload, sort_keys=True), json.dumps(progress), actor, now, now),
+            )
+        return self.experiment_job(job_id)
+
+    def update_experiment_job(
+        self, job_id: str, *, status: str, progress: dict[str, Any], experiment_id: str | None = None
+    ) -> dict[str, Any]:
+        with self.connection() as connection:
+            updated = connection.execute(
+                "UPDATE experiment_jobs SET status = ?, progress_json = ?, experiment_id = COALESCE(?, experiment_id), updated_at = ? WHERE job_id = ?",
+                (status, json.dumps(progress, sort_keys=True), experiment_id, utc_now(), job_id),
+            )
+        if updated.rowcount != 1:
+            raise KeyError(job_id)
+        return self.experiment_job(job_id)
+
+    def experiment_job(self, job_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute("SELECT * FROM experiment_jobs WHERE job_id = ?", (job_id,)).fetchone()
+        if row is None:
+            raise KeyError(job_id)
+        value = dict(row)
+        value["payload"] = json.loads(value.pop("payload_json"))
+        value["progress"] = json.loads(value.pop("progress_json"))
+        return value
+
+    def save_experiment_artifact(
+        self, artifact_id: str, job_id: str, kind: str, content: dict[str, Any]
+    ) -> dict[str, Any]:
+        encoded = json.dumps(content, sort_keys=True, separators=(",", ":"))
+        record = {
+            "artifact_id": artifact_id,
+            "job_id": job_id,
+            "kind": kind,
+            "content": content,
+            "content_hash": hashlib.sha256(encoded.encode()).hexdigest(),
+            "created_at": utc_now(),
+        }
+        with self.connection() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO experiment_artifacts VALUES (?, ?, ?, ?, ?, ?)",
+                (artifact_id, job_id, kind, encoded, record["content_hash"], record["created_at"]),
+            )
+        return record
+
+    def experiment_artifact(self, job_id: str, kind: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM experiment_artifacts WHERE job_id = ? AND kind = ?", (job_id, kind)
+            ).fetchone()
+        if row is None:
+            raise KeyError((job_id, kind))
+        value = dict(row)
+        value["content"] = json.loads(value.pop("content_json"))
+        return value
 
     def save_validation_report(
         self, report_id: str, experiment_id: str, report: dict[str, Any], actor: str

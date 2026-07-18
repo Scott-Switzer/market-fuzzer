@@ -177,6 +177,22 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
     record = experiment.json()
     assert record["status"] == "completed"
     assert record["result"]["strategy_results"][0]["policy_id"] == "guarded_pov"
+    job = client.post(
+        "/api/enterprise/experiment-jobs",
+        json={
+            "name": "Resumable latency stress",
+            "strategy_ids": [strategy["strategy_id"]],
+            "scenario_pack_id": pack["scenario_pack_id"],
+            "seeds": [43],
+        },
+    )
+    assert job.status_code == 200
+    assert job.json()["status"] == "queued"
+    resumed = client.post(f"/api/enterprise/experiment-jobs/{job.json()['job_id']}/resume")
+    assert resumed.status_code == 200
+    assert resumed.json()["status"] == "completed"
+    assert resumed.json()["progress"]["percent"] == 100
+    assert resumed.json()["artifact"]["content_hash"]
     listed = client.get("/api/enterprise/experiments?limit=1&offset=0")
     assert listed.status_code == 200
     assert listed.json()["limit"] == 1

@@ -8,6 +8,7 @@ import json
 import os
 import sqlite3
 import time
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
@@ -440,17 +441,21 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
                 base_world_manifest=base_world,
                 calibration_result={"accepted_parameter_sets": [parameter_set]},
             )
-            world_results = []
-            for protected in ensemble_compiled["protected_worlds"]:
+
+            def run_cell(protected: dict[str, Any]) -> dict[str, Any]:
                 simulation = run_simulation(WorldSpec.model_validate(protected["world"]))
-                world_results.append(
-                    {
-                        "world_hash": protected["world_hash"],
-                        "filled_quantity": simulation.summary["filled_quantity"],
-                        "implementation_shortfall_bps": simulation.summary["implementation_shortfall_bps"],
-                        "completion_pct": simulation.summary["completion_pct"],
-                    }
-                )
+                return {
+                    "world_hash": protected["world_hash"],
+                    "filled_quantity": simulation.summary["filled_quantity"],
+                    "implementation_shortfall_bps": simulation.summary["implementation_shortfall_bps"],
+                    "completion_pct": simulation.summary["completion_pct"],
+                }
+
+            with ThreadPoolExecutor(
+                max_workers=max(1, min(4, len(ensemble_compiled["protected_worlds"])))
+            ) as pool:
+                world_results = list(pool.map(run_cell, ensemble_compiled["protected_worlds"]))
+            world_results.sort(key=lambda result: result["world_hash"])
             ensemble_runs.append(
                 {
                     "parameter_set_id": parameter_set["parameter_set_id"],
@@ -484,6 +489,52 @@ def enterprise_experiments(
         "limit": limit,
         "offset": offset,
     }
+
+
+@app.post("/api/enterprise/experiment-jobs")
+def enterprise_create_experiment_job(payload: StressExperimentCreate, request: Request) -> dict[str, Any]:
+    return _execution_store().create_experiment_job(
+        new_registry_id("job"), payload.model_dump(mode="json"), _enterprise_actor(request)
+    )
+
+
+@app.get("/api/enterprise/experiment-jobs/{job_id}")
+def enterprise_experiment_job(job_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().experiment_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment job not found") from exc
+
+
+@app.post("/api/enterprise/experiment-jobs/{job_id}/resume")
+def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str, Any]:
+    store = _execution_store()
+    try:
+        job = store.experiment_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment job not found") from exc
+    if job["status"] == "completed":
+        return job
+    total = len(job["payload"]["seeds"])
+    store.update_experiment_job(
+        job_id, status="running", progress={"completed_cells": 0, "total_cells": total, "percent": 0}
+    )
+    try:
+        experiment = enterprise_run_experiment(StressExperimentCreate.model_validate(job["payload"]), request)
+        artifact = store.save_experiment_artifact(
+            new_registry_id("artifact"), job_id, "experiment-result", experiment
+        )
+        return store.update_experiment_job(
+            job_id,
+            status="completed",
+            progress={"completed_cells": total, "total_cells": total, "percent": 100},
+            experiment_id=experiment["experiment_id"],
+        ) | {"artifact": artifact}
+    except Exception:
+        store.update_experiment_job(
+            job_id, status="failed", progress={"completed_cells": 0, "total_cells": total, "percent": 0}
+        )
+        raise
 
 
 @app.get("/api/enterprise/experiments/{experiment_id}")
