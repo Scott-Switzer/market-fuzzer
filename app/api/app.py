@@ -481,18 +481,14 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
         policy_ids=tuple(policy_ids),
     )
     selected = matrix["rows"]
-    strategy_by_policy = {
-        str(strategy["builtin_policy_id"]): strategy for strategy in strategies
-    }
+    strategy_by_policy = {str(strategy["builtin_policy_id"]): strategy for strategy in strategies}
     selected = [
         row
         | {
             "adapter_provenance": {
                 "strategy_type": strategy_by_policy[str(row["policy_id"])]["strategy_type"],
                 "adapter_hash": strategy_by_policy[str(row["policy_id"])].get("adapter_hash"),
-                "adapter_contract": strategy_by_policy[str(row["policy_id"])].get(
-                    "external_adapter"
-                ),
+                "adapter_contract": strategy_by_policy[str(row["policy_id"])].get("external_adapter"),
             }
         }
         for row in selected
@@ -586,9 +582,7 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
         progress={
             "completed_cells": sum(cell["status"] == "completed" for cell in job["cells"]),
             "total_cells": cell_total,
-            "percent": round(
-                100 * sum(cell["status"] == "completed" for cell in job["cells"]) / cell_total
-            ),
+            "percent": round(100 * sum(cell["status"] == "completed" for cell in job["cells"]) / cell_total),
         },
     )
     try:
@@ -669,7 +663,11 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
                     store.update_experiment_job(
                         job_id,
                         status="running",
-                        progress={"completed_cells": done, "total_cells": cell_total, "percent": round(100 * done / cell_total)},
+                        progress={
+                            "completed_cells": done,
+                            "total_cells": cell_total,
+                            "percent": round(100 * done / cell_total),
+                        },
                     )
         completed_rows.sort(key=lambda row: (str(row["strategy_id"]), int(row["seed"])))
         compiled = compiled_by_seed[sorted(compiled_by_seed)[0]]
@@ -714,10 +712,18 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
                 "experiment_id": experiment["experiment_id"],
                 "scenario_pack_id": payload.scenario_pack_id,
                 "scenario_hashes": sorted(
-                    {cell["scenario_hash"] for cell in store.experiment_cells(job_id) if cell["status"] == "completed"}
+                    {
+                        cell["scenario_hash"]
+                        for cell in store.experiment_cells(job_id)
+                        if cell["status"] == "completed"
+                    }
                 ),
                 "world_hashes": sorted(
-                    {cell["world_hash"] for cell in store.experiment_cells(job_id) if cell["status"] == "completed"}
+                    {
+                        cell["world_hash"]
+                        for cell in store.experiment_cells(job_id)
+                        if cell["status"] == "completed"
+                    }
                 ),
                 "seeds": sorted({cell["seed"] for cell in store.experiment_cells(job_id)}),
                 "strategy_ids": sorted({cell["strategy_id"] for cell in store.experiment_cells(job_id)}),
@@ -736,7 +742,11 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
         store.update_experiment_job(
             job_id,
             status="failed",
-            progress={"completed_cells": done, "total_cells": cell_total, "percent": round(100 * done / cell_total)},
+            progress={
+                "completed_cells": done,
+                "total_cells": cell_total,
+                "percent": round(100 * done / cell_total),
+            },
         )
         raise
 

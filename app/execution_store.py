@@ -1091,7 +1091,9 @@ class ArenaStore:
 
     def strategies(self) -> list[dict[str, Any]]:
         with self.connection() as connection:
-            rows = connection.execute("SELECT strategy_id FROM strategies ORDER BY created_at DESC").fetchall()
+            rows = connection.execute(
+                "SELECT strategy_id FROM strategies ORDER BY created_at DESC"
+            ).fetchall()
         return [self.strategy(str(row["strategy_id"])) for row in rows]
 
     def save_stress_experiment(
@@ -1232,8 +1234,20 @@ class ArenaStore:
                     result_hash = excluded.result_hash, error = excluded.error,
                     updated_at = excluded.updated_at
                 """,
-                (cell_id, job_id, strategy_id, scenario_hash, world_hash, seed, status,
-                 encoded, result_hash, error, now, now),
+                (
+                    cell_id,
+                    job_id,
+                    strategy_id,
+                    scenario_hash,
+                    world_hash,
+                    seed,
+                    status,
+                    encoded,
+                    result_hash,
+                    error,
+                    now,
+                    now,
+                ),
             )
             row = connection.execute(
                 """
