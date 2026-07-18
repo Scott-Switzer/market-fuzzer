@@ -1148,7 +1148,18 @@ class ArenaStore:
             raise ValueError("offset must be non-negative")
         with self.connection() as connection:
             rows = connection.execute(
-                "SELECT * FROM stress_experiments ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                """
+                SELECT e.*,
+                       EXISTS(
+                           SELECT 1
+                           FROM experiment_artifacts AS a
+                           JOIN experiment_jobs AS j ON j.job_id = a.job_id
+                           WHERE j.experiment_id = e.experiment_id
+                             AND a.kind = 'experiment-result'
+                       ) AS has_artifact
+                FROM stress_experiments AS e
+                ORDER BY e.created_at DESC LIMIT ? OFFSET ?
+                """,
                 (limit, offset),
             ).fetchall()
         results = []
@@ -1157,6 +1168,7 @@ class ArenaStore:
             value["strategy_ids"] = json.loads(value.pop("strategy_ids_json"))
             value["seeds"] = json.loads(value.pop("seeds_json"))
             result_json = value.pop("result_json")
+            value["has_artifact"] = bool(value["has_artifact"])
             if include_results:
                 value["result"] = json.loads(result_json) if result_json else None
             else:
