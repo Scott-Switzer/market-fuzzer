@@ -1,6 +1,9 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from app.calibration import build_demo_calibration_pack
+from app.governance import build_enterprise_validation_report
 
 
 def test_enterprise_world_registry_persists_versioned_manifest(tmp_path, monkeypatch) -> None:
@@ -12,6 +15,7 @@ def test_enterprise_world_registry_persists_versioned_manifest(tmp_path, monkeyp
         json={
             "name": "US equities intraday baseline",
             "description": "A reproducible baseline world for execution resilience experiments.",
+            "seed": 77,
             "asset_universe": ["NOVA", "ORBIT"],
             "agent_ecology": ["market_maker", "background_flow", "execution_agent"],
             "intended_use": "execution_stress_testing",
@@ -22,7 +26,37 @@ def test_enterprise_world_registry_persists_versioned_manifest(tmp_path, monkeyp
     assert world["version"] == 1
     assert world["manifest"]["schema_version"] == "1.0"
     assert len(world["manifest_hash"]) == 64
+    assert world["manifest"]["seed"] == 77
     assert client.get(f"/api/enterprise/worlds/{world['world_id']}").json()["world_id"] == world["world_id"]
+
+
+def test_real_calibration_pack_attaches_as_a_new_world_version(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("ARENA_TEST_AUTH", "1")
+    client = TestClient(app)
+    world = client.post(
+        "/api/enterprise/worlds",
+        json={
+            "name": "Calibrated execution world",
+            "description": "A world that records aggregate-only calibration provenance for stress testing.",
+            "asset_universe": ["NOVA", "ORBIT", "VYNE"],
+            "agent_ecology": ["market_maker", "fundamental", "execution_agent"],
+        },
+    ).json()
+    pack = build_demo_calibration_pack(seed=8, rows=120).model_dump(mode="json")
+    attached = client.post(f"/api/enterprise/worlds/{world['world_id']}/calibration", json=pack)
+    assert attached.status_code == 200
+    calibrated = attached.json()
+    assert calibrated["version"] == 2
+    assert calibrated["manifest"]["calibration_pack_id"] == pack["pack_id"]
+    assert calibrated["manifest"]["calibration_run_id"].startswith("calibration-run-")
+    assert (
+        client.get(
+            f"/api/enterprise/calibration-runs/{calibrated['manifest']['calibration_run_id']}"
+        ).status_code
+        == 200
+    )
+    assert client.get(f"/api/enterprise/calibration-packs/{pack['pack_id']}").status_code == 200
 
 
 def test_scenario_pack_requires_registered_world_and_preserves_manifest(tmp_path, monkeypatch) -> None:
@@ -59,6 +93,7 @@ def test_scenario_pack_compiles_to_reproducible_protected_worlds(tmp_path, monke
         json={
             "name": "Execution baseline",
             "description": "A reproducible baseline world for controlled stress experiments.",
+            "seed": 77,
             "asset_universe": ["NOVA", "ORBIT", "VYNE"],
             "agent_ecology": ["market_maker", "fundamental", "execution_agent"],
         },
@@ -85,6 +120,8 @@ def test_scenario_pack_compiles_to_reproducible_protected_worlds(tmp_path, monke
     second = client.post(f"/api/enterprise/scenario-packs/{pack['scenario_pack_id']}/compile").json()
     assert first["compile_hash"] == second["compile_hash"]
     assert len(first["protected_worlds"]) == 1
+    assert first["seed"] == 77
+    assert first["base_world_manifest_hash"] == world["manifest_hash"]
     assert first["protected_worlds"][0]["world"]["events"][0]["simulation_step"] == 45
 
 
@@ -140,3 +177,43 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
     record = experiment.json()
     assert record["status"] == "completed"
     assert record["result"]["strategy_results"][0]["policy_id"] == "guarded_pov"
+    validation = client.post(f"/api/enterprise/experiments/{record['experiment_id']}/validate")
+    assert validation.status_code == 200
+    report = validation.json()["report"]
+    assert report["overall_verdict"] == "LIMITED"
+    assert len(report["evidence_manifest"]["evidence_ids"]) == 1
+    exported = client.get(f"/api/enterprise/experiments/{record['experiment_id']}/validation/export")
+    assert exported.status_code == 200
+    assert exported.headers["content-type"].startswith("application/json")
+
+
+def test_validation_rejects_incomplete_experiment_and_preserves_provenance(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("ARENA_TEST_AUTH", "1")
+    from app.execution_store import ArenaStore
+
+    store = ArenaStore(tmp_path / "registry.sqlite3")
+    store.save_stress_experiment(
+        "experiment-incomplete",
+        {"name": "Pending", "scenario_pack_id": "scenario-x", "strategy_ids": [], "seeds": [42]},
+        "first-actor",
+        {},
+    )
+    with pytest.raises(ValueError, match="no completed result"):
+        build_enterprise_validation_report(
+            {
+                "experiment_id": "experiment-incomplete",
+                "result": None,
+            }
+        )
+    first = store.save_validation_report(
+        "validation-experiment-incomplete", "experiment-incomplete", {"report_hash": "abc"}, "first-actor"
+    )
+    second = store.save_validation_report(
+        "validation-experiment-incomplete", "experiment-incomplete", {"report_hash": "def"}, "second-actor"
+    )
+    assert first["created_by"] == second["created_by"] == "first-actor"
+    assert second["report"]["report_hash"] == "abc"
+    # The store writes completed results by design; exercise the public not-found contract too.
+    client = TestClient(app)
+    assert client.post("/api/enterprise/experiments/does-not-exist/validate").status_code == 404

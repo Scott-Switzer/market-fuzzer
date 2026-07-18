@@ -29,6 +29,7 @@ class SyntheticWorldCreate(BaseModel):
 
     name: str = Field(min_length=3, max_length=160)
     description: str = Field(min_length=20, max_length=2_000)
+    seed: int = Field(default=42, ge=0, le=2_147_483_647)
     asset_universe: list[str] = Field(min_length=1, max_length=100)
     venue: Literal["continuous_double_auction"] = "continuous_double_auction"
     agent_ecology: list[str] = Field(min_length=1, max_length=32)

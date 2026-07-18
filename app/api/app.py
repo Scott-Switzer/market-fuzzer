@@ -37,7 +37,7 @@ from app.arena import (
     public_dataset,
     validate_submission_csv,
 )
-from app.calibration import build_demo_calibration_pack, calibrate_bootstrap
+from app.calibration import CalibrationPackV1, build_demo_calibration_pack, calibrate_bootstrap
 from app.compiler import compile_world
 from app.execution_arena import (
     CHALLENGE_ID,
@@ -61,6 +61,7 @@ from app.execution_challenge_designer import (
 from app.execution_feedback import build_execution_evidence, generate_execution_feedback
 from app.execution_store import ArenaPhaseError, ArenaQuotaError, ArenaStore
 from app.experiments import run_batch, run_single, run_validation_campaign
+from app.governance import build_enterprise_validation_report
 from app.product import (
     DEFAULT_PROPERTIES,
     STORE,
@@ -73,6 +74,7 @@ from app.product import (
 )
 from app.scenario_studio import compile_scenario_pack
 from app.schemas import WorldSpec
+from app.simulation import run_simulation
 from app.strategy_lab import StrategyCreate, StressExperimentCreate
 from app.synthetic_market import (
     SCENARIO_SCHEMA_VERSION,
@@ -296,6 +298,39 @@ def enterprise_world(world_id: str) -> dict[str, Any]:
         raise HTTPException(404, "synthetic world not found") from exc
 
 
+@app.post("/api/enterprise/worlds/{world_id}/calibration")
+def enterprise_attach_calibration(world_id: str, pack: CalibrationPackV1, request: Request) -> dict[str, Any]:
+    actor = _enterprise_actor(request)
+    calibration = calibrate_bootstrap(pack, mode="quick")
+    calibration_run_id = new_registry_id("calibration-run")
+    try:
+        return _execution_store().attach_calibration_pack(
+            world_id,
+            pack.model_dump(mode="json"),
+            actor,
+            calibration.model_dump(mode="json"),
+            calibration_run_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, "synthetic world not found") from exc
+
+
+@app.get("/api/enterprise/calibration-packs/{pack_id}")
+def enterprise_calibration_pack(pack_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().calibration_pack(pack_id)
+    except KeyError as exc:
+        raise HTTPException(404, "calibration pack not found") from exc
+
+
+@app.get("/api/enterprise/calibration-runs/{calibration_run_id}")
+def enterprise_calibration_run(calibration_run_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().calibration_run(calibration_run_id)
+    except KeyError as exc:
+        raise HTTPException(404, "calibration run not found") from exc
+
+
 @app.get("/api/enterprise/scenario-packs")
 def enterprise_scenario_packs() -> dict[str, Any]:
     return {"scenario_packs": _execution_store().scenario_packs()}
@@ -327,10 +362,19 @@ def enterprise_scenario_pack(scenario_pack_id: str) -> dict[str, Any]:
 def enterprise_compile_scenario_pack(scenario_pack_id: str) -> dict[str, Any]:
     try:
         pack = _execution_store().scenario_pack(scenario_pack_id)
+        base_world = _execution_store().synthetic_world(str(pack["base_world_id"]))
     except KeyError as exc:
-        raise HTTPException(404, "scenario pack not found") from exc
+        raise HTTPException(404, "scenario pack or base world not found") from exc
     try:
-        return compile_scenario_pack({**pack["manifest"], "scenario_pack_id": scenario_pack_id})
+        calibration_run = None
+        calibration_run_id = base_world["manifest"].get("calibration_run_id")
+        if calibration_run_id:
+            calibration_run = _execution_store().calibration_run(str(calibration_run_id))["result"]
+        return compile_scenario_pack(
+            {**pack["manifest"], "scenario_pack_id": scenario_pack_id},
+            base_world_manifest=base_world,
+            calibration_result=calibration_run,
+        )
     except (KeyError, ValueError) as exc:
         raise HTTPException(422, f"scenario pack cannot be compiled: {exc}") from exc
 
@@ -363,12 +407,53 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
     store = _execution_store()
     try:
         pack = store.scenario_pack(payload.scenario_pack_id)
+        base_world = store.synthetic_world(str(pack["base_world_id"]))
         strategies = [store.strategy(strategy_id) for strategy_id in payload.strategy_ids]
     except KeyError as exc:
         raise HTTPException(404, "scenario pack or strategy not found") from exc
     if any(strategy["builtin_policy_id"] is None for strategy in strategies):
         raise HTTPException(422, "only built-in policy adapters are executable in this milestone")
-    compiled = compile_scenario_pack({**pack["manifest"], "scenario_pack_id": payload.scenario_pack_id})
+    compiled = compile_scenario_pack(
+        {**pack["manifest"], "scenario_pack_id": payload.scenario_pack_id},
+        base_world_manifest=base_world,
+        calibration_result=(
+            store.calibration_run(str(base_world["manifest"]["calibration_run_id"]))["result"]
+            if base_world["manifest"].get("calibration_run_id")
+            else None
+        ),
+    )
+    calibration_result = (
+        store.calibration_run(str(base_world["manifest"]["calibration_run_id"]))["result"]
+        if base_world["manifest"].get("calibration_run_id")
+        else None
+    )
+    ensemble_runs: list[dict[str, Any]] = []
+    if calibration_result is not None:
+        for parameter_set in calibration_result.get("accepted_parameter_sets", []):
+            ensemble_compiled = compile_scenario_pack(
+                {**pack["manifest"], "scenario_pack_id": payload.scenario_pack_id},
+                base_world_manifest=base_world,
+                calibration_result={"accepted_parameter_sets": [parameter_set]},
+            )
+            world_results = []
+            for protected in ensemble_compiled["protected_worlds"]:
+                simulation = run_simulation(WorldSpec.model_validate(protected["world"]))
+                world_results.append(
+                    {
+                        "world_hash": protected["world_hash"],
+                        "filled_quantity": simulation.summary["filled_quantity"],
+                        "implementation_shortfall_bps": simulation.summary["implementation_shortfall_bps"],
+                        "completion_pct": simulation.summary["completion_pct"],
+                    }
+                )
+            ensemble_runs.append(
+                {
+                    "parameter_set_id": parameter_set["parameter_set_id"],
+                    "validation_distance": parameter_set["validation_distance"],
+                    "heldout_distance": parameter_set["heldout_distance"],
+                    "world_results": world_results,
+                }
+            )
     policy_ids = [str(strategy["builtin_policy_id"]) for strategy in strategies]
     matrix = benchmark_matrix(seeds=tuple(payload.seeds), student_submissions=None)
     selected = [row for row in matrix["rows"] if row["policy_id"] in policy_ids]
@@ -378,6 +463,8 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
         "scenario_pack_id": payload.scenario_pack_id,
         "strategy_results": selected,
         "claim_boundary": "Results are deterministic measurements inside the declared synthetic benchmark worlds.",
+        "calibration_ensemble": compiled.get("calibration_ensemble", []),
+        "calibration_ensemble_runs": ensemble_runs,
     }
     experiment_id = new_registry_id("experiment")
     return store.save_stress_experiment(experiment_id, payload.model_dump(mode="json"), actor, result)
@@ -389,6 +476,45 @@ def enterprise_experiment(experiment_id: str) -> dict[str, Any]:
         return _execution_store().stress_experiment(experiment_id)
     except KeyError as exc:
         raise HTTPException(404, "experiment not found") from exc
+
+
+@app.post("/api/enterprise/experiments/{experiment_id}/validate")
+def enterprise_validate_experiment(experiment_id: str, request: Request) -> dict[str, Any]:
+    actor = _enterprise_actor(request)
+    store = _execution_store()
+    try:
+        experiment = store.stress_experiment(experiment_id)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment not found") from exc
+    try:
+        report = build_enterprise_validation_report(experiment)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return store.save_validation_report(
+        f"validation-{experiment_id}", experiment_id, report.model_dump(mode="json"), actor
+    )
+
+
+@app.get("/api/enterprise/experiments/{experiment_id}/validation")
+def enterprise_validation_report(experiment_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().validation_report(experiment_id)
+    except KeyError as exc:
+        raise HTTPException(404, "validation report not found") from exc
+
+
+@app.get("/api/enterprise/experiments/{experiment_id}/validation/export")
+def enterprise_validation_export(experiment_id: str) -> Response:
+    try:
+        record = _execution_store().validation_report(experiment_id)
+    except KeyError as exc:
+        raise HTTPException(404, "validation report not found") from exc
+    payload = json.dumps(record["report"], indent=2, sort_keys=True)
+    return Response(
+        content=payload,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{experiment_id}-validation.json"'},
+    )
 
 
 @app.get("/api/execution-challenge")
