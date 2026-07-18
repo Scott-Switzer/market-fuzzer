@@ -430,6 +430,7 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
         "scenario_pack_id": payload.scenario_pack_id,
         "strategy_results": selected,
         "claim_boundary": "Results are deterministic measurements inside the declared synthetic benchmark worlds.",
+        "calibration_ensemble": compiled.get("calibration_ensemble", []),
     }
     experiment_id = new_registry_id("experiment")
     return store.save_stress_experiment(experiment_id, payload.model_dump(mode="json"), actor, result)

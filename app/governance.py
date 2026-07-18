@@ -19,6 +19,7 @@ class EvidenceManifest(BaseModel):
     strategy_ids: list[str]
     seeds: list[int]
     evidence_ids: list[str]
+    calibration_parameter_set_ids: list[str] = Field(default_factory=list)
     deterministic_authority: str = "application_simulator"
     claim_boundary: str
 
@@ -72,6 +73,9 @@ def build_enterprise_validation_report(experiment: dict) -> EnterpriseValidation
         strategy_ids=experiment["strategy_ids"],
         seeds=experiment["seeds"],
         evidence_ids=evidence_ids,
+        calibration_parameter_set_ids=[
+            item["parameter_set_id"] for item in result.get("calibration_ensemble", [])
+        ],
         claim_boundary=result["claim_boundary"],
     )
     vectors = [

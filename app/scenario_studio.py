@@ -32,8 +32,17 @@ def compile_scenario_pack(
     selected_seed = int(registered_manifest.get("seed", 42) if seed is None else seed)
     base = build_demo_world(selected_seed)
     selected_calibration = None
+    calibration_ensemble: list[dict[str, Any]] = []
     if calibration_result is not None:
         accepted = calibration_result.get("accepted_parameter_sets", [])
+        calibration_ensemble = [
+            {
+                "parameter_set_id": item["parameter_set_id"],
+                "validation_distance": item["validation_distance"],
+                "heldout_distance": item["heldout_distance"],
+            }
+            for item in accepted
+        ]
         if accepted:
             selected_calibration = accepted[0]
             parameters = selected_calibration["parameters"]
@@ -88,6 +97,7 @@ def compile_scenario_pack(
         "calibration_parameter_set_id": selected_calibration["parameter_set_id"]
         if selected_calibration
         else None,
+        "calibration_ensemble": calibration_ensemble,
         "engine_profile": "demo_equities_v1",
         "seed": selected_seed,
         "public_world": base.model_dump(mode="json"),
