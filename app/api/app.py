@@ -80,6 +80,7 @@ from app.strategy_lab import StrategyCreate, StressExperimentCreate
 from app.synthetic_market import (
     SCENARIO_SCHEMA_VERSION,
     WORLD_SCHEMA_VERSION,
+    RegressionSuiteCreate,
     ScenarioPackCreate,
     SyntheticWorldCreate,
     new_registry_id,
@@ -383,6 +384,130 @@ def enterprise_compile_scenario_pack(scenario_pack_id: str) -> dict[str, Any]:
         )
     except (KeyError, ValueError) as exc:
         raise HTTPException(422, f"scenario pack cannot be compiled: {exc}") from exc
+
+
+@app.get("/api/enterprise/regression-suites")
+def enterprise_regression_suites() -> dict[str, Any]:
+    return {"regression_suites": _execution_store().regression_suites()}
+
+
+@app.post("/api/enterprise/regression-suites")
+def enterprise_create_regression_suite(payload: RegressionSuiteCreate, request: Request) -> dict[str, Any]:
+    store = _execution_store()
+    try:
+        store.scenario_pack(payload.scenario_pack_id)
+    except KeyError as exc:
+        raise HTTPException(404, "scenario pack not found") from exc
+    return store.create_regression_suite(
+        new_registry_id("regression-suite"), payload.model_dump(mode="json"), _enterprise_actor(request)
+    )
+
+
+@app.get("/api/enterprise/regression-suites/{suite_id}")
+def enterprise_regression_suite(suite_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().regression_suite(suite_id)
+    except KeyError as exc:
+        raise HTTPException(404, "regression suite not found") from exc
+
+
+@app.post("/api/enterprise/regression-suites/{suite_id}/run")
+def enterprise_run_regression_suite(suite_id: str, request: Request) -> dict[str, Any]:
+    store = _execution_store()
+    try:
+        suite = store.regression_suite(suite_id)
+        pack = store.scenario_pack(suite["scenario_pack_id"])
+        base_world = store.synthetic_world(str(pack["base_world_id"]))
+    except KeyError as exc:
+        raise HTTPException(404, "regression suite or scenario pack not found") from exc
+    calibration_result = (
+        store.calibration_run(str(base_world["manifest"]["calibration_run_id"]))["result"]
+        if base_world["manifest"].get("calibration_run_id")
+        else None
+    )
+    try:
+        first = compile_scenario_pack(
+            {**pack["manifest"], "scenario_pack_id": suite["scenario_pack_id"]},
+            base_world_manifest=base_world,
+            calibration_result=calibration_result,
+        )
+        second = compile_scenario_pack(
+            {**pack["manifest"], "scenario_pack_id": suite["scenario_pack_id"]},
+            base_world_manifest=base_world,
+            calibration_result=calibration_result,
+        )
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(422, f"scenario pack cannot be compiled: {exc}") from exc
+
+    protected_worlds = first.get("protected_worlds", [])
+    world_hashes = [str(world["world_hash"]) for world in protected_worlds]
+    cases: dict[str, dict[str, Any]] = {
+        "protected_worlds_present": {
+            "passed": bool(protected_worlds),
+            "detail": f"{len(protected_worlds)} protected world(s) compiled.",
+        },
+        "world_hashes_stable": {
+            "passed": first.get("compile_hash") == second.get("compile_hash")
+            and [item["world_hash"] for item in first.get("protected_worlds", [])]
+            == [item["world_hash"] for item in second.get("protected_worlds", [])],
+            "detail": "Repeated compilation produced identical compile and world hashes.",
+        },
+        "intervention_steps_preserved": {
+            "passed": all(
+                bool(world["world"].get("events"))
+                and all(
+                    event.get("simulation_step") == world["intent"]["start_step"]
+                    for event in world["world"].get("events", [])
+                )
+                for world in protected_worlds
+            ),
+            "detail": "Every compiled world contains events at its declared intervention start step.",
+        },
+        "base_manifest_stable": {
+            "passed": first.get("base_world_manifest_hash") == base_world.get("manifest_hash"),
+            "detail": "The compiled pack remains tied to the registered base-world manifest.",
+        },
+    }
+    evidence = {
+        "suite_id": suite_id,
+        "scenario_pack_id": suite["scenario_pack_id"],
+        "compile_hash": first.get("compile_hash"),
+        "world_hashes": world_hashes,
+        "cases": [
+            {"case": case, **cases[case], "required": case in suite["required_cases"]} for case in cases
+        ],
+    }
+    required_results = [cases[case]["passed"] for case in suite["required_cases"]]
+    status = "passed" if all(required_results) else "failed"
+    return store.save_regression_run(
+        new_registry_id("regression-run"),
+        suite_id,
+        status,
+        sum(required_results),
+        len(required_results),
+        evidence,
+    )
+
+
+@app.get("/api/enterprise/regression-suites/{suite_id}/release-check")
+def enterprise_regression_release_check(suite_id: str) -> dict[str, Any]:
+    try:
+        suite = _execution_store().regression_suite(suite_id)
+    except KeyError as exc:
+        raise HTTPException(404, "regression suite not found") from exc
+    latest = suite.get("latest_run")
+    if latest is None or latest["status"] != "passed":
+        raise HTTPException(
+            409,
+            "governed release blocked: the latest required regression run did not pass",
+        )
+    return {
+        "suite_id": suite_id,
+        "scenario_pack_id": suite["scenario_pack_id"],
+        "release_status": "eligible",
+        "run_id": latest["run_id"],
+        "run_hash": latest["run_hash"],
+    }
 
 
 @app.get("/api/enterprise/strategies")

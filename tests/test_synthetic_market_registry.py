@@ -125,6 +125,79 @@ def test_scenario_pack_compiles_to_reproducible_protected_worlds(tmp_path, monke
     assert first["protected_worlds"][0]["world"]["events"][0]["simulation_step"] == 45
 
 
+def test_governed_regression_suite_persists_evidence_and_gates_release(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("ARENA_TEST_AUTH", "1")
+    client = TestClient(app)
+    world = client.post(
+        "/api/enterprise/worlds",
+        json={
+            "name": "Regression baseline",
+            "description": "A registered baseline used for deterministic contract checks.",
+            "seed": 17,
+            "asset_universe": ["NOVA"],
+            "agent_ecology": ["market_maker", "execution_agent"],
+        },
+    ).json()
+    pack = client.post(
+        "/api/enterprise/scenario-packs",
+        json={
+            "name": "Regression latency pack",
+            "description": "A bounded latency intervention for regression verification.",
+            "base_world_id": world["world_id"],
+            "intended_question": "Does the declared latency intervention remain reproducible?",
+            "interventions": [
+                {
+                    "intervention_type": "liquidity_withdrawal",
+                    "severity": "moderate",
+                    "start_step": 25,
+                    "duration_steps": 5,
+                    "rationale": "Ensure the intervention remains tied to its declared start step.",
+                }
+            ],
+        },
+    ).json()
+    suite = client.post(
+        "/api/enterprise/regression-suites",
+        json={"name": "Latency contract", "scenario_pack_id": pack["scenario_pack_id"]},
+    )
+    assert suite.status_code == 200
+    suite_record = suite.json()
+    assert suite_record["status"] == "draft"
+    assert len(suite_record["required_cases"]) == 4
+    assert (
+        client.get(f"/api/enterprise/regression-suites/{suite_record['suite_id']}/release-check").status_code
+        == 409
+    )
+
+    run = client.post(f"/api/enterprise/regression-suites/{suite_record['suite_id']}/run")
+    assert run.status_code == 200
+    run_record = run.json()
+    assert run_record["status"] == "passed"
+    assert run_record["passed_cases"] == run_record["total_cases"] == 4
+    assert len(run_record["run_hash"]) == 64
+    eligible = client.get(f"/api/enterprise/regression-suites/{suite_record['suite_id']}/release-check")
+    assert eligible.status_code == 200
+    assert eligible.json()["release_status"] == "eligible"
+
+    import importlib
+
+    api_module = importlib.import_module("app.api.app")
+    original_compile = api_module.compile_scenario_pack
+
+    def empty_compile(*args, **kwargs):
+        result = original_compile(*args, **kwargs)
+        result["protected_worlds"] = []
+        return result
+
+    monkeypatch.setattr(api_module, "compile_scenario_pack", empty_compile)
+    failed_run = client.post(f"/api/enterprise/regression-suites/{suite_record['suite_id']}/run")
+    assert failed_run.status_code == 200
+    assert failed_run.json()["status"] == "failed"
+    blocked = client.get(f"/api/enterprise/regression-suites/{suite_record['suite_id']}/release-check")
+    assert blocked.status_code == 409
+
+
 def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ARENA_DB_PATH", str(tmp_path / "registry.sqlite3"))
     monkeypatch.setenv("ARENA_TEST_AUTH", "1")

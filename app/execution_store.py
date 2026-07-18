@@ -167,6 +167,20 @@ class ArenaStore:
                     created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
                     FOREIGN KEY(base_world_id) REFERENCES synthetic_worlds(world_id)
                 );
+                CREATE TABLE IF NOT EXISTS regression_suites (
+                    suite_id TEXT PRIMARY KEY, name TEXT NOT NULL, scenario_pack_id TEXT NOT NULL,
+                    required_cases_json TEXT NOT NULL, status TEXT NOT NULL, created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    FOREIGN KEY(scenario_pack_id) REFERENCES scenario_packs(scenario_pack_id)
+                );
+                CREATE TABLE IF NOT EXISTS regression_runs (
+                    run_id TEXT PRIMARY KEY, suite_id TEXT NOT NULL, status TEXT NOT NULL,
+                    passed_cases INTEGER NOT NULL, total_cases INTEGER NOT NULL,
+                    evidence_json TEXT NOT NULL, run_hash TEXT NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY(suite_id) REFERENCES regression_suites(suite_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_regression_runs_suite
+                    ON regression_runs(suite_id, created_at DESC);
                 CREATE TABLE IF NOT EXISTS strategies (
                     strategy_id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
                     strategy_type TEXT NOT NULL, builtin_policy_id TEXT, version_label TEXT NOT NULL,
@@ -1037,6 +1051,107 @@ class ArenaStore:
                 "SELECT scenario_pack_id FROM scenario_packs ORDER BY created_at DESC"
             ).fetchall()
         return [self.scenario_pack(str(row["scenario_pack_id"])) for row in rows]
+
+    def create_regression_suite(self, suite_id: str, payload: dict[str, Any], actor: str) -> dict[str, Any]:
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO regression_suites
+                    (suite_id, name, scenario_pack_id, required_cases_json, status,
+                     created_by, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'draft', ?, ?, ?)
+                """,
+                (
+                    suite_id,
+                    payload["name"],
+                    payload["scenario_pack_id"],
+                    json.dumps(sorted(payload["required_cases"])),
+                    actor,
+                    now,
+                    now,
+                ),
+            )
+            self._audit_in_transaction(
+                connection,
+                None,
+                actor,
+                "regression_suite_created",
+                {"suite_id": suite_id, "scenario_pack_id": payload["scenario_pack_id"]},
+                occurred_at=now,
+            )
+        return self.regression_suite(suite_id)
+
+    def regression_suite(self, suite_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM regression_suites WHERE suite_id = ?", (suite_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(suite_id)
+        value = dict(row)
+        value["required_cases"] = json.loads(value.pop("required_cases_json"))
+        value["latest_run"] = self.latest_regression_run(suite_id)
+        return value
+
+    def regression_suites(self) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT suite_id FROM regression_suites ORDER BY created_at DESC"
+            ).fetchall()
+        return [self.regression_suite(str(row["suite_id"])) for row in rows]
+
+    def save_regression_run(
+        self,
+        run_id: str,
+        suite_id: str,
+        status: str,
+        passed_cases: int,
+        total_cases: int,
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        now = utc_now()
+        encoded = json.dumps(evidence, sort_keys=True, separators=(",", ":"))
+        run_hash = hashlib.sha256(encoded.encode()).hexdigest()
+        with self.connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO regression_runs
+                    (run_id, suite_id, status, passed_cases, total_cases,
+                     evidence_json, run_hash, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (run_id, suite_id, status, passed_cases, total_cases, encoded, run_hash, now),
+            )
+            connection.execute(
+                "UPDATE regression_suites SET status = ?, updated_at = ? WHERE suite_id = ?",
+                ("passed" if status == "passed" else "failed", now, suite_id),
+            )
+        return self.regression_run(run_id)
+
+    def regression_run(self, run_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute("SELECT * FROM regression_runs WHERE run_id = ?", (run_id,)).fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        value = dict(row)
+        value["evidence"] = json.loads(value.pop("evidence_json"))
+        return value
+
+    def latest_regression_run(self, suite_id: str) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM regression_runs
+                WHERE suite_id = ? ORDER BY created_at DESC LIMIT 1
+                """,
+                (suite_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        value = dict(row)
+        value["evidence"] = json.loads(value.pop("evidence_json"))
+        return value
 
     def create_strategy(self, strategy_id: str, payload: dict[str, Any], actor: str) -> dict[str, Any]:
         now = utc_now()
