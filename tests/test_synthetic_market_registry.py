@@ -193,6 +193,14 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
     assert resumed.json()["status"] == "completed"
     assert resumed.json()["progress"]["percent"] == 100
     assert resumed.json()["artifact"]["content_hash"]
+    jobs = client.get("/api/enterprise/experiment-jobs?limit=5")
+    assert jobs.status_code == 200
+    assert jobs.json()["jobs"][0]["status"] == "completed"
+    artifact_response = client.get(
+        f"/api/enterprise/experiment-jobs/{job.json()['job_id']}/artifacts/experiment-result"
+    )
+    assert artifact_response.status_code == 200
+    assert artifact_response.json()["content_hash"] == resumed.json()["artifact"]["content_hash"]
     listed = client.get("/api/enterprise/experiments?limit=1&offset=0")
     assert listed.status_code == 200
     assert listed.json()["limit"] == 1

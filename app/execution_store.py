@@ -1154,6 +1154,15 @@ class ArenaStore:
         value["progress"] = json.loads(value.pop("progress_json"))
         return value
 
+    def experiment_jobs(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 200:
+            raise ValueError("limit must be between 1 and 200")
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT job_id FROM experiment_jobs ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [self.experiment_job(str(row["job_id"])) for row in rows]
+
     def save_experiment_artifact(
         self, artifact_id: str, job_id: str, kind: str, content: dict[str, Any]
     ) -> dict[str, Any]:

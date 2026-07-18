@@ -506,6 +506,11 @@ def enterprise_experiment_job(job_id: str) -> dict[str, Any]:
         raise HTTPException(404, "experiment job not found") from exc
 
 
+@app.get("/api/enterprise/experiment-jobs")
+def enterprise_experiment_jobs(limit: int = Query(50, ge=1, le=200)) -> dict[str, Any]:
+    return {"jobs": _execution_store().experiment_jobs(limit=limit), "limit": limit}
+
+
 @app.post("/api/enterprise/experiment-jobs/{job_id}/resume")
 def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str, Any]:
     store = _execution_store()
@@ -535,6 +540,14 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
             job_id, status="failed", progress={"completed_cells": 0, "total_cells": total, "percent": 0}
         )
         raise
+
+
+@app.get("/api/enterprise/experiment-jobs/{job_id}/artifacts/{kind}")
+def enterprise_experiment_artifact(job_id: str, kind: str) -> dict[str, Any]:
+    try:
+        return _execution_store().experiment_artifact(job_id, kind)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment artifact not found") from exc
 
 
 @app.get("/api/enterprise/experiments/{experiment_id}")
