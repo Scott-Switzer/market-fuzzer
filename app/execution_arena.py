@@ -18,6 +18,7 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas import WorldSpec
 from app.simulation import SimulationResult, run_simulation
 from app.world.scenarios import build_demo_world, mutate_scenario
 
@@ -611,6 +612,57 @@ def _run_policy(policy: Policy, world_variant: str, seed: int) -> dict[str, Any]
             "real_market_calibration": "NOT_CLAIMED",
             "result_hash": result.result_hash,
         },
+    }
+
+
+def run_policy_on_compiled_world(
+    policy_id: str, world: WorldSpec, *, source_world_hash: str, scenario_pack_id: str
+) -> dict[str, Any]:
+    """Execute a registered policy against an already compiled protected world."""
+    if policy_id not in POLICIES:
+        raise ValueError(f"unknown declarative policy {policy_id!r}")
+    policy = POLICIES[policy_id]
+    data = deepcopy(world.model_dump(mode="python"))
+    data["world_id"] = f"{world.world_id}-{policy_id}"
+    data["experiment"].update(
+        {
+            "strategy": policy.strategy,
+            "participation_rate": policy.participation_rate,
+            "latency_ms": policy.latency_ms,
+        }
+    )
+    data["experiment"]["parent_order"]["quantity"] = policy.parent_quantity
+    for population in data["agents"]["populations"]:
+        if population["type"] == "execution":
+            population["latency_ms"] = policy.latency_ms
+            population["parameters"].update(
+                {
+                    "max_participation": policy.max_participation or policy.participation_rate,
+                    "enforce_max_participation": policy.max_participation is not None,
+                    "max_spread_bps": policy.max_spread_bps,
+                    "urgency_curve": policy.urgency_curve,
+                    "cancel_after_ms": policy.cancel_after_ms or 10_000,
+                    "completion_buffer_steps": policy.completion_buffer_steps,
+                    "pause_during_halt": policy.pause_during_halt,
+                    "pause_above_spread_limit": policy.pause_above_spread_limit,
+                    "include_pending_in_budget": policy.include_pending_in_budget,
+                    "feed_latency_tolerance_ms": policy.feed_latency_tolerance_ms
+                    if policy.feed_latency_tolerance_ms is not None
+                    else 10_000,
+                }
+            )
+    executed_world = WorldSpec.model_validate(data)
+    result = run_simulation(executed_world)
+    return {
+        "execution_source": "compiled_scenario_pack",
+        "scenario_pack_id": scenario_pack_id,
+        "policy_id": policy_id,
+        "seed": executed_world.seed,
+        "world_hash": source_world_hash,
+        "executed_spec_hash": result.spec_hash,
+        "result_hash": result.result_hash,
+        "metrics": _execution_metrics(result, policy),
+        "selected_synthetic_diagnostics": _selected_synthetic_diagnostics(result),
     }
 
 

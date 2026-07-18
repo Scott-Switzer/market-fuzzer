@@ -197,6 +197,7 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
     assert resumed_record["progress"]["total_cells"] == 1
     assert len(resumed_record["cells"]) == 1
     assert resumed_record["cells"][0]["status"] == "completed"
+    assert resumed_record["cells"][0]["result"]["execution_source"] == "compiled_scenario_pack"
     assert len(resumed_record["cells"][0]["scenario_hash"]) == 64
     assert len(resumed_record["cells"][0]["result_hash"]) == 64
     assert resumed_record["artifact"]["content_hash"]
@@ -204,6 +205,9 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
     assert resumed_again.status_code == 200
     assert resumed_again.json()["experiment_id"] == resumed_record["experiment_id"]
     assert resumed_again.json()["artifact"]["content_hash"] == resumed_record["artifact"]["content_hash"]
+    experiment_detail = client.get(f"/api/enterprise/experiments/{resumed_record['experiment_id']}").json()
+    assert experiment_detail["result"]["strategy_results"][0]["execution_source"] == "compiled_scenario_pack"
+    assert experiment_detail["result"]["arena_baseline_comparator"]["rows"]
     jobs = client.get("/api/enterprise/experiment-jobs?limit=5")
     assert jobs.status_code == 200
     assert jobs.json()["jobs"][0]["status"] == "completed"

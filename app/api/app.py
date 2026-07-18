@@ -47,6 +47,7 @@ from app.execution_arena import (
     challenge_overview,
     public_leaderboard_matrix,
     run_execution_challenge,
+    run_policy_on_compiled_world,
     run_policy_submission,
 )
 from app.execution_arena import (
@@ -545,12 +546,19 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
         if base_world["manifest"].get("calibration_run_id")
         else None
     )
-    compiled = compile_scenario_pack(
-        {**pack["manifest"], "scenario_pack_id": payload.scenario_pack_id},
-        base_world_manifest=base_world,
-        calibration_result=calibration_result,
+    compiled_by_seed = {
+        seed: compile_scenario_pack(
+            {**pack["manifest"], "scenario_pack_id": payload.scenario_pack_id},
+            base_world_manifest=base_world,
+            calibration_result=calibration_result,
+            seed=seed,
+        )
+        for seed in sorted(payload.seeds)
+    }
+    cell_total = sum(
+        len(payload.strategy_ids) * len(compiled["protected_worlds"])
+        for compiled in compiled_by_seed.values()
     )
-    cell_total = len(payload.strategy_ids) * len(payload.seeds)
     store.update_experiment_job(
         job_id,
         status="running",
@@ -568,60 +576,71 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
             strategy_id = str(strategy["strategy_id"])
             builtin_policy_id = str(strategy["builtin_policy_id"])
             for seed in sorted(payload.seeds):
-                existing = next(
-                    (
-                        cell
-                        for cell in job["cells"]
-                        if cell["strategy_id"] == strategy_id
-                        and cell["scenario_hash"] == compiled["compile_hash"]
-                        and cell["seed"] == seed
-                        and cell["status"] == "completed"
-                    ),
-                    None,
-                )
-                if existing is not None and existing["result"] is not None:
-                    completed_rows.append(existing["result"])
-                    continue
-                try:
-                    matrix = benchmark_matrix(
-                        seeds=(seed,),
-                        variants=("latency_shock",),
-                        student_submissions=None,
-                        policy_ids=(builtin_policy_id,),
+                compiled = compiled_by_seed[seed]
+                for protected in compiled["protected_worlds"]:
+                    world_hash = str(protected["world_hash"])
+                    existing = next(
+                        (
+                            cell
+                            for cell in job["cells"]
+                            if cell["strategy_id"] == strategy_id
+                            and cell["scenario_hash"] == compiled["compile_hash"]
+                            and cell["world_hash"] == world_hash
+                            and cell["seed"] == seed
+                            and cell["status"] == "completed"
+                            and cell["result"] is not None
+                            and cell["result"].get("execution_source") == "compiled_scenario_pack"
+                        ),
+                        None,
                     )
-                    row = matrix["rows"][0]
-                    world_hash = str(row["world_results"][0]["world_hash"])
-                    store.upsert_experiment_cell(
-                        new_registry_id("cell"),
+                    if existing is not None:
+                        completed_rows.append(existing["result"])
+                        continue
+                    try:
+                        row = run_policy_on_compiled_world(
+                            builtin_policy_id,
+                            WorldSpec.model_validate(protected["world"]),
+                            source_world_hash=world_hash,
+                            scenario_pack_id=payload.scenario_pack_id,
+                        )
+                        store.upsert_experiment_cell(
+                            new_registry_id("cell"),
+                            job_id,
+                            strategy_id=strategy_id,
+                            scenario_hash=str(compiled["compile_hash"]),
+                            world_hash=world_hash,
+                            seed=seed,
+                            status="completed",
+                            result={**row, "strategy_id": strategy_id, "seed": seed},
+                        )
+                        completed_rows.append({**row, "strategy_id": strategy_id, "seed": seed})
+                    except Exception as exc:
+                        store.upsert_experiment_cell(
+                            new_registry_id("cell"),
+                            job_id,
+                            strategy_id=strategy_id,
+                            scenario_hash=str(compiled["compile_hash"]),
+                            world_hash=world_hash,
+                            seed=seed,
+                            status="failed",
+                            error=str(exc),
+                        )
+                        raise
+                    cells = store.experiment_cells(job_id)
+                    done = sum(cell["status"] == "completed" for cell in cells)
+                    store.update_experiment_job(
                         job_id,
-                        strategy_id=strategy_id,
-                        scenario_hash=str(compiled["compile_hash"]),
-                        world_hash=world_hash,
-                        seed=seed,
-                        status="completed",
-                        result={**row, "strategy_id": strategy_id, "seed": seed},
+                        status="running",
+                        progress={"completed_cells": done, "total_cells": cell_total, "percent": round(100 * done / cell_total)},
                     )
-                    completed_rows.append({**row, "strategy_id": strategy_id, "seed": seed})
-                except Exception as exc:
-                    store.upsert_experiment_cell(
-                        new_registry_id("cell"),
-                        job_id,
-                        strategy_id=strategy_id,
-                        scenario_hash=str(compiled["compile_hash"]),
-                        world_hash="unresolved",
-                        seed=seed,
-                        status="failed",
-                        error=str(exc),
-                    )
-                    raise
-                cells = store.experiment_cells(job_id)
-                done = sum(cell["status"] == "completed" for cell in cells)
-                store.update_experiment_job(
-                    job_id,
-                    status="running",
-                    progress={"completed_cells": done, "total_cells": cell_total, "percent": round(100 * done / cell_total)},
-                )
         completed_rows.sort(key=lambda row: (str(row["strategy_id"]), int(row["seed"])))
+        compiled = compiled_by_seed[sorted(compiled_by_seed)[0]]
+        baseline = benchmark_matrix(
+            seeds=tuple(sorted(payload.seeds)),
+            variants=("latency_shock",),
+            student_submissions=None,
+            policy_ids=tuple(str(strategy["builtin_policy_id"]) for strategy in strategies),
+        )
         experiment = store.save_stress_experiment(
             new_registry_id("experiment"),
             payload.model_dump(mode="json"),
@@ -631,6 +650,7 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
                 "compile_hash": compiled["compile_hash"],
                 "scenario_pack_id": payload.scenario_pack_id,
                 "strategy_results": completed_rows,
+                "arena_baseline_comparator": baseline,
                 "cell_provenance": [
                     {
                         "cell_id": cell["cell_id"],
@@ -644,7 +664,7 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
                     if cell["status"] == "completed"
                 ],
                 "claim_boundary": "Results are deterministic measurements inside the declared synthetic benchmark worlds.",
-                "calibration_ensemble": compiled.get("calibration_ensemble", []),
+                "calibration_ensemble": next(iter(compiled_by_seed.values())).get("calibration_ensemble", []),
             },
         )
         artifact = store.save_experiment_artifact(
