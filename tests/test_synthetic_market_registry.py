@@ -177,6 +177,12 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
     record = experiment.json()
     assert record["status"] == "completed"
     assert record["result"]["strategy_results"][0]["policy_id"] == "guarded_pov"
+    listed = client.get("/api/enterprise/experiments?limit=1&offset=0")
+    assert listed.status_code == 200
+    assert listed.json()["limit"] == 1
+    assert listed.json()["experiments"][0]["experiment_id"] == record["experiment_id"]
+    assert "result" not in listed.json()["experiments"][0]
+    assert listed.json()["experiments"][0]["has_result"] is True
     validation = client.post(f"/api/enterprise/experiments/{record['experiment_id']}/validate")
     assert validation.status_code == 200
     report = validation.json()["report"]

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -476,8 +476,14 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
 
 
 @app.get("/api/enterprise/experiments")
-def enterprise_experiments() -> dict[str, Any]:
-    return {"experiments": _execution_store().stress_experiments()}
+def enterprise_experiments(
+    limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)
+) -> dict[str, Any]:
+    return {
+        "experiments": _execution_store().stress_experiments(limit=limit, offset=offset),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @app.get("/api/enterprise/experiments/{experiment_id}")

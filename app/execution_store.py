@@ -1086,12 +1086,30 @@ class ArenaStore:
         value.pop("result_json", None)
         return value
 
-    def stress_experiments(self) -> list[dict[str, Any]]:
+    def stress_experiments(
+        self, *, limit: int = 50, offset: int = 0, include_results: bool = False
+    ) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 200:
+            raise ValueError("limit must be between 1 and 200")
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
         with self.connection() as connection:
             rows = connection.execute(
-                "SELECT experiment_id FROM stress_experiments ORDER BY created_at DESC"
+                "SELECT * FROM stress_experiments ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
             ).fetchall()
-        return [self.stress_experiment(str(row["experiment_id"])) for row in rows]
+        results = []
+        for row in rows:
+            value = dict(row)
+            value["strategy_ids"] = json.loads(value.pop("strategy_ids_json"))
+            value["seeds"] = json.loads(value.pop("seeds_json"))
+            result_json = value.pop("result_json")
+            if include_results:
+                value["result"] = json.loads(result_json) if result_json else None
+            else:
+                value["has_result"] = bool(result_json)
+            results.append(value)
+        return results
 
     def save_validation_report(
         self, report_id: str, experiment_id: str, report: dict[str, Any], actor: str
