@@ -74,6 +74,7 @@ from app.product import (
 )
 from app.scenario_studio import compile_scenario_pack
 from app.schemas import WorldSpec
+from app.simulation import run_simulation
 from app.strategy_lab import StrategyCreate, StressExperimentCreate
 from app.synthetic_market import (
     SCENARIO_SCHEMA_VERSION,
@@ -421,6 +422,38 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
             else None
         ),
     )
+    calibration_result = (
+        store.calibration_run(str(base_world["manifest"]["calibration_run_id"]))["result"]
+        if base_world["manifest"].get("calibration_run_id")
+        else None
+    )
+    ensemble_runs: list[dict[str, Any]] = []
+    if calibration_result is not None:
+        for parameter_set in calibration_result.get("accepted_parameter_sets", []):
+            ensemble_compiled = compile_scenario_pack(
+                {**pack["manifest"], "scenario_pack_id": payload.scenario_pack_id},
+                base_world_manifest=base_world,
+                calibration_result={"accepted_parameter_sets": [parameter_set]},
+            )
+            world_results = []
+            for protected in ensemble_compiled["protected_worlds"]:
+                simulation = run_simulation(WorldSpec.model_validate(protected["world"]))
+                world_results.append(
+                    {
+                        "world_hash": protected["world_hash"],
+                        "filled_quantity": simulation.summary["filled_quantity"],
+                        "implementation_shortfall_bps": simulation.summary["implementation_shortfall_bps"],
+                        "completion_pct": simulation.summary["completion_pct"],
+                    }
+                )
+            ensemble_runs.append(
+                {
+                    "parameter_set_id": parameter_set["parameter_set_id"],
+                    "validation_distance": parameter_set["validation_distance"],
+                    "heldout_distance": parameter_set["heldout_distance"],
+                    "world_results": world_results,
+                }
+            )
     policy_ids = [str(strategy["builtin_policy_id"]) for strategy in strategies]
     matrix = benchmark_matrix(seeds=tuple(payload.seeds), student_submissions=None)
     selected = [row for row in matrix["rows"] if row["policy_id"] in policy_ids]
@@ -431,6 +464,7 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
         "strategy_results": selected,
         "claim_boundary": "Results are deterministic measurements inside the declared synthetic benchmark worlds.",
         "calibration_ensemble": compiled.get("calibration_ensemble", []),
+        "calibration_ensemble_runs": ensemble_runs,
     }
     experiment_id = new_registry_id("experiment")
     return store.save_stress_experiment(experiment_id, payload.model_dump(mode="json"), actor, result)
