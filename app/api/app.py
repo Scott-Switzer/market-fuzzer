@@ -510,6 +510,33 @@ def enterprise_regression_release_check(suite_id: str) -> dict[str, Any]:
     }
 
 
+@app.post("/api/enterprise/scenario-packs/{scenario_pack_id}/release")
+def enterprise_release_scenario_pack(scenario_pack_id: str, request: Request) -> dict[str, Any]:
+    store = _execution_store()
+    try:
+        store.scenario_pack(scenario_pack_id)
+    except KeyError as exc:
+        raise HTTPException(404, "scenario pack not found") from exc
+    suites = [suite for suite in store.regression_suites() if suite["scenario_pack_id"] == scenario_pack_id]
+    passing_suite = next(
+        (suite for suite in suites if (suite.get("latest_run") or {}).get("status") == "passed"), None
+    )
+    if passing_suite is None:
+        raise HTTPException(409, "scenario pack release blocked: no passing regression suite")
+    try:
+        released = store.approve_scenario_pack(scenario_pack_id, _enterprise_actor(request))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return released | {
+        "release_gate": {
+            "status": "approved",
+            "suite_id": passing_suite["suite_id"],
+            "run_id": passing_suite["latest_run"]["run_id"],
+            "run_hash": passing_suite["latest_run"]["run_hash"],
+        }
+    }
+
+
 @app.get("/api/enterprise/strategies")
 def enterprise_strategies() -> dict[str, Any]:
     return {"strategies": _execution_store().strategies()}

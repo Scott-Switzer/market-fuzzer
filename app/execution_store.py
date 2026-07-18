@@ -1052,6 +1052,34 @@ class ArenaStore:
             ).fetchall()
         return [self.scenario_pack(str(row["scenario_pack_id"])) for row in rows]
 
+    def approve_scenario_pack(self, scenario_pack_id: str, actor: str) -> dict[str, Any]:
+        now = utc_now()
+        with self.connection() as connection:
+            updated = connection.execute(
+                """
+                UPDATE scenario_packs SET status = 'approved', updated_at = ?
+                WHERE scenario_pack_id = ? AND status = 'draft'
+                """,
+                (now, scenario_pack_id),
+            )
+            if updated.rowcount != 1:
+                row = connection.execute(
+                    "SELECT status FROM scenario_packs WHERE scenario_pack_id = ?",
+                    (scenario_pack_id,),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(scenario_pack_id)
+                raise ValueError(f"scenario pack is already {row['status']}")
+            self._audit_in_transaction(
+                connection,
+                None,
+                actor,
+                "scenario_pack_approved",
+                {"scenario_pack_id": scenario_pack_id},
+                occurred_at=now,
+            )
+        return self.scenario_pack(scenario_pack_id)
+
     def create_regression_suite(self, suite_id: str, payload: dict[str, Any], actor: str) -> dict[str, Any]:
         now = utc_now()
         with self.connection() as connection:

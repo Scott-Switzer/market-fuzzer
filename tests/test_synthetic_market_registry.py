@@ -169,6 +169,9 @@ def test_governed_regression_suite_persists_evidence_and_gates_release(tmp_path,
         client.get(f"/api/enterprise/regression-suites/{suite_record['suite_id']}/release-check").status_code
         == 409
     )
+    assert (
+        client.post(f"/api/enterprise/scenario-packs/{pack['scenario_pack_id']}/release").status_code == 409
+    )
 
     run = client.post(f"/api/enterprise/regression-suites/{suite_record['suite_id']}/run")
     assert run.status_code == 200
@@ -179,6 +182,10 @@ def test_governed_regression_suite_persists_evidence_and_gates_release(tmp_path,
     eligible = client.get(f"/api/enterprise/regression-suites/{suite_record['suite_id']}/release-check")
     assert eligible.status_code == 200
     assert eligible.json()["release_status"] == "eligible"
+    released = client.post(f"/api/enterprise/scenario-packs/{pack['scenario_pack_id']}/release")
+    assert released.status_code == 200
+    assert released.json()["status"] == "approved"
+    assert released.json()["release_gate"]["run_id"] == run_record["run_id"]
 
     import importlib
 
