@@ -510,6 +510,19 @@ def enterprise_regression_release_check(suite_id: str) -> dict[str, Any]:
     }
 
 
+@app.post("/api/enterprise/scenario-packs/{scenario_pack_id}/release")
+def enterprise_release_scenario_pack(scenario_pack_id: str, request: Request) -> dict[str, Any]:
+    store = _execution_store()
+    try:
+        store.scenario_pack(scenario_pack_id)
+    except KeyError as exc:
+        raise HTTPException(404, "scenario pack not found") from exc
+    try:
+        return store.approve_scenario_pack(scenario_pack_id, _enterprise_actor(request))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @app.get("/api/enterprise/strategies")
 def enterprise_strategies() -> dict[str, Any]:
     return {"strategies": _execution_store().strategies()}
