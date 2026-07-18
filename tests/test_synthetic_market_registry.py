@@ -190,9 +190,10 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
     assert job.json()["status"] == "queued"
     resumed = client.post(f"/api/enterprise/experiment-jobs/{job.json()['job_id']}/resume")
     assert resumed.status_code == 200
-    assert resumed.json()["status"] == "completed"
-    assert resumed.json()["progress"]["percent"] == 100
-    assert resumed.json()["artifact"]["content_hash"]
+    resumed_record = resumed.json()
+    assert resumed_record["status"] == "completed"
+    assert resumed_record["progress"]["percent"] == 100
+    assert resumed_record["artifact"]["content_hash"]
     jobs = client.get("/api/enterprise/experiment-jobs?limit=5")
     assert jobs.status_code == 200
     assert jobs.json()["jobs"][0]["status"] == "completed"
@@ -200,11 +201,12 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
         f"/api/enterprise/experiment-jobs/{job.json()['job_id']}/artifacts/experiment-result"
     )
     assert artifact_response.status_code == 200
-    assert artifact_response.json()["content_hash"] == resumed.json()["artifact"]["content_hash"]
+    assert artifact_response.json()["content_hash"] == resumed_record["artifact"]["content_hash"]
     listed = client.get("/api/enterprise/experiments?limit=1&offset=0")
     assert listed.status_code == 200
     assert listed.json()["limit"] == 1
-    assert listed.json()["experiments"][0]["experiment_id"] == record["experiment_id"]
+    assert listed.json()["experiments"][0]["experiment_id"] == resumed_record["experiment_id"]
+    assert listed.json()["experiments"][0]["experiment_id"] != record["experiment_id"]
     assert "result" not in listed.json()["experiments"][0]
     assert listed.json()["experiments"][0]["has_result"] is True
     validation = client.post(f"/api/enterprise/experiments/{record['experiment_id']}/validate")
