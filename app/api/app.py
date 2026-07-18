@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -47,6 +47,7 @@ from app.execution_arena import (
     challenge_overview,
     public_leaderboard_matrix,
     run_execution_challenge,
+    run_policy_on_compiled_world,
     run_policy_submission,
 )
 from app.execution_arena import (
@@ -274,6 +275,11 @@ def synthetic_market_world_landing() -> FileResponse:
     return FileResponse(ROOT / "static" / "synthetic-market-world.html")
 
 
+@app.get("/strategy-stress-lab")
+def strategy_stress_lab_landing() -> FileResponse:
+    return FileResponse(ROOT / "static" / "stress-lab.html")
+
+
 @app.get("/api/enterprise/worlds")
 def enterprise_worlds() -> dict[str, Any]:
     return {"worlds": _execution_store().synthetic_worlds()}
@@ -389,8 +395,13 @@ def enterprise_create_strategy(payload: StrategyCreate, request: Request) -> dic
     actor = _enterprise_actor(request)
     if payload.strategy_type == "arena_policy" and payload.builtin_policy_id is None:
         raise HTTPException(422, "arena_policy strategies require a registered built-in policy ID")
+    if payload.strategy_type == "external_adapter" and payload.external_adapter is None:
+        raise HTTPException(422, "external_adapter strategies require a bounded adapter contract")
     strategy_id = new_registry_id("strategy")
-    return _execution_store().create_strategy(strategy_id, payload.model_dump(mode="json"), actor)
+    record = payload.model_dump(mode="json")
+    if payload.external_adapter is not None:
+        record["builtin_policy_id"] = payload.external_adapter.policy_id
+    return _execution_store().create_strategy(strategy_id, record, actor)
 
 
 @app.get("/api/enterprise/strategies/{strategy_id}")
@@ -435,17 +446,25 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
                 base_world_manifest=base_world,
                 calibration_result={"accepted_parameter_sets": [parameter_set]},
             )
-            world_results = []
-            for protected in ensemble_compiled["protected_worlds"]:
+
+            def run_cell(protected: dict[str, Any]) -> dict[str, Any]:
                 simulation = run_simulation(WorldSpec.model_validate(protected["world"]))
-                world_results.append(
-                    {
-                        "world_hash": protected["world_hash"],
-                        "filled_quantity": simulation.summary["filled_quantity"],
-                        "implementation_shortfall_bps": simulation.summary["implementation_shortfall_bps"],
-                        "completion_pct": simulation.summary["completion_pct"],
-                    }
+                return {
+                    "world_hash": protected["world_hash"],
+                    "filled_quantity": simulation.summary["filled_quantity"],
+                    "implementation_shortfall_bps": simulation.summary["implementation_shortfall_bps"],
+                    "completion_pct": simulation.summary["completion_pct"],
+                }
+
+            # Keep execution single-threaded until the simulator has an explicit
+            # worker boundary; this preserves restart safety and avoids sharing
+            # mutable engine state across request threads.
+            world_results = [
+                run_cell(protected)
+                for protected in sorted(
+                    ensemble_compiled["protected_worlds"], key=lambda item: item["world_hash"]
                 )
+            ]
             ensemble_runs.append(
                 {
                     "parameter_set_id": parameter_set["parameter_set_id"],
@@ -455,8 +474,25 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
                 }
             )
     policy_ids = [str(strategy["builtin_policy_id"]) for strategy in strategies]
-    matrix = benchmark_matrix(seeds=tuple(payload.seeds), student_submissions=None)
-    selected = [row for row in matrix["rows"] if row["policy_id"] in policy_ids]
+    matrix = benchmark_matrix(
+        seeds=tuple(payload.seeds),
+        variants=("latency_shock",),
+        student_submissions=None,
+        policy_ids=tuple(policy_ids),
+    )
+    selected = matrix["rows"]
+    strategy_by_policy = {str(strategy["builtin_policy_id"]): strategy for strategy in strategies}
+    selected = [
+        row
+        | {
+            "adapter_provenance": {
+                "strategy_type": strategy_by_policy[str(row["policy_id"])]["strategy_type"],
+                "adapter_hash": strategy_by_policy[str(row["policy_id"])].get("adapter_hash"),
+                "adapter_contract": strategy_by_policy[str(row["policy_id"])].get("external_adapter"),
+            }
+        }
+        for row in selected
+    ]
     result = {
         "experiment_type": "baseline_vs_protected_benchmark",
         "compile_hash": compiled["compile_hash"],
@@ -468,6 +504,285 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
     }
     experiment_id = new_registry_id("experiment")
     return store.save_stress_experiment(experiment_id, payload.model_dump(mode="json"), actor, result)
+
+
+@app.get("/api/enterprise/experiments")
+def enterprise_experiments(
+    limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)
+) -> dict[str, Any]:
+    return {
+        "experiments": _execution_store().stress_experiments(limit=limit, offset=offset),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@app.post("/api/enterprise/experiment-jobs")
+def enterprise_create_experiment_job(payload: StressExperimentCreate, request: Request) -> dict[str, Any]:
+    return _execution_store().create_experiment_job(
+        new_registry_id("job"), payload.model_dump(mode="json"), _enterprise_actor(request)
+    )
+
+
+@app.get("/api/enterprise/experiment-jobs/{job_id}")
+def enterprise_experiment_job(job_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().experiment_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment job not found") from exc
+
+
+@app.get("/api/enterprise/experiment-jobs")
+def enterprise_experiment_jobs(limit: int = Query(50, ge=1, le=200)) -> dict[str, Any]:
+    return {"jobs": _execution_store().experiment_jobs(limit=limit), "limit": limit}
+
+
+@app.post("/api/enterprise/experiment-jobs/{job_id}/resume")
+def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str, Any]:
+    store = _execution_store()
+    try:
+        job = store.experiment_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment job not found") from exc
+    if job["status"] == "completed":
+        try:
+            return job | {"artifact": store.experiment_artifact(job_id, "experiment-result")}
+        except KeyError:
+            return job
+    if job["status"] == "running":
+        raise HTTPException(409, "experiment job is already running")
+    payload = StressExperimentCreate.model_validate(job["payload"])
+    try:
+        pack = store.scenario_pack(payload.scenario_pack_id)
+        base_world = store.synthetic_world(str(pack["base_world_id"]))
+        strategies = [store.strategy(strategy_id) for strategy_id in payload.strategy_ids]
+    except KeyError as exc:
+        raise HTTPException(404, "scenario pack or strategy not found") from exc
+    if any(strategy["builtin_policy_id"] is None for strategy in strategies):
+        raise HTTPException(422, "only built-in policy adapters are executable in this milestone")
+    calibration_result = (
+        store.calibration_run(str(base_world["manifest"]["calibration_run_id"]))["result"]
+        if base_world["manifest"].get("calibration_run_id")
+        else None
+    )
+    compiled_by_seed = {
+        seed: compile_scenario_pack(
+            {**pack["manifest"], "scenario_pack_id": payload.scenario_pack_id},
+            base_world_manifest=base_world,
+            calibration_result=calibration_result,
+            seed=seed,
+        )
+        for seed in sorted(payload.seeds)
+    }
+    cell_total = sum(
+        len(payload.strategy_ids) * len(compiled["protected_worlds"])
+        for compiled in compiled_by_seed.values()
+    )
+    completed_before = sum(cell["status"] == "completed" for cell in job["cells"])
+    initial_progress = {
+        "completed_cells": completed_before,
+        "total_cells": cell_total,
+        "percent": round(100 * completed_before / cell_total) if cell_total else 0,
+    }
+    if not store.claim_experiment_job(job_id, initial_progress):
+        raise HTTPException(409, "experiment job is already running")
+    if cell_total == 0:
+        store.update_experiment_job(job_id, status="failed", progress=initial_progress)
+        raise HTTPException(422, "scenario pack compiled to no protected worlds")
+    job = store.experiment_job(job_id)
+    try:
+        completed_rows: list[dict[str, Any]] = []
+        for strategy in sorted(strategies, key=lambda item: str(item["strategy_id"])):
+            strategy_id = str(strategy["strategy_id"])
+            builtin_policy_id = str(strategy["builtin_policy_id"])
+            for seed in sorted(payload.seeds):
+                compiled = compiled_by_seed[seed]
+                for protected in compiled["protected_worlds"]:
+                    world_hash = str(protected["world_hash"])
+                    existing = next(
+                        (
+                            cell
+                            for cell in job["cells"]
+                            if cell["strategy_id"] == strategy_id
+                            and cell["scenario_hash"] == compiled["compile_hash"]
+                            and cell["world_hash"] == world_hash
+                            and cell["seed"] == seed
+                            and cell["status"] == "completed"
+                            and cell["result"] is not None
+                            and cell["result"].get("execution_source") == "compiled_scenario_pack"
+                        ),
+                        None,
+                    )
+                    if existing is not None:
+                        completed_rows.append(existing["result"])
+                        continue
+                    try:
+                        row = run_policy_on_compiled_world(
+                            builtin_policy_id,
+                            WorldSpec.model_validate(protected["world"]),
+                            source_world_hash=world_hash,
+                            scenario_pack_id=payload.scenario_pack_id,
+                        )
+                        adapter_provenance = {
+                            "strategy_type": strategy["strategy_type"],
+                            "adapter_hash": strategy.get("adapter_hash"),
+                            "adapter_contract": strategy.get("external_adapter"),
+                        }
+                        store.upsert_experiment_cell(
+                            new_registry_id("cell"),
+                            job_id,
+                            strategy_id=strategy_id,
+                            scenario_hash=str(compiled["compile_hash"]),
+                            world_hash=world_hash,
+                            seed=seed,
+                            status="completed",
+                            result={
+                                **row,
+                                "strategy_id": strategy_id,
+                                "seed": seed,
+                                "adapter_provenance": adapter_provenance,
+                            },
+                        )
+                        completed_rows.append(
+                            {
+                                **row,
+                                "strategy_id": strategy_id,
+                                "seed": seed,
+                                "adapter_provenance": adapter_provenance,
+                            }
+                        )
+                    except Exception as exc:
+                        store.upsert_experiment_cell(
+                            new_registry_id("cell"),
+                            job_id,
+                            strategy_id=strategy_id,
+                            scenario_hash=str(compiled["compile_hash"]),
+                            world_hash=world_hash,
+                            seed=seed,
+                            status="failed",
+                            error=str(exc),
+                        )
+                        raise
+                    cells = store.experiment_cells(job_id)
+                    done = sum(cell["status"] == "completed" for cell in cells)
+                    store.update_experiment_job(
+                        job_id,
+                        status="running",
+                        progress={
+                            "completed_cells": done,
+                            "total_cells": cell_total,
+                            "percent": round(100 * done / cell_total),
+                        },
+                    )
+        completed_rows.sort(key=lambda row: (str(row["strategy_id"]), int(row["seed"])))
+        compiled = compiled_by_seed[sorted(compiled_by_seed)[0]]
+        baseline = benchmark_matrix(
+            seeds=tuple(sorted(payload.seeds)),
+            variants=("latency_shock",),
+            student_submissions=None,
+            policy_ids=tuple(str(strategy["builtin_policy_id"]) for strategy in strategies),
+        )
+        experiment = store.save_stress_experiment(
+            new_registry_id("experiment"),
+            payload.model_dump(mode="json"),
+            job["created_by"],
+            {
+                "experiment_type": "baseline_vs_protected_benchmark",
+                "compile_hash": compiled["compile_hash"],
+                "scenario_pack_id": payload.scenario_pack_id,
+                "strategy_results": completed_rows,
+                "arena_baseline_comparator": baseline,
+                "cell_provenance": [
+                    {
+                        "cell_id": cell["cell_id"],
+                        "strategy_id": cell["strategy_id"],
+                        "scenario_hash": cell["scenario_hash"],
+                        "world_hash": cell["world_hash"],
+                        "seed": cell["seed"],
+                        "result_hash": cell["result_hash"],
+                    }
+                    for cell in store.experiment_cells(job_id)
+                    if cell["status"] == "completed"
+                ],
+                "claim_boundary": "Results are deterministic measurements inside the declared synthetic benchmark worlds.",
+                "calibration_ensemble": next(iter(compiled_by_seed.values())).get("calibration_ensemble", []),
+            },
+        )
+        artifact = store.save_experiment_artifact(
+            new_registry_id("artifact"),
+            job_id,
+            "experiment-result",
+            experiment,
+            manifest={
+                "experiment_id": experiment["experiment_id"],
+                "scenario_pack_id": payload.scenario_pack_id,
+                "scenario_hashes": sorted(
+                    {
+                        cell["scenario_hash"]
+                        for cell in store.experiment_cells(job_id)
+                        if cell["status"] == "completed"
+                    }
+                ),
+                "world_hashes": sorted(
+                    {
+                        cell["world_hash"]
+                        for cell in store.experiment_cells(job_id)
+                        if cell["status"] == "completed"
+                    }
+                ),
+                "seeds": sorted({cell["seed"] for cell in store.experiment_cells(job_id)}),
+                "strategy_ids": sorted({cell["strategy_id"] for cell in store.experiment_cells(job_id)}),
+                "creator": job["created_by"],
+            },
+        )
+        return store.update_experiment_job(
+            job_id,
+            status="completed",
+            progress={"completed_cells": cell_total, "total_cells": cell_total, "percent": 100},
+            experiment_id=experiment["experiment_id"],
+        ) | {"artifact": artifact}
+    except Exception:
+        cells = store.experiment_cells(job_id)
+        done = sum(cell["status"] == "completed" for cell in cells)
+        store.update_experiment_job(
+            job_id,
+            status="failed",
+            progress={
+                "completed_cells": done,
+                "total_cells": cell_total,
+                "percent": round(100 * done / cell_total),
+            },
+        )
+        raise
+
+
+@app.get("/api/enterprise/experiment-jobs/{job_id}/artifacts/{kind}")
+def enterprise_experiment_artifact(job_id: str, kind: str) -> dict[str, Any]:
+    try:
+        return _execution_store().experiment_artifact(job_id, kind)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment artifact not found") from exc
+
+
+@app.get("/api/enterprise/experiments/{experiment_id}/artifacts/{kind}")
+def enterprise_experiment_artifact_by_experiment(experiment_id: str, kind: str) -> dict[str, Any]:
+    try:
+        return _execution_store().experiment_artifact_for_experiment(experiment_id, kind)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment artifact not found") from exc
+
+
+@app.get("/api/enterprise/experiments/{experiment_id}/artifacts/{kind}/download")
+def enterprise_experiment_artifact_download(experiment_id: str, kind: str) -> Response:
+    try:
+        artifact = _execution_store().experiment_artifact_for_experiment(experiment_id, kind)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment artifact not found") from exc
+    return Response(
+        content=json.dumps(artifact["content"], indent=2, sort_keys=True),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{experiment_id}-{kind}.json"'},
+    )
 
 
 @app.get("/api/enterprise/experiments/{experiment_id}")

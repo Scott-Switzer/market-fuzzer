@@ -156,7 +156,7 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
             ],
         },
     ).json()
-    strategy = client.post(
+    client.post(
         "/api/enterprise/strategies",
         json={
             "name": "Guarded POV adapter",
@@ -164,11 +164,33 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
             "builtin_policy_id": "guarded_pov",
         },
     ).json()
+    external_strategy_response = client.post(
+        "/api/enterprise/strategies",
+        json={
+            "name": "External deterministic adapter",
+            "description": "A bounded external adapter contract routed through the deterministic engine.",
+            "strategy_type": "external_adapter",
+            "external_adapter": {
+                "adapter_id": "declarative_in_process_v1",
+                "adapter_version": "1.0.0",
+                "policy_id": "guarded_pov",
+                "input_observation_schema": "market_observation_v1",
+                "output_action_schema": "execution_action_v1",
+                "timeout_ms": 250,
+                "error_policy": "fail_cell",
+            },
+        },
+    )
+    assert external_strategy_response.status_code == 200
+    external_strategy = external_strategy_response.json()
+    assert external_strategy["strategy_type"] == "external_adapter"
+    assert external_strategy["builtin_policy_id"] == "guarded_pov"
+    assert len(external_strategy["adapter_hash"]) == 64
     experiment = client.post(
         "/api/enterprise/experiments",
         json={
             "name": "Guarded POV latency stress",
-            "strategy_ids": [strategy["strategy_id"]],
+            "strategy_ids": [external_strategy["strategy_id"]],
             "scenario_pack_id": pack["scenario_pack_id"],
             "seeds": [42],
         },
@@ -177,6 +199,69 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
     record = experiment.json()
     assert record["status"] == "completed"
     assert record["result"]["strategy_results"][0]["policy_id"] == "guarded_pov"
+    job = client.post(
+        "/api/enterprise/experiment-jobs",
+        json={
+            "name": "Resumable latency stress",
+            "strategy_ids": [external_strategy["strategy_id"]],
+            "scenario_pack_id": pack["scenario_pack_id"],
+            "seeds": [43],
+        },
+    )
+    assert job.status_code == 200
+    assert job.json()["status"] == "queued"
+    resumed = client.post(f"/api/enterprise/experiment-jobs/{job.json()['job_id']}/resume")
+    assert resumed.status_code == 200
+    resumed_record = resumed.json()
+    assert resumed_record["status"] == "completed"
+    assert resumed_record["progress"]["percent"] == 100
+    assert resumed_record["progress"]["completed_cells"] == 1
+    assert resumed_record["progress"]["total_cells"] == 1
+    assert len(resumed_record["cells"]) == 1
+    assert resumed_record["cells"][0]["status"] == "completed"
+    assert resumed_record["cells"][0]["result"]["execution_source"] == "compiled_scenario_pack"
+    assert resumed_record["cells"][0]["result"]["adapter_provenance"]["strategy_type"] == "external_adapter"
+    assert len(resumed_record["cells"][0]["result"]["adapter_provenance"]["adapter_hash"]) == 64
+    assert len(resumed_record["cells"][0]["scenario_hash"]) == 64
+    assert len(resumed_record["cells"][0]["result_hash"]) == 64
+    assert resumed_record["artifact"]["content_hash"]
+    resumed_again = client.post(f"/api/enterprise/experiment-jobs/{job.json()['job_id']}/resume")
+    assert resumed_again.status_code == 200
+    assert resumed_again.json()["experiment_id"] == resumed_record["experiment_id"]
+    assert resumed_again.json()["artifact"]["content_hash"] == resumed_record["artifact"]["content_hash"]
+    experiment_detail = client.get(f"/api/enterprise/experiments/{resumed_record['experiment_id']}").json()
+    assert experiment_detail["result"]["strategy_results"][0]["execution_source"] == "compiled_scenario_pack"
+    assert experiment_detail["result"]["arena_baseline_comparator"]["rows"]
+    artifact_detail = client.get(
+        f"/api/enterprise/experiments/{resumed_record['experiment_id']}/artifacts/experiment-result"
+    )
+    assert artifact_detail.status_code == 200
+    assert artifact_detail.json()["manifest"]["schema_version"] == "artifact-manifest-v1"
+    assert len(artifact_detail.json()["manifest"]["world_hashes"]) == 1
+    download = client.get(
+        f"/api/enterprise/experiments/{resumed_record['experiment_id']}/artifacts/experiment-result/download"
+    )
+    assert download.status_code == 200
+    assert "attachment" in download.headers["content-disposition"]
+    jobs = client.get("/api/enterprise/experiment-jobs?limit=5")
+    assert jobs.status_code == 200
+    assert jobs.json()["jobs"][0]["status"] == "completed"
+    artifact_response = client.get(
+        f"/api/enterprise/experiment-jobs/{job.json()['job_id']}/artifacts/experiment-result"
+    )
+    assert artifact_response.status_code == 200
+    assert artifact_response.json()["content_hash"] == resumed_record["artifact"]["content_hash"]
+    listed = client.get("/api/enterprise/experiments?limit=1&offset=0")
+    assert listed.status_code == 200
+    assert listed.json()["limit"] == 1
+    assert listed.json()["experiments"][0]["experiment_id"] == resumed_record["experiment_id"]
+    assert listed.json()["experiments"][0]["experiment_id"] != record["experiment_id"]
+    assert listed.json()["experiments"][0]["has_artifact"] is True
+    listed_all = client.get("/api/enterprise/experiments?limit=2").json()["experiments"]
+    assert listed_all[1]["experiment_id"] == record["experiment_id"]
+    assert listed_all[1]["has_artifact"] is False
+    assert "result" not in listed.json()["experiments"][0]
+    assert listed.json()["experiments"][0]["has_result"] is True
     validation = client.post(f"/api/enterprise/experiments/{record['experiment_id']}/validate")
     assert validation.status_code == 200
     report = validation.json()["report"]
