@@ -468,8 +468,13 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
                 }
             )
     policy_ids = [str(strategy["builtin_policy_id"]) for strategy in strategies]
-    matrix = benchmark_matrix(seeds=tuple(payload.seeds), student_submissions=None)
-    selected = [row for row in matrix["rows"] if row["policy_id"] in policy_ids]
+    matrix = benchmark_matrix(
+        seeds=tuple(payload.seeds),
+        variants=("latency_shock",),
+        student_submissions=None,
+        policy_ids=tuple(policy_ids),
+    )
+    selected = matrix["rows"]
     result = {
         "experiment_type": "baseline_vs_protected_benchmark",
         "compile_hash": compiled["compile_hash"],

@@ -949,11 +949,18 @@ def _challenge_quality_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-@lru_cache(maxsize=16)
-def _builtin_benchmark_matrix(seeds: tuple[int, ...], variants: tuple[str, ...]) -> dict[str, Any]:
+@lru_cache(maxsize=32)
+def _builtin_benchmark_matrix(
+    seeds: tuple[int, ...], variants: tuple[str, ...], policy_ids: tuple[str, ...] | None = None
+) -> dict[str, Any]:
     """Cache only immutable built-in rows; callers always receive a deep copy."""
     rows: list[dict[str, Any]] = []
-    for policy in POLICIES.values():
+    selected_policies = (
+        [POLICIES[policy_id] for policy_id in policy_ids]
+        if policy_ids is not None
+        else list(POLICIES.values())
+    )
+    for policy in selected_policies:
         rows.append(_matrix_row(policy, seeds, variants))
     robust_ranked = _rank_matrix_rows(rows)
     provenance = {
@@ -981,6 +988,7 @@ def benchmark_matrix(
     seeds: tuple[int, ...] = SEEDS,
     variants: tuple[str, ...] = HIDDEN_VARIANTS,
     student_submissions: dict[str, ExecutionPolicySubmission] | None = None,
+    policy_ids: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Return cached built-ins and evaluate only newly supplied custom policies."""
     variants = tuple(variants)
@@ -990,7 +998,15 @@ def benchmark_matrix(
         or any(variant not in HIDDEN_VARIANTS for variant in variants)
     ):
         raise ValueError("benchmark variants must be a unique non-empty subset of hidden variants")
-    matrix = deepcopy(_builtin_benchmark_matrix(tuple(seeds), variants))
+    if policy_ids is not None:
+        if (
+            not policy_ids
+            or len(set(policy_ids)) != len(policy_ids)
+            or any(policy_id not in POLICIES for policy_id in policy_ids)
+        ):
+            raise ValueError("benchmark policy IDs must be unique registered built-ins")
+        policy_ids = tuple(policy_ids)
+    matrix = deepcopy(_builtin_benchmark_matrix(tuple(seeds), variants, policy_ids))
     if not student_submissions:
         return matrix
     rows = matrix["rows"]
