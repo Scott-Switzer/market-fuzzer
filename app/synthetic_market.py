@@ -77,6 +77,42 @@ class ScenarioPackCreate(BaseModel):
     intended_question: str = Field(min_length=20, max_length=1_000)
 
 
+RegressionCase = Literal[
+    "protected_worlds_present",
+    "world_hashes_stable",
+    "intervention_steps_preserved",
+    "base_manifest_stable",
+]
+
+REGRESSION_CASE_TYPES: tuple[RegressionCase, ...] = (
+    "protected_worlds_present",
+    "world_hashes_stable",
+    "intervention_steps_preserved",
+    "base_manifest_stable",
+)
+
+
+class RegressionSuiteCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=3, max_length=160)
+    scenario_pack_id: str = Field(min_length=3, max_length=100)
+    required_cases: list[RegressionCase] = Field(
+        default_factory=lambda: [
+            *REGRESSION_CASE_TYPES,
+        ],
+        min_length=1,
+        max_length=len(REGRESSION_CASE_TYPES),
+    )
+
+    @field_validator("required_cases")
+    @classmethod
+    def unique_cases(cls, cases: list[str]) -> list[str]:
+        if len(cases) != len(set(cases)):
+            raise ValueError("required regression cases must be unique")
+        return cases
+
+
 def new_registry_id(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex[:16]}"
 
