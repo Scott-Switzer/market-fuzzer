@@ -44,6 +44,7 @@ from app.calibration import (
     compile_canonical_csv_bytes,
 )
 from app.compiler import compile_world
+from app.decision_benchmark import build_decision_change_benchmark
 from app.execution_arena import (
     CHALLENGE_ID,
     HIDDEN_VARIANTS,
@@ -824,6 +825,20 @@ def enterprise_experiments(
         "limit": limit,
         "offset": offset,
     }
+
+
+@app.get("/api/enterprise/decision-benchmark")
+def enterprise_decision_benchmark(
+    seeds: str = Query("41,42", description="Comma-separated deterministic benchmark seeds"),
+) -> dict[str, Any]:
+    """Expose the canonical decision-change evidence for the operator UI."""
+    try:
+        parsed_seeds = tuple(sorted({int(value.strip()) for value in seeds.split(",") if value.strip()}))
+    except ValueError as exc:
+        raise HTTPException(422, "seeds must be comma-separated integers") from exc
+    if not parsed_seeds or len(parsed_seeds) > 8:
+        raise HTTPException(422, "seeds must contain between 1 and 8 values")
+    return build_decision_change_benchmark(parsed_seeds)
 
 
 @app.post("/api/enterprise/experiment-jobs")
