@@ -177,6 +177,9 @@ def test_exchange_backed_benchmarks_reverse_public_and_hidden_ranks() -> None:
     assert rows["guarded_pov"]["robustness_rank"] == 1
     assert rows["aggressive_pov"]["robustness_rank"] > 1
     assert matrix["provenance"]["strategy_submission_policy"] == "declarative_only"
+    evidence = matrix["provenance"]["evaluation_evidence"]
+    assert evidence["scope"] == "development_fixture"
+    assert "not sealed primary" in evidence["claim_boundary"].lower()
     aggressive_public = rows["aggressive_pov"]["public_world_results"][0]
     guarded_public = rows["guarded_pov"]["public_world_results"][0]
     assert aggressive_public["environment_hash"] == guarded_public["environment_hash"]

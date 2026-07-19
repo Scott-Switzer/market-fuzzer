@@ -367,6 +367,8 @@ def main() -> None:
             assert "Robustness score" in heatmap_text
             assert "Worst-world status" in heatmap_text
             assert "worst world" in heatmap_text.lower()
+            assert "development-fixture outcomes" in heatmap_text.lower()
+            assert "not sealed primary evaluation" in heatmap_text.lower()
             assert "% complete" in heatmap_text
             assert "Student policy" in heatmap_text
             assert measured_quality.locator(".quality-check").count() >= 5

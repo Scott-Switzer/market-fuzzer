@@ -11,6 +11,8 @@ from typing import Any
 
 import yaml
 
+from app.evaluation import adaptive_diagnostic_evidence
+
 STORE = Path(os.getenv("MARKET_FUZZER_ARTIFACT_ROOT", "artifacts/market_fuzzer")).expanduser()
 STRATEGIES = {
     "pov_fragile": {
@@ -225,15 +227,28 @@ def _runs(strategy, s, p, seeds):
     return [evaluate(strategy, s, p, x) for x in seeds]
 
 
+def _diagnostic_result(result: dict) -> dict:
+    """Attach shared evidence without turning adaptive search into a primary score."""
+    mechanism = str(result.get("violated_property", {}).get("id", "bounded_failure_search"))
+    result["evaluation_evidence"] = adaptive_diagnostic_evidence(
+        payload=result,
+        mechanism=mechanism,
+        limitation="This search inspects a strategy and minimizes a configured failure; it is not independently selected primary evaluation.",
+    ).to_dict()
+    return result
+
+
 def run_search(strategy, properties, mode="quick"):
     seeds = [41, 42, 43] if mode == "quick" else list(range(41, 49))
     if "participation" not in {p["id"] for p in properties}:
-        return {
-            "status": "complete",
-            "found": False,
-            "tested": 0,
-            "message": "Enable the participation property to search for the POV tutorial defect.",
-        }
+        return _diagnostic_result(
+            {
+                "status": "complete",
+                "found": False,
+                "tested": 0,
+                "message": "Enable the participation property to search for the POV tutorial defect.",
+            }
+        )
     candidates = [
         {
             "liquidity": liquidity,
@@ -255,12 +270,14 @@ def run_search(strategy, properties, mode="quick"):
         if target_failures >= required_failures:
             qualifying.append((severity(candidate)["score"], candidate, candidate_runs))
     if not qualifying:
-        return {
-            "status": "complete",
-            "found": False,
-            "tested": len(candidates),
-            "message": "No reproducible participation failure within bounds.",
-        }
+        return _diagnostic_result(
+            {
+                "status": "complete",
+                "found": False,
+                "tested": len(candidates),
+                "message": "No reproducible participation failure within bounds.",
+            }
+        )
     _, original, runs = min(qualifying, key=lambda x: (x[0], json.dumps(x[1], sort_keys=True)))
     minimized = dict(original)
     trace = []
@@ -309,40 +326,44 @@ def run_search(strategy, properties, mode="quick"):
         neighbor = {**minimized, "forced_seller": 0}
         neighbor_runs = _runs(strategy, neighbor, properties, seeds)
     if not all(r["passed"] for r in neighbor_runs):
-        return {
-            "status": "complete",
-            "found": False,
-            "tested": len(candidates),
-            "message": "A participation failure was found, but no verified passing neighbor exists within the search grid.",
-        }
+        return _diagnostic_result(
+            {
+                "status": "complete",
+                "found": False,
+                "tested": len(candidates),
+                "message": "A participation failure was found, but no verified passing neighbor exists within the search grid.",
+            }
+        )
     target = next(p for p in final_runs[0]["properties"] if p["id"] == "participation")
     fid = stable_id(
         "failure", {"strategy": strategy.get("id"), "scenario": minimized, "properties": properties}
     )
-    return {
-        "id": fid,
-        "status": "complete",
-        "found": True,
-        "tested": len(candidates),
-        "scenario": original,
-        "original_runs": runs,
-        "minimized": minimized,
-        "runs": final_runs,
-        "minimization_trace": trace,
-        "passing_neighbor": neighbor,
-        "passing_neighbor_runs": neighbor_runs,
-        "severity": severity(minimized),
-        "violated_property": target,
-        "reproduction": {
-            "seeds_tested": seeds,
-            "seeds_failed": _target_fail(final_runs, properties),
-            "failure_rate": _target_fail(final_runs, properties) / len(seeds),
-            "calibration_sets_tested": 1,
-            "calibration_sets_failed": 1 if _target_fail(final_runs, properties) else 0,
-        },
-        "scenario_hash": scenario_hash(minimized),
-        "passing_neighbor_scenario_hash": scenario_hash(neighbor),
-    }
+    return _diagnostic_result(
+        {
+            "id": fid,
+            "status": "complete",
+            "found": True,
+            "tested": len(candidates),
+            "scenario": original,
+            "original_runs": runs,
+            "minimized": minimized,
+            "runs": final_runs,
+            "minimization_trace": trace,
+            "passing_neighbor": neighbor,
+            "passing_neighbor_runs": neighbor_runs,
+            "severity": severity(minimized),
+            "violated_property": target,
+            "reproduction": {
+                "seeds_tested": seeds,
+                "seeds_failed": _target_fail(final_runs, properties),
+                "failure_rate": _target_fail(final_runs, properties) / len(seeds),
+                "calibration_sets_tested": 1,
+                "calibration_sets_failed": 1 if _target_fail(final_runs, properties) else 0,
+            },
+            "scenario_hash": scenario_hash(minimized),
+            "passing_neighbor_scenario_hash": scenario_hash(neighbor),
+        }
+    )
 
 
 def export_fixture(failure, strategy, properties):
