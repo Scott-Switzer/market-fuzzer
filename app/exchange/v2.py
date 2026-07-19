@@ -27,16 +27,34 @@ class EventKindV2(StrEnum):
     ORDER_ACKNOWLEDGED = "order_acknowledged"
     ORDER_REJECTED = "order_rejected"
     COMMAND_ACCEPTED = "command_accepted"
+    ORDER_CANCELLED = "order_cancelled"
+    TRADE_EXECUTED = "trade_executed"
 
 
 class SideV2(StrEnum):
     BUY = "buy"
     SELL = "sell"
 
+    @property
+    def opposite(self) -> SideV2:
+        return SideV2.SELL if self == SideV2.BUY else SideV2.BUY
+
 
 class OrderTypeV2(StrEnum):
     LIMIT = "limit"
     MARKET = "market"
+
+
+class TimeInForceV2(StrEnum):
+    DAY = "day"
+    IOC = "ioc"
+    FOK = "fok"
+
+
+class SelfTradePreventionV2(StrEnum):
+    CANCEL_TAKER = "cancel_taker"
+    CANCEL_MAKER = "cancel_maker"
+    DECREMENT_AND_CANCEL = "decrement_and_cancel"
 
 
 def _require_nonempty(value: str, field_name: str) -> None:
@@ -56,6 +74,8 @@ class OrderCommandV2:
     exchange_time_ns: int
     venue_sequence: int
     price_ticks: int | None = None
+    time_in_force: TimeInForceV2 = TimeInForceV2.DAY
+    self_trade_prevention: SelfTradePreventionV2 = SelfTradePreventionV2.CANCEL_TAKER
 
     def __post_init__(self) -> None:
         for value, name in (
@@ -73,6 +93,8 @@ class OrderCommandV2:
             raise ExchangeValidationError("limit order requires positive price_ticks")
         if self.order_type == OrderTypeV2.MARKET and self.price_ticks is not None:
             raise ExchangeValidationError("market order must not set price_ticks")
+        if self.time_in_force == TimeInForceV2.FOK and self.order_type == OrderTypeV2.MARKET:
+            raise ExchangeValidationError("FOK market orders require an explicit price protection limit")
 
 
 @dataclass(frozen=True, slots=True)
