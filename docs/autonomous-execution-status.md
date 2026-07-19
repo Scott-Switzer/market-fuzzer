@@ -6,13 +6,13 @@ Build a sealed, procedurally generated market-evaluation platform that measures 
 
 ## Current milestone
 
-M6 — shared evaluation evidence integration.
+M7 — historical calibration boundary.
 
-- Current branch: `codex/m6-shared-evaluation-v2`
+- Current branch: `codex/m7-calibration-boundary`
 - Current PR: not yet opened
-- Clean-main baseline SHA: `6b54dc309208fedd6ae339caaebf4976dbba2758`
+- Clean-main baseline SHA: `3f1bb0d`
 - Latest substantive Greptile-reviewed SHA: `0fda71eb2c8832b61e30a5a1a3f690be677bd7c1`
-- Latest self-reviewed SHA: `4b1b127416a5468089d667db2572f326da5eeab4` (will change when this ledger update is amended)
+- Latest self-reviewed SHA: `3f1bb0d` (M6 merge; M7 work is uncommitted)
 
 ## Completed evidence
 
@@ -32,12 +32,13 @@ M6 — shared evaluation evidence integration.
 - Clean `main` was checked out and its verification and Docker smoke were rerun after the merge.
 - M6 implementation has local evidence: canonical development, sealed-primary, and adaptive-diagnostic envelopes; Arena and Stress Lab legacy outputs label themselves as development fixtures; Market Fuzzer labels strategy-aware failure searches as adaptive diagnostics; governed report exports retain the evaluation scope and evidence digest.
 - M6 local validation passed: focused evidence/Arena/Product/registry tests, full `make verify`, clean browser E2E, static analysis, and `DOCKER_DEFAULT_PLATFORM=linux/amd64 make docker-smoke`.
+- M6 merged as PR #22 at `3f1bb0d`; two latest-head GitHub verification runs passed (7m17s and 7m36s), two Docker smokes passed (36s and 41s), and no inline review threads remained.
 
 ## Current work and next executable action
 
-- Establish one canonical evidence envelope across Arena development fixtures, sealed primary results, and Market Fuzzer adaptive diagnostics.
-- Do not represent fixed-seed legacy matrices as sealed-primary results; a parity-tested V2 kernel adapter remains required before workflow execution migrates.
-- Next executable action: stage the self-reviewed M6 diff, commit and push it, then open its focused PR and await exact-head CI.
+- Add typed source-resolution manifests, explicit calibration claims, and non-overlapping holdout evidence without reading raw Portfolio Engine data.
+- Generated-world similarity remains a transient diagnostic against copying, not a novelty guarantee or hidden-evaluation source.
+- Next executable action: self-review the M7 manifest and similarity implementation, run full verification, and open a focused PR.
 
 ## Unresolved findings and blockers
 
@@ -56,8 +57,9 @@ M6 — shared evaluation evidence integration.
 | M3B — V2 lifecycle and risk controls | merged and clean-main verified |
 | M4 — generator ensemble | merged and clean-main verified |
 | M5 — sealed evaluation protocol | merged and clean-main verified |
-| M6 — shared evaluation evidence integration | in progress |
-| M7–M10 | pending |
+| M6 — shared evaluation evidence integration | merged and clean-main verified |
+| M7 — historical calibration boundary | in progress |
+| M8–M10 | pending |
 
 ## Claims currently permitted
 

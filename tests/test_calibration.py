@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 
 import pandas as pd
 import pytest
 
 from app.calibration import (
+    CalibrationDataManifestV1,
+    DataResolutionV1,
     build_demo_calibration_pack,
     calibrate_bootstrap,
     compile_canonical_csv,
@@ -103,3 +106,33 @@ def test_bootstrap_bounds_and_determinism() -> None:
         calibrate_bootstrap(pack, mode="quick", bootstraps=4)
     with pytest.raises(ValueError, match="between 1 and 10"):
         calibrate_bootstrap(pack, mode="audit", bootstraps=11)
+
+
+def test_ohlcv_manifest_rejects_microstructure_claims_and_overlapping_holdout() -> None:
+    start = datetime(2024, 1, 1)
+    with pytest.raises(ValueError, match="supported calibration properties"):
+        CalibrationDataManifestV1(
+            source_id="bars-v1",
+            resolution=DataResolutionV1.OHLCV,
+            source_checksum="sha256:" + "a" * 64,
+            rights_basis="authorized research data",
+            source_row_count=100,
+            calibration_start=start,
+            calibration_end=start + timedelta(days=2),
+            supported_properties=("queue_dynamics",),
+            prohibited_claims=("queue_position", "fill_probability", "cancellation_behavior"),
+        )
+    with pytest.raises(ValueError, match="must not overlap"):
+        CalibrationDataManifestV1(
+            source_id="bars-v1",
+            resolution=DataResolutionV1.OHLCV,
+            source_checksum="sha256:" + "a" * 64,
+            rights_basis="authorized research data",
+            source_row_count=100,
+            calibration_start=start,
+            calibration_end=start + timedelta(days=2),
+            heldout_start=start + timedelta(days=2),
+            heldout_end=start + timedelta(days=3),
+            supported_properties=("return_distribution",),
+            prohibited_claims=("queue_position", "fill_probability", "cancellation_behavior"),
+        )

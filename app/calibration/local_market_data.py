@@ -11,7 +11,12 @@ import pandas as pd
 import pyarrow.parquet as parquet
 
 from .compiler import CANONICAL_COLUMNS, _compile_frame
-from .models import CalibrationPackV1
+from .models import (
+    CalibrationDataManifestV1,
+    CalibrationPackV1,
+    DataResolutionV1,
+    supported_properties_for_resolution,
+)
 
 
 def compile_local_ohlcv_parquet(
@@ -100,10 +105,23 @@ def compile_local_ohlcv_parquet(
     )
     return pack.model_copy(
         update={
+            "data_manifest": CalibrationDataManifestV1(
+                source_id=f"local-parquet:{parquet_path.name}",
+                resolution=DataResolutionV1.OHLCV,
+                source_checksum=f"sha256:{source_checksum}",
+                rights_basis=usage_basis,
+                source_row_count=len(frame),
+                calibration_start=pack.window("train").start,
+                calibration_end=pack.window("validation").end,
+                heldout_start=pack.window("test").start,
+                heldout_end=pack.window("test").end,
+                supported_properties=supported_properties_for_resolution(DataResolutionV1.OHLCV),
+                prohibited_claims=("queue_position", "fill_probability", "cancellation_behavior"),
+            ),
             "notes": pack.notes
             + (
                 f"Derived from security_id={security_id}, timeframe={timeframe}, and {len(frame)} OHLCV bars.",
                 "Spread, depth, and signed-flow fields are OHLCV-derived proxies; no order-book rows were retained.",
-            )
+            ),
         }
     )
