@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 from datetime import date
 from pathlib import Path
 from typing import Literal
@@ -84,7 +85,7 @@ def _compile_frame(
     frame: pd.DataFrame,
     *,
     pack_id: str,
-    source_kind: Literal["deterministic_demo", "canonical_user_csv"],
+    source_kind: Literal["deterministic_demo", "canonical_user_csv", "local_ohlcv_proxy"],
     checksum: str,
     source_url: str,
     retrieval_date: date,
@@ -172,6 +173,34 @@ def compile_canonical_csv(
     csv_path = Path(path)
     payload = csv_path.read_bytes()
     frame = pd.read_csv(csv_path)
+    return _compile_frame(
+        frame,
+        pack_id=pack_id,
+        source_kind="canonical_user_csv",
+        checksum=hashlib.sha256(payload).hexdigest(),
+        source_url=source_url,
+        retrieval_date=retrieval_date,
+        usage_basis=usage_basis,
+        instrument=instrument,
+        venue=venue,
+        session=session,
+    )
+
+
+def compile_canonical_csv_bytes(
+    payload: bytes,
+    *,
+    pack_id: str = "user-aggregate-v1",
+    source_url: str = "user-provided://canonical-csv",
+    retrieval_date: date = date(2026, 7, 14),
+    usage_basis: str = "User supplied data authorized for aggregate calibration",
+    instrument: str = "user-specified instrument",
+    venue: str = "user-specified venue",
+    session: str = "user-specified session",
+) -> CalibrationPackV1:
+    """Compile request-body CSV bytes without retaining the source rows."""
+
+    frame = pd.read_csv(io.BytesIO(payload))
     return _compile_frame(
         frame,
         pack_id=pack_id,

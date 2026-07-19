@@ -53,6 +53,14 @@ docker compose up --build
 
 The image runs as a non-root user, persists Arena state and Market Fuzzer artifacts in a named volume, and exposes a semantic health check at `/api/health`. Demo authentication is off by default; Compose passes the instructor code from the host environment and does not bake it into the image.
 
+For the enterprise research-appliance path, set `ARENA_ENTERPRISE_API_KEY` and
+`ARENA_ADAPTER_ALLOWED_HOSTS` before starting Compose. The World Registry can
+attach aggregate-only customer calibration evidence; the Strategy Stress Lab
+can compile a plain-English brief or register an executable `http_json_v1`
+adapter. See [`docs/OPERATIONS_RUNBOOK.md`](docs/OPERATIONS_RUNBOOK.md) and
+[`docs/DATA_AND_SIMULATION_ARCHITECTURE.md`](docs/DATA_AND_SIMULATION_ARCHITECTURE.md)
+for the supported boundary and local-data workflow.
+
 ## Product map
 
 ```text

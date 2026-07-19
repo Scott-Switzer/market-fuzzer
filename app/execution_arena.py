@@ -19,7 +19,7 @@ from typing import Any, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas import WorldSpec
-from app.simulation import SimulationResult, run_simulation
+from app.simulation import ExecutionDecider, SimulationResult, run_simulation
 from app.world.scenarios import build_demo_world, mutate_scenario
 
 CHALLENGE_ID = "trade-the-shock"
@@ -616,7 +616,13 @@ def _run_policy(policy: Policy, world_variant: str, seed: int) -> dict[str, Any]
 
 
 def run_policy_on_compiled_world(
-    policy_id: str, world: WorldSpec, *, source_world_hash: str, scenario_pack_id: str
+    policy_id: str,
+    world: WorldSpec,
+    *,
+    source_world_hash: str,
+    scenario_pack_id: str,
+    execution_decider: ExecutionDecider | None = None,
+    reported_policy_id: str | None = None,
 ) -> dict[str, Any]:
     """Execute a registered policy against an already compiled protected world."""
     if policy_id not in POLICIES:
@@ -652,11 +658,11 @@ def run_policy_on_compiled_world(
                 }
             )
     executed_world = WorldSpec.model_validate(data)
-    result = run_simulation(executed_world)
+    result = run_simulation(executed_world, execution_decider=execution_decider)
     return {
         "execution_source": "compiled_scenario_pack",
         "scenario_pack_id": scenario_pack_id,
-        "policy_id": policy_id,
+        "policy_id": reported_policy_id or policy_id,
         "seed": executed_world.seed,
         "world_hash": source_world_hash,
         "executed_spec_hash": result.spec_hash,

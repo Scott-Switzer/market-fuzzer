@@ -6,6 +6,7 @@ import json
 import random
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -13,8 +14,10 @@ from app.agents.behaviors import AgentContext, ExecutionAgent, MarketMaker, buil
 from app.exchange import Account, CancelRequest, Exchange, Order, OrderType, Side
 from app.orderflow import QueueReactiveProvider, RuleBasedProvider
 from app.schemas import WorldSpec
+from app.strategy_protocol import StrategyActionV1
 
 MESSAGE_STEP_MS = 20
+ExecutionDecider = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -222,7 +225,32 @@ def _build_strategy_steps(
     return rows
 
 
-def run_simulation(spec: WorldSpec) -> SimulationResult:
+def _orders_from_adapter_action(
+    agent: ExecutionAgent, context: AgentContext, action: dict[str, Any]
+) -> list[Order]:
+    parsed = StrategyActionV1.model_validate(action)
+    if parsed.action_type == "hold":
+        return []
+    assert parsed.side is not None
+    side = Side(parsed.side)
+    if parsed.action_type == "limit":
+        return [
+            Order(
+                agent.next_id(),
+                agent.agent_id,
+                context.symbol,
+                side,
+                OrderType.LIMIT,
+                parsed.quantity,
+                context.step,
+                parsed.limit_price_ticks,
+            )
+        ]
+    order = agent.market(context, side, parsed.quantity)
+    return [order] if order else []
+
+
+def run_simulation(spec: WorldSpec, *, execution_decider: ExecutionDecider | None = None) -> SimulationResult:
     started = time.perf_counter()
     rng = random.Random(spec.seed)
     exchange = Exchange([asset.ticker for asset in spec.assets], spec.exchange)
@@ -289,8 +317,20 @@ def run_simulation(spec: WorldSpec) -> SimulationResult:
         )
         return queued + resting
 
+    def normalize_order_quantity(order: Order) -> bool:
+        """Apply the exchange lot contract before recording or submitting an order."""
+
+        normalized = (max(0, int(order.quantity)) // spec.exchange.lot_size) * spec.exchange.lot_size
+        if normalized <= 0:
+            return False
+        order.quantity = normalized
+        order.remaining = normalized
+        return True
+
     def schedule_order(order: Order, step: int, latency: LatencyProfile) -> None:
         nonlocal pending_sequence
+        if not normalize_order_quantity(order):
+            return
         _stamp_order(order, step, latency)
         exchange.record_submission(order)
         arrival_step = int(order.exchange_arrival_step or step)
@@ -364,6 +404,8 @@ def run_simulation(spec: WorldSpec) -> SimulationResult:
                     liquidity_multiplier,
                 )
                 for order in agent.decide(context, rng, 0):
+                    if not normalize_order_quantity(order):
+                        continue
                     _stamp_order(order, 0, LatencyProfile(0, 0, 0, 0))
                     submit_to_exchange(order, 0)
 
@@ -506,6 +548,7 @@ def run_simulation(spec: WorldSpec) -> SimulationResult:
                             "step": step,
                             "strategy_id": agent.agent_id,
                             "symbol": asset.ticker,
+                            "side": agent.side.value,
                             "observed_volume": observed_volume,
                             "best_bid_ticks": bid,
                             "best_ask_ticks": ask,
@@ -544,67 +587,97 @@ def run_simulation(spec: WorldSpec) -> SimulationResult:
                         )
                         if active
                     ]
-                decisions = (
-                    []
-                    if pause_for_halt or pause_for_spread or pause_for_stale_feed
-                    else agent.decide(context, rng, inventory)
-                )
+                    strategy_observations[-1].update(
+                        {
+                            "inventory": inventory,
+                            "remaining_quantity": max(0, agent.target_quantity - agent.executed_quantity),
+                            "spread_bps": min(1_000_000.0, max(0.0, spread_bps)),
+                            "exchange_latency_profile": spec.exchange.latency_profile,
+                            "intervention_active": bool(
+                                liquidity_multiplier < 1.0
+                                or spec.macro.volatility_regime != "normal"
+                                or spec.exchange.latency_profile == "high"
+                            ),
+                        }
+                    )
+                if pause_for_halt or pause_for_spread or pause_for_stale_feed:
+                    decisions = []
+                elif (
+                    execution_decider is not None
+                    and isinstance(agent, ExecutionAgent)
+                    and asset.ticker == spec.experiment.target_asset
+                ):
+                    adapter_observation = {
+                        **strategy_observations[-1],
+                        "session_id": f"{spec.world_id}:{agent.agent_id}",
+                    }
+                    adapter_action = execution_decider(adapter_observation)
+                    if isinstance(adapter_action, dict):
+                        strategy_observations[-1]["adapter_action"] = StrategyActionV1.model_validate(
+                            adapter_action
+                        ).model_dump(mode="json")
+                    decisions = _orders_from_adapter_action(agent, context, adapter_action)
+                else:
+                    decisions = agent.decide(context, rng, inventory)
                 for order in decisions:
                     if isinstance(agent, ExecutionAgent):
                         active_quantity = active_strategy_quantity()
                         available = agent.target_quantity - agent.executed_quantity - active_quantity
                         if available <= 0:
                             continue
-                        progress = step / max(1, spec.clock.steps - 1)
-                        urgency_curve = str(agent.parameters.get("urgency_curve", "uniform"))
-                        urgency_factor = {
-                            "uniform": 1.0,
-                            "front_loaded": 1.5 - progress,
-                            "back_loaded": 0.5 + progress,
-                            "adaptive": (
-                                1.25
-                                if spec.macro.volatility_regime != "normal"
-                                or spec.exchange.latency_profile == "high"
-                                else 1.0
-                            ),
-                        }.get(urgency_curve, 1.0)
-                        adjusted = max(
-                            spec.exchange.lot_size,
-                            int(order.quantity * urgency_factor)
-                            // spec.exchange.lot_size
-                            * spec.exchange.lot_size,
-                        )
-                        buffer_steps = int(agent.parameters.get("completion_buffer_steps", 0))
-                        steps_left = spec.clock.steps - step
-                        adaptive_stress_active = (
-                            liquidity_multiplier < 1.0
-                            or spec.macro.volatility_regime != "normal"
-                            or spec.exchange.latency_profile == "high"
-                        )
-                        if buffer_steps and adaptive_stress_active and steps_left <= buffer_steps:
-                            completion_slice = (
-                                (available + steps_left - 1) // steps_left // spec.exchange.lot_size
-                            ) * spec.exchange.lot_size
-                            adjusted = max(adjusted, completion_slice)
-                        if bool(agent.parameters.get("enforce_max_participation", False)):
-                            max_participation = float(agent.parameters["max_participation"])
-                            participation_budget = max(
+                        if execution_decider is None:
+                            progress = step / max(1, spec.clock.steps - 1)
+                            urgency_curve = str(agent.parameters.get("urgency_curve", "uniform"))
+                            urgency_factor = {
+                                "uniform": 1.0,
+                                "front_loaded": 1.5 - progress,
+                                "back_loaded": 0.5 + progress,
+                                "adaptive": (
+                                    1.25
+                                    if spec.macro.volatility_regime != "normal"
+                                    or spec.exchange.latency_profile == "high"
+                                    else 1.0
+                                ),
+                            }.get(urgency_curve, 1.0)
+                            adjusted = max(
                                 spec.exchange.lot_size,
-                                int(observed_volume * max_participation)
+                                int(order.quantity * urgency_factor)
                                 // spec.exchange.lot_size
                                 * spec.exchange.lot_size,
                             )
-                            if bool(agent.parameters.get("include_pending_in_budget", True)):
+                            buffer_steps = int(agent.parameters.get("completion_buffer_steps", 0))
+                            steps_left = spec.clock.steps - step
+                            adaptive_stress_active = (
+                                liquidity_multiplier < 1.0
+                                or spec.macro.volatility_regime != "normal"
+                                or spec.exchange.latency_profile == "high"
+                            )
+                            if buffer_steps and adaptive_stress_active and steps_left <= buffer_steps:
+                                completion_slice = (
+                                    (available + steps_left - 1) // steps_left // spec.exchange.lot_size
+                                ) * spec.exchange.lot_size
+                                adjusted = max(adjusted, completion_slice)
+                            if bool(agent.parameters.get("enforce_max_participation", False)):
+                                max_participation = float(agent.parameters["max_participation"])
                                 participation_budget = max(
                                     spec.exchange.lot_size,
-                                    participation_budget - active_quantity,
+                                    int(observed_volume * max_participation)
+                                    // spec.exchange.lot_size
+                                    * spec.exchange.lot_size,
                                 )
-                            adjusted = min(adjusted, participation_budget)
+                                if bool(agent.parameters.get("include_pending_in_budget", True)):
+                                    participation_budget = max(
+                                        spec.exchange.lot_size,
+                                        participation_budget - active_quantity,
+                                    )
+                                adjusted = min(adjusted, participation_budget)
+                        else:
+                            adjusted = (order.quantity // spec.exchange.lot_size) * spec.exchange.lot_size
                         order.quantity = min(available, adjusted)
+                        order.quantity = (order.quantity // spec.exchange.lot_size) * spec.exchange.lot_size
+                        if order.quantity <= 0:
+                            continue
                         order.remaining = order.quantity
-                        if order.quantity > available:
-                            order.quantity = available
-                            order.remaining = available
                     try:
                         schedule_order(order, step, latency)
                     except RuntimeError:
