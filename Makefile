@@ -1,4 +1,4 @@
-.PHONY: install install-browser verify test e2e demo run run-example arena-demo regression judge-demo docker-smoke performance clean-artifacts
+.PHONY: install install-browser verify test e2e demo run run-example arena-demo decision-benchmark regression judge-demo docker-smoke performance clean-artifacts
 
 PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 
@@ -40,6 +40,9 @@ run-example:
 
 arena-demo:
 	$(PYTHON) scripts/arena_smoke.py
+
+decision-benchmark:
+	$(PYTHON) scripts/decision_benchmark_smoke.py
 
 regression:
 	$(PYTHON) -m app.cli test artifacts/market_fuzzer
