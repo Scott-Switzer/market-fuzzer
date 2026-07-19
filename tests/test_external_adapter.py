@@ -4,7 +4,9 @@ import json
 import pytest
 
 from app.external_adapter import execute_registered_strategy
+from app.simulation import run_simulation
 from app.strategy_lab import ExternalAdapterContract
+from app.strategy_protocol import StrategyActionV1
 from app.world import build_demo_world
 
 
@@ -56,3 +58,129 @@ def test_bounded_adapter_rejects_tampered_contract_provenance() -> None:
             source_world_hash="world-hash",
             scenario_pack_id="scenario-pack-test",
         )
+
+
+def test_http_adapter_executes_versioned_observation_and_action(monkeypatch) -> None:
+    contract = ExternalAdapterContract(
+        adapter_id="http_json_v1",
+        adapter_version="1.0.0",
+        policy_id="guarded_pov",
+        input_observation_schema="market_observation_v1",
+        output_action_schema="execution_action_v1",
+        timeout_ms=250,
+        error_policy="fail_cell",
+        endpoint_url="http://127.0.0.1:9100/decide",
+    ).model_dump(mode="json")
+    strategy = {
+        "strategy_id": "strategy-http-test",
+        "strategy_type": "external_adapter",
+        "builtin_policy_id": "guarded_pov",
+        "external_adapter": contract,
+        "adapter_hash": hashlib.sha256(
+            json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    }
+    seen: dict = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return StrategyActionV1(
+                action_type="market", side="buy", quantity=10, rationale_code="test_adapter"
+            ).model_dump(mode="json")
+
+    class FakeClient:
+        def __init__(self, **kwargs) -> None:
+            seen["client_kwargs"] = kwargs
+
+        def post(self, url: str, *, json: dict) -> FakeResponse:
+            seen["url"] = url
+            seen["observation"] = json
+            return FakeResponse()
+
+        def close(self) -> None:
+            seen["closed"] = True
+
+    def fake_run(policy_id, world, **kwargs):
+        seen["policy_id"] = policy_id
+        action = kwargs["execution_decider"](
+            {
+                "session_id": "world:execution-agent",
+                "step": 3,
+                "symbol": "NOVA",
+                "side": "buy",
+                "mid_ticks": 100,
+                "best_bid_ticks": 99,
+                "best_ask_ticks": 101,
+                "spread_bps": 200.0,
+                "observed_volume": 120,
+                "inventory": 0,
+                "remaining_quantity": 100,
+                "exchange_latency_profile": "high",
+                "intervention_active": True,
+            }
+        )
+        seen["action"] = action
+        return {"policy_id": kwargs["reported_policy_id"]}
+
+    monkeypatch.setattr("app.external_adapter.httpx.Client", FakeClient)
+    monkeypatch.setattr("app.external_adapter.run_policy_on_compiled_world", fake_run)
+    row = execute_registered_strategy(
+        strategy,
+        build_demo_world(42),
+        source_world_hash="world-hash",
+        scenario_pack_id="scenario-pack-test",
+    )
+    assert seen["url"] == "http://127.0.0.1:9100/decide"
+    assert seen["observation"]["schema_version"] == "1.0"
+    assert seen["observation"]["remaining_quantity"] == 100
+    assert seen["action"]["rationale_code"] == "test_adapter"
+    assert seen["closed"] is True
+    assert row["policy_id"] == "strategy-http-test"
+    assert row["adapter_runtime"]["execution_boundary"] == "bounded_http_adapter"
+    assert row["adapter_runtime"]["network_access"] is True
+
+
+def test_http_adapter_rejects_non_allowlisted_endpoint() -> None:
+    contract = ExternalAdapterContract(
+        adapter_id="http_json_v1",
+        adapter_version="1.0.0",
+        policy_id="guarded_pov",
+        input_observation_schema="market_observation_v1",
+        output_action_schema="execution_action_v1",
+        timeout_ms=250,
+        error_policy="fail_cell",
+        endpoint_url="https://example.com/decide",
+    ).model_dump(mode="json")
+    strategy = {
+        "strategy_id": "strategy-http-blocked",
+        "strategy_type": "external_adapter",
+        "external_adapter": contract,
+        "adapter_hash": hashlib.sha256(
+            json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    }
+    with pytest.raises(ValueError, match="not in ARENA_ADAPTER_ALLOWED_HOSTS"):
+        execute_registered_strategy(
+            strategy,
+            build_demo_world(42),
+            source_world_hash="world-hash",
+            scenario_pack_id="scenario-pack-test",
+        )
+
+
+def test_execution_decider_controls_exchange_orders_inside_simulator() -> None:
+    observations: list[dict] = []
+
+    def hold_decider(observation: dict) -> dict:
+        observations.append(observation)
+        return StrategyActionV1(action_type="hold").model_dump(mode="json")
+
+    result = run_simulation(build_demo_world(42), execution_decider=hold_decider)
+    execution_orders = [order for order in result.orders if order["agent_id"] == "execution-01"]
+    assert observations
+    assert len(observations) == len(result.strategy_observations)
+    assert execution_orders == []
+    assert {row["adapter_action"]["action_type"] for row in result.strategy_observations} == {"hold"}

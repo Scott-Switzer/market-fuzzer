@@ -53,7 +53,7 @@ class CalibrationPackV1(CalibrationModel):
 
     schema_version: Literal["1.0"] = "1.0"
     pack_id: str = Field(min_length=3, max_length=100)
-    source_kind: Literal["deterministic_demo", "canonical_user_csv"]
+    source_kind: Literal["deterministic_demo", "canonical_user_csv", "local_ohlcv_proxy"]
     source_url: str = Field(min_length=3)
     retrieval_date: date
     checksum: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")

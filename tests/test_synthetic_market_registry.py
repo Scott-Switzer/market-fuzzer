@@ -62,6 +62,49 @@ def test_real_calibration_pack_attaches_as_a_new_world_version(tmp_path, monkeyp
     assert client.get(f"/api/enterprise/calibration-packs/{pack['pack_id']}").status_code == 200
 
 
+def test_customer_csv_calibration_import_retains_aggregate_evidence_only(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("ARENA_TEST_AUTH", "1")
+    client = TestClient(app)
+    world = client.post(
+        "/api/enterprise/worlds",
+        json={
+            "name": "Customer calibration world",
+            "description": "A world calibrated from a customer-authorized canonical market tape.",
+            "asset_universe": ["NOVA"],
+            "agent_ecology": ["market_maker", "execution_agent"],
+        },
+    ).json()
+    rows = ["timestamp,price,spread_bps,bid_depth,ask_depth,volume,signed_volume"]
+    rows.extend(
+        f"2026-01-05T14:{30 + index // 60:02d}:{index % 60:02d}Z,{100 + index / 100:.2f},5,100,100,100,10"
+        for index in range(30)
+    )
+    imported = client.post(
+        f"/api/enterprise/worlds/{world['world_id']}/calibration/import?pack_id=customer-pack-v1",
+        content="\n".join(rows).encode(),
+        headers={"content-type": "text/csv"},
+    )
+    assert imported.status_code == 200
+    body = imported.json()
+    assert body["import_evidence"]["raw_rows_retained"] is False
+    assert body["import_evidence"]["source_checksum"].startswith("sha256:")
+    assert body["manifest"]["calibration_pack_id"] == "customer-pack-v1"
+
+
+def test_enterprise_api_key_guards_single_tenant_deployment(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("ARENA_ENTERPRISE_API_KEY", "single-tenant-secret")
+    client = TestClient(app)
+    assert client.get("/api/enterprise/worlds").status_code == 401
+    assert (
+        client.get(
+            "/api/enterprise/worlds", headers={"authorization": "Bearer single-tenant-secret"}
+        ).status_code
+        == 200
+    )
+
+
 def test_scenario_pack_requires_registered_world_and_preserves_manifest(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ARENA_DB_PATH", str(tmp_path / "registry.sqlite3"))
     monkeypatch.setenv("ARENA_TEST_AUTH", "1")

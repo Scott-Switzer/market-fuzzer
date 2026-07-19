@@ -9,7 +9,7 @@ import os
 import sqlite3
 import time
 from copy import deepcopy
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from functools import lru_cache
 from ipaddress import ip_address
 from pathlib import Path
@@ -17,7 +17,7 @@ from typing import Any, Literal, cast
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -37,7 +37,12 @@ from app.arena import (
     public_dataset,
     validate_submission_csv,
 )
-from app.calibration import CalibrationPackV1, build_demo_calibration_pack, calibrate_bootstrap
+from app.calibration import (
+    CalibrationPackV1,
+    build_demo_calibration_pack,
+    calibrate_bootstrap,
+    compile_canonical_csv_bytes,
+)
 from app.compiler import compile_world
 from app.execution_arena import (
     CHALLENGE_ID,
@@ -77,6 +82,8 @@ from app.scenario_studio import compile_scenario_pack
 from app.schemas import WorldSpec
 from app.simulation import run_simulation
 from app.strategy_lab import StrategyCreate, StressExperimentCreate
+from app.strategy_language import StrategyBriefRequest, compile_strategy_brief
+from app.strategy_protocol import StrategyActionV1, StrategyObservationV1
 from app.synthetic_market import (
     SCENARIO_SCHEMA_VERSION,
     WORLD_SCHEMA_VERSION,
@@ -98,6 +105,27 @@ PRODUCT_PROJECTS: dict[str, dict] = {}
 PRODUCT_FAILURES: dict[str, dict] = {}
 _LOCAL_DEMO_SESSION_SECRET = os.urandom(32)
 _EXECUTION_STORE_CACHE_SIZE = 8
+_MAX_CALIBRATION_UPLOAD_BYTES = 20 * 1024 * 1024
+
+
+@app.middleware("http")
+async def enterprise_api_key_guard(request: Request, call_next):
+    """Protect enterprise APIs when a single-tenant deployment key is configured."""
+
+    configured = os.getenv("ARENA_ENTERPRISE_API_KEY")
+    if configured and request.url.path.startswith("/api/enterprise"):
+        supplied = request.headers.get("x-api-key", "")
+        authorization = request.headers.get("authorization", "")
+        if authorization.lower().startswith("bearer "):
+            supplied = authorization[7:].strip()
+        if not hmac.compare_digest(supplied, configured):
+            return JSONResponse(
+                {"detail": "enterprise API key required"},
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    return await call_next(request)
+
 
 DESIGN_INTERVENTION_LABELS = {
     "liquidity_withdrawal": "Liquidity withdrawal",
@@ -267,6 +295,9 @@ def health() -> dict:
         "arena_schema_version": ARENA_SCHEMA_VERSION,
         "enterprise_product": "Synthetic Market World",
         "enterprise_registry": "v1",
+        "enterprise_authentication": "api_key_when_configured",
+        "external_adapter_protocol": "http_json_v1",
+        "calibration_import": "aggregate_only",
     }
 
 
@@ -320,6 +351,65 @@ def enterprise_attach_calibration(world_id: str, pack: CalibrationPackV1, reques
         )
     except KeyError as exc:
         raise HTTPException(404, "synthetic world not found") from exc
+
+
+@app.post("/api/enterprise/worlds/{world_id}/calibration/import")
+async def enterprise_import_calibration(
+    world_id: str,
+    request: Request,
+    pack_id: str = Query("customer-csv-v1", min_length=3, max_length=100),
+    source_url: str = Query("user-provided://canonical-csv", min_length=3, max_length=500),
+    usage_basis: str = Query(
+        "Customer-authorized data for aggregate calibration", min_length=3, max_length=300
+    ),
+    instrument: str = Query("customer-instrument", min_length=1, max_length=80),
+    venue: str = Query("customer-venue", min_length=1, max_length=80),
+    session: str = Query("customer-session", min_length=1, max_length=80),
+    retrieval_date: str | None = Query(None),
+) -> dict[str, Any]:
+    """Import a canonical CSV transiently and persist aggregate calibration evidence only."""
+
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type not in {"text/csv", "application/csv", "application/octet-stream"}:
+        raise HTTPException(415, "calibration import requires a raw CSV request body")
+    payload = await request.body()
+    if not payload:
+        raise HTTPException(400, "calibration CSV is empty")
+    if len(payload) > _MAX_CALIBRATION_UPLOAD_BYTES:
+        raise HTTPException(413, "calibration CSV exceeds the 20 MB single-tenant limit")
+    try:
+        parsed_date = date.fromisoformat(retrieval_date) if retrieval_date else date.today()
+        pack = compile_canonical_csv_bytes(
+            payload,
+            pack_id=pack_id,
+            source_url=source_url,
+            retrieval_date=parsed_date,
+            usage_basis=usage_basis,
+            instrument=instrument,
+            venue=venue,
+            session=session,
+        )
+        calibration = calibrate_bootstrap(pack, mode="quick")
+        calibration_run_id = new_registry_id("calibration-run")
+        result = _execution_store().attach_calibration_pack(
+            world_id,
+            pack.model_dump(mode="json"),
+            _enterprise_actor(request),
+            calibration.model_dump(mode="json"),
+            calibration_run_id,
+        )
+        return result | {
+            "import_evidence": {
+                "source_bytes": len(payload),
+                "raw_rows_retained": False,
+                "source_checksum": pack.checksum,
+                "calibration_run_id": calibration_run_id,
+            }
+        }
+    except KeyError as exc:
+        raise HTTPException(404, "synthetic world not found") from exc
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(422, f"invalid canonical calibration CSV: {exc}") from exc
 
 
 @app.get("/api/enterprise/calibration-packs/{pack_id}")
@@ -538,6 +628,32 @@ def enterprise_strategies() -> dict[str, Any]:
     return {"strategies": _execution_store().strategies()}
 
 
+@app.post("/api/enterprise/strategies/compile-brief")
+def enterprise_compile_strategy_brief(payload: StrategyBriefRequest) -> dict[str, Any]:
+    """Turn plain English into a reviewable allow-listed strategy proposal."""
+
+    return compile_strategy_brief(payload.brief)
+
+
+@app.post("/api/enterprise/adapter-reference/guarded-pov")
+def enterprise_reference_guarded_pov(observation: StrategyObservationV1) -> dict[str, Any]:
+    """Reference executable adapter for local boundary and demo verification."""
+
+    if observation.remaining_quantity <= 0 or (
+        observation.intervention_active and observation.spread_bps > 35.0
+    ):
+        return StrategyActionV1(action_type="hold", rationale_code="guarded_pov_pause").model_dump(
+            mode="json"
+        )
+    quantity = max(1, min(observation.remaining_quantity, round(max(observation.observed_volume, 1) * 0.08)))
+    return StrategyActionV1(
+        action_type="market",
+        side=observation.side,
+        quantity=quantity,
+        rationale_code="guarded_pov_reference",
+    ).model_dump(mode="json")
+
+
 @app.post("/api/enterprise/strategies")
 def enterprise_create_strategy(payload: StrategyCreate, request: Request) -> dict[str, Any]:
     actor = _enterprise_actor(request)
@@ -570,8 +686,6 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
         strategies = [store.strategy(strategy_id) for strategy_id in payload.strategy_ids]
     except KeyError as exc:
         raise HTTPException(404, "scenario pack or strategy not found") from exc
-    if any(strategy["builtin_policy_id"] is None for strategy in strategies):
-        raise HTTPException(422, "only built-in policy adapters are executable in this milestone")
     calibration_result = (
         store.calibration_run(str(base_world["manifest"]["calibration_run_id"]))["result"]
         if base_world["manifest"].get("calibration_run_id")
