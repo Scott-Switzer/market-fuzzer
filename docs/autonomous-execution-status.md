@@ -6,28 +6,26 @@ Build a sealed, procedurally generated market-evaluation platform that measures 
 
 ## Current milestone
 
-M0B — execution controls and review hygiene.
+M1 — product contract, threat model, and migration map.
 
-- Current branch: `codex/m0b-execution-controls`
-- Current PR: [#15](https://github.com/Scott-Switzer/market-fuzzer/pull/15)
-- Clean-main baseline SHA: `591780357335fc0e603c8c3fff5340700687dabf`
-- M0B controls implementation SHA: `9a5f503fa345dcd99deccde113dd00c2f207f30b`
-- Current branch head before this ledger checkpoint: `02fcf8dc856563219d513dc85c5463e39d3f2268`
+- Current branch: `codex/m1-product-contract`
+- Current PR: not yet opened
+- Clean-main baseline SHA: `e042536397b4655ba11171b6a0e9da0ff581c7c7`
 - Latest substantive Greptile-reviewed SHA: `0fda71eb2c8832b61e30a5a1a3f690be677bd7c1`
-- Latest self-reviewed SHA: `02fcf8dc856563219d513dc85c5463e39d3f2268`
+- Latest self-reviewed SHA: `e042536397b4655ba11171b6a0e9da0ff581c7c7`
 
 ## Completed evidence
 
 - M0A merged as PR #14 at `591780357335fc0e603c8c3fff5340700687dabf`.
+- M0B merged as PR #15 at `e042536397b4655ba11171b6a0e9da0ff581c7c7`; review controls and secret-safe ignore rules are now on `main`.
 - Decision evidence now degrades independently for unavailable, failed, and partial benchmark responses; browser coverage asserts those paths and the complete response.
 - M0A local `make verify`, browser E2E, and Docker smoke passed. GitHub test and Docker checks passed on `f1af98feaccaf48d9cc45524e195562216fef46f`.
 - Clean `main` was checked out and its verification and Docker smoke were rerun after the merge.
 
 ## Current work and next executable action
 
-- Add repository review rules, secret-safe ignore rules, filename-only secret-surface scans, and this ledger in one focused M0B PR.
-- Self-review the latest M0B head, run affected checks plus complete verification and Docker smoke, then push and merge after required CI passes.
-- M1 may begin only after M0B merges and clean `main` is verified.
+- Define the product contract, strategy-adversary model, claim gates, initial venue scope, and migration map in one focused M1 PR.
+- Convert the written acceptance criteria into executable tests as the V2 kernel is introduced in M2.
 
 ## Unresolved findings and blockers
 
@@ -39,8 +37,8 @@ M0B — execution controls and review hygiene.
 | Milestone | Status |
 | --- | --- |
 | M0A — decision-evidence repair | merged and clean-main verified |
-| M0B — execution controls | in progress |
-| M1 — product contract and threat model | pending |
+| M0B — execution controls | merged and clean-main verified |
+| M1 — product contract and threat model | in progress |
 | M2–M10 | pending |
 
 ## Claims currently permitted
