@@ -27,6 +27,14 @@ def main() -> None:
     assert health["status"] == "ok"
     assert health["product"] == "Quant Challenge Arena"
 
+    status, content_type, body = _get("/api/ready")
+    ready = json.loads(body)
+    assert status == 200
+    assert content_type == "application/json"
+    assert ready["status"] == "ready"
+    assert ready["database"] == "ok"
+    assert ready["artifact_store"] == "ok"
+
     status, _, arena = _get("/")
     assert status == 200
     assert "Quant Challenge Arena" in arena

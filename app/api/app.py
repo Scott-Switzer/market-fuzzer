@@ -301,6 +301,29 @@ def health() -> dict:
     }
 
 
+@app.get("/api/ready")
+def readiness() -> dict[str, Any]:
+    """Report whether the SQLite registry and artifact volume are usable."""
+
+    try:
+        store = _execution_store()
+        with store.connection() as connection:
+            database_probe = connection.execute("SELECT 1").fetchone()
+        artifact_root_ready = ARTIFACT_ROOT.is_dir() and os.access(ARTIFACT_ROOT, os.W_OK)
+    except (OSError, sqlite3.Error) as exc:
+        raise HTTPException(503, f"service is not ready: {exc}") from exc
+    if database_probe is None or not artifact_root_ready:
+        raise HTTPException(503, "service is not ready: registry or artifact volume unavailable")
+    return {
+        "status": "ready",
+        "database": "ok",
+        "artifact_store": "ok",
+        "deployment_mode": "single_tenant_research_appliance",
+        "database_file": store.path.name,
+        "artifact_root": str(ARTIFACT_ROOT),
+    }
+
+
 @app.get("/synthetic-market-world")
 def synthetic_market_world_landing() -> FileResponse:
     """Enterprise product entry point; the existing Arena remains at /."""

@@ -1,5 +1,13 @@
 services:
   quant-challenge-arena:
+    init: true
+    restart: unless-stopped
+    read_only: true
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
     build:
       context: .
       args:
