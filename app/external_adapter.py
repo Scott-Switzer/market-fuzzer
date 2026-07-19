@@ -87,19 +87,23 @@ def _http_decider(contract: ExternalAdapterContract) -> tuple[httpx.Client, Any,
 
     def decide(observation: dict[str, Any]) -> dict[str, Any]:
         payload = _observation_payload(observation)
-        body = bytearray()
-        with client.stream("POST", endpoint_url, json=payload) as response:
-            response.raise_for_status()
-            for chunk in response.iter_bytes():
-                body.extend(chunk)
-                if len(body) > _MAX_ADAPTER_RESPONSE_BYTES:
-                    raise ValueError(
-                        f"HTTP adapter response exceeds {_MAX_ADAPTER_RESPONSE_BYTES} byte limit"
-                    )
         try:
+            body = bytearray()
+            with client.stream("POST", endpoint_url, json=payload) as response:
+                response.raise_for_status()
+                for chunk in response.iter_bytes():
+                    body.extend(chunk)
+                    if len(body) > _MAX_ADAPTER_RESPONSE_BYTES:
+                        raise ValueError(
+                            f"HTTP adapter response exceeds {_MAX_ADAPTER_RESPONSE_BYTES} byte limit"
+                        )
             action = StrategyActionV1.model_validate(json.loads(body))
-        except (ValueError, TypeError) as exc:
-            raise ValueError("HTTP adapter returned an invalid execution_action_v1 response") from exc
+        except Exception:
+            if contract.error_policy == "reject_action":
+                return StrategyActionV1(
+                    action_type="hold", rationale_code="adapter_rejected_action"
+                ).model_dump(mode="json")
+            raise
         return action.model_dump(mode="json")
 
     return client, decide, host
@@ -135,6 +139,7 @@ def execute_registered_strategy(
             "user_code_execution": parsed.adapter_id == "http_json_v1",
             "request_schema": "strategy_observation_v1",
             "response_schema": "execution_action_v1",
+            "error_policy": parsed.error_policy,
         }
         if parsed.adapter_id == "http_json_v1":
             client, execution_decider, host = _http_decider(parsed)

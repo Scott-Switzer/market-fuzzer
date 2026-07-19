@@ -11,6 +11,7 @@ export ARENA_ENTERPRISE_API_KEY="replace-with-a-long-random-secret"
 export ARENA_ADAPTER_ALLOWED_HOSTS="127.0.0.1,localhost"
 docker compose up --build -d
 curl -fsS http://127.0.0.1:8000/api/health
+curl -fsS http://127.0.0.1:8000/api/ready
 ```
 
 The API key protects every `/api/enterprise/*` route when configured. Supply it
@@ -21,6 +22,8 @@ container with a new environment value.
 The container runs as a non-root user and stores SQLite plus artifacts in the
 named `arena-data` volume. The supported deployment is one application process
 and one SQLite database. Do not mount the database into multiple writers.
+Compose also enables a read-only application filesystem, a bounded temporary
+filesystem, `no-new-privileges`, an init process, and graceful shutdown.
 
 ## Backups and recovery
 
@@ -28,9 +31,13 @@ Stop writes before copying the volume or use SQLite's online backup procedure:
 
 ```bash
 docker compose exec quant-challenge-arena \
-  python -c "import sqlite3; src=sqlite3.connect('/data/arena.sqlite3'); dst=sqlite3.connect('/data/arena-backup.sqlite3'); src.backup(dst); dst.close(); src.close()"
-docker compose cp quant-challenge-arena:/data/arena-backup.sqlite3 ./arena-backup.sqlite3
+  python scripts/operator_backup.py --database /data/arena.sqlite3 --output-dir /data/backups
+docker compose cp quant-challenge-arena:/data/backups ./arena-backups
 ```
+
+The backup command uses SQLite's online backup API, runs `PRAGMA integrity_check`,
+and writes a SHA-256 manifest beside the backup. Preserve the backup database,
+manifest, and `/data/artifacts` together.
 
 Preserve `/data/artifacts` with the database. Experiment artifacts include
 content hashes and manifests that reference world hashes, scenario packs, seeds,

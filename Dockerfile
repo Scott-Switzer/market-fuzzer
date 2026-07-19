@@ -21,5 +21,5 @@ RUN useradd --create-home --uid 10001 appuser \
 USER appuser
 EXPOSE 8000
 HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=6 \
-  CMD python -c "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/api/health',timeout=2); d=json.load(r); assert r.status==200 and d['status']=='ok' and d['product']=='Quant Challenge Arena'"
+  CMD python -c "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/api/ready',timeout=2); d=json.load(r); assert r.status==200 and d['status']=='ready' and d['database']=='ok' and d['artifact_store']=='ok'"
 CMD ["sh", "-c", "exec python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]

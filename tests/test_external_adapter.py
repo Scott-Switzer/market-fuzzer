@@ -229,6 +229,82 @@ def test_http_adapter_rejects_oversized_response(monkeypatch) -> None:
         )
 
 
+def test_http_adapter_reject_action_policy_holds_on_protocol_error(monkeypatch) -> None:
+    contract = ExternalAdapterContract(
+        adapter_id="http_json_v1",
+        adapter_version="1.0.0",
+        policy_id="guarded_pov",
+        input_observation_schema="market_observation_v1",
+        output_action_schema="execution_action_v1",
+        timeout_ms=250,
+        error_policy="reject_action",
+        endpoint_url="http://127.0.0.1:9100/decide",
+    ).model_dump(mode="json")
+    strategy = {
+        "strategy_id": "strategy-http-reject-action",
+        "strategy_type": "external_adapter",
+        "external_adapter": contract,
+        "adapter_hash": hashlib.sha256(
+            json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    }
+
+    class BadResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback) -> None:
+            return None
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_bytes(self):
+            return iter([b"not-json"])
+
+    class BadClient:
+        def __init__(self, **kwargs) -> None:
+            return None
+
+        def stream(self, method: str, url: str, *, json: dict) -> BadResponse:
+            return BadResponse()
+
+        def close(self) -> None:
+            return None
+
+    def fake_run(policy_id, world, **kwargs):
+        return {
+            "action": kwargs["execution_decider"](
+                {
+                    "session_id": "world:execution-agent",
+                    "step": 3,
+                    "symbol": "NOVA",
+                    "side": "buy",
+                    "mid_ticks": 100,
+                    "best_bid_ticks": 99,
+                    "best_ask_ticks": 101,
+                    "spread_bps": 200.0,
+                    "observed_volume": 120,
+                    "inventory": 0,
+                    "remaining_quantity": 100,
+                    "exchange_latency_profile": "high",
+                    "intervention_active": True,
+                }
+            )
+        }
+
+    monkeypatch.setattr("app.external_adapter.httpx.Client", BadClient)
+    monkeypatch.setattr("app.external_adapter.run_policy_on_compiled_world", fake_run)
+    row = execute_registered_strategy(
+        strategy,
+        build_demo_world(42),
+        source_world_hash="world-hash",
+        scenario_pack_id="scenario-pack-test",
+    )
+    assert row["action"]["action_type"] == "hold"
+    assert row["action"]["rationale_code"] == "adapter_rejected_action"
+
+
 def test_http_adapter_reaches_real_simulation_with_side_and_lot_contract(monkeypatch) -> None:
     contract = ExternalAdapterContract(
         adapter_id="http_json_v1",

@@ -15,6 +15,11 @@ api_module = importlib.import_module("app.api.app")
 def test_health_schema_compile_validate_and_run():
     client = TestClient(app)
     assert client.get("/api/health").json()["engine"] == "compact_deterministic_pov_harness"
+    ready = client.get("/api/ready")
+    assert ready.status_code == 200
+    assert ready.json()["status"] == "ready"
+    assert ready.json()["database"] == "ok"
+    assert ready.json()["artifact_store"] == "ok"
     assert "properties" in client.get("/api/schema").json()
     calibration = client.get("/api/calibration/demo")
     assert calibration.status_code == 200
