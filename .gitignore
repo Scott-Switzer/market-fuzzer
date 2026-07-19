@@ -5,6 +5,11 @@ __pycache__/
 *.py[cod]
 .DS_Store
 
+# Local configuration may contain credentials. Keep the documented template visible.
+.env
+.env.*
+!.env.example
+
 # Experiment outputs are reproducible and can be large. Keep the directory contract only.
 artifacts/*
 !artifacts/README.md
