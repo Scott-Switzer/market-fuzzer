@@ -18,8 +18,8 @@ def build_decision_change_benchmark(seeds: tuple[int, ...] = (41, 42)) -> dict[s
     """
     matrix = benchmark_matrix(seeds=seeds)
     rows = matrix["rows"]
-    public_winner = min(rows, key=lambda row: (row["public_rank"], row["policy_id"]))
-    robust_winner = min(rows, key=lambda row: (row["robustness_rank"], row["policy_id"]))
+    public_winner = min(rows, key=lambda row: row["public_rank"])
+    robust_winner = min(rows, key=lambda row: row["robustness_rank"])
     decision_changed = public_winner["policy_id"] != robust_winner["policy_id"]
     record = {
         "benchmark_id": "decision-change-v1",
