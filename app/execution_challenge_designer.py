@@ -36,6 +36,7 @@ ALLOWED_POLICY_PARAMETER_IDS = frozenset(
         "max_spread_bps",
         "urgency_curve",
         "feed_latency_tolerance_ms",
+        "order_entry_latency_ms",
         "cancel_after_ms",
         "completion_buffer_steps",
         "pause_during_halt",

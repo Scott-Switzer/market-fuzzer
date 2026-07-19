@@ -14,10 +14,11 @@ from dataclasses import dataclass
 from functools import lru_cache
 from hashlib import sha256
 from statistics import mean, pstdev
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas import WorldSpec
 from app.simulation import SimulationResult, run_simulation
 from app.world.scenarios import build_demo_world, mutate_scenario
 
@@ -90,11 +91,12 @@ class ExecutionPolicySubmission(BaseModel):
     schema_version: Literal["1.0"] = "1.0"
     strategy_type: Literal["twap", "pov", "adaptive_pov"]
     target_participation: float = Field(ge=0.01, le=0.20)
-    max_participation: float = Field(ge=0.01, le=0.30)
+    max_participation: float | None = Field(default=None, ge=0.01, le=0.30)
     max_spread_bps: float = Field(ge=1, le=50)
     urgency_curve: Literal["uniform", "front_loaded", "back_loaded", "adaptive"]
     feed_latency_tolerance_ms: int = Field(ge=0, le=10_000)
-    cancel_after_ms: int = Field(ge=10, le=10_000)
+    order_entry_latency_ms: int = Field(default=5, ge=0, le=10_000)
+    cancel_after_ms: int | None = Field(default=None, ge=10, le=10_000)
     completion_buffer_steps: int = Field(ge=0, le=20)
     pause_during_halt: bool
     pause_above_spread_limit: bool
@@ -103,7 +105,7 @@ class ExecutionPolicySubmission(BaseModel):
 
     @model_validator(mode="after")
     def _valid_combination(self) -> ExecutionPolicySubmission:
-        if self.max_participation < self.target_participation:
+        if self.max_participation is not None and self.max_participation < self.target_participation:
             raise ValueError("max_participation must be at least target_participation")
         if self.strategy_type == "twap" and self.urgency_curve == "adaptive":
             raise ValueError("TWAP does not support an adaptive urgency curve")
@@ -119,7 +121,7 @@ def policy_from_submission(submission: ExecutionPolicySubmission, submission_id:
         description="Student-authored declarative execution policy.",
         strategy=strategy,
         participation_rate=submission.target_participation,
-        latency_ms=5,
+        latency_ms=submission.order_entry_latency_ms,
         max_spread_bps=submission.max_spread_bps,
         pause_during_halt=submission.pause_during_halt,
         max_participation=submission.max_participation,
@@ -129,6 +131,37 @@ def policy_from_submission(submission: ExecutionPolicySubmission, submission_id:
         pause_above_spread_limit=submission.pause_above_spread_limit,
         include_pending_in_budget=submission.include_pending_in_budget,
         feed_latency_tolerance_ms=submission.feed_latency_tolerance_ms,
+    )
+
+
+def policy_to_submission(policy: Policy, *, rationale: str | None = None) -> ExecutionPolicySubmission:
+    """Serialize a benchmark through the same public contract students use."""
+    strategy_type = (
+        "twap"
+        if policy.strategy == "twap"
+        else "adaptive_pov"
+        if policy.urgency_curve == "adaptive"
+        else "pov"
+    )
+    return ExecutionPolicySubmission(
+        strategy_type=cast(Literal["twap", "pov", "adaptive_pov"], strategy_type),
+        target_participation=policy.participation_rate,
+        max_participation=policy.max_participation,
+        max_spread_bps=policy.max_spread_bps,
+        urgency_curve=cast(
+            Literal["uniform", "front_loaded", "back_loaded", "adaptive"], policy.urgency_curve
+        ),
+        feed_latency_tolerance_ms=(
+            policy.feed_latency_tolerance_ms if policy.feed_latency_tolerance_ms is not None else 10_000
+        ),
+        order_entry_latency_ms=policy.latency_ms,
+        cancel_after_ms=policy.cancel_after_ms,
+        completion_buffer_steps=policy.completion_buffer_steps,
+        pause_during_halt=policy.pause_during_halt,
+        pause_above_spread_limit=policy.pause_above_spread_limit,
+        include_pending_in_budget=policy.include_pending_in_budget,
+        rationale=rationale
+        or "Public benchmark policy serialized through the student contract for parity testing.",
     )
 
 
@@ -582,6 +615,57 @@ def _run_policy(policy: Policy, world_variant: str, seed: int) -> dict[str, Any]
     }
 
 
+def run_policy_on_compiled_world(
+    policy_id: str, world: WorldSpec, *, source_world_hash: str, scenario_pack_id: str
+) -> dict[str, Any]:
+    """Execute a registered policy against an already compiled protected world."""
+    if policy_id not in POLICIES:
+        raise ValueError(f"unknown declarative policy {policy_id!r}")
+    policy = POLICIES[policy_id]
+    data = deepcopy(world.model_dump(mode="python"))
+    data["world_id"] = f"{world.world_id}-{policy_id}"
+    data["experiment"].update(
+        {
+            "strategy": policy.strategy,
+            "participation_rate": policy.participation_rate,
+            "latency_ms": policy.latency_ms,
+        }
+    )
+    data["experiment"]["parent_order"]["quantity"] = policy.parent_quantity
+    for population in data["agents"]["populations"]:
+        if population["type"] == "execution":
+            population["latency_ms"] = policy.latency_ms
+            population["parameters"].update(
+                {
+                    "max_participation": policy.max_participation or policy.participation_rate,
+                    "enforce_max_participation": policy.max_participation is not None,
+                    "max_spread_bps": policy.max_spread_bps,
+                    "urgency_curve": policy.urgency_curve,
+                    "cancel_after_ms": policy.cancel_after_ms or 10_000,
+                    "completion_buffer_steps": policy.completion_buffer_steps,
+                    "pause_during_halt": policy.pause_during_halt,
+                    "pause_above_spread_limit": policy.pause_above_spread_limit,
+                    "include_pending_in_budget": policy.include_pending_in_budget,
+                    "feed_latency_tolerance_ms": policy.feed_latency_tolerance_ms
+                    if policy.feed_latency_tolerance_ms is not None
+                    else 10_000,
+                }
+            )
+    executed_world = WorldSpec.model_validate(data)
+    result = run_simulation(executed_world)
+    return {
+        "execution_source": "compiled_scenario_pack",
+        "scenario_pack_id": scenario_pack_id,
+        "policy_id": policy_id,
+        "seed": executed_world.seed,
+        "world_hash": source_world_hash,
+        "executed_spec_hash": result.spec_hash,
+        "result_hash": result.result_hash,
+        "metrics": _execution_metrics(result, policy),
+        "selected_synthetic_diagnostics": _selected_synthetic_diagnostics(result),
+    }
+
+
 def run_execution_challenge(policy_id: str, world_variant: str = "normal", seed: int = 42) -> dict[str, Any]:
     if policy_id not in POLICIES:
         raise ValueError(f"unknown declarative policy {policy_id!r}")
@@ -917,11 +1001,18 @@ def _challenge_quality_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-@lru_cache(maxsize=16)
-def _builtin_benchmark_matrix(seeds: tuple[int, ...], variants: tuple[str, ...]) -> dict[str, Any]:
+@lru_cache(maxsize=32)
+def _builtin_benchmark_matrix(
+    seeds: tuple[int, ...], variants: tuple[str, ...], policy_ids: tuple[str, ...] | None = None
+) -> dict[str, Any]:
     """Cache only immutable built-in rows; callers always receive a deep copy."""
     rows: list[dict[str, Any]] = []
-    for policy in POLICIES.values():
+    selected_policies = (
+        [POLICIES[policy_id] for policy_id in policy_ids]
+        if policy_ids is not None
+        else list(POLICIES.values())
+    )
+    for policy in selected_policies:
         rows.append(_matrix_row(policy, seeds, variants))
     robust_ranked = _rank_matrix_rows(rows)
     provenance = {
@@ -949,6 +1040,7 @@ def benchmark_matrix(
     seeds: tuple[int, ...] = SEEDS,
     variants: tuple[str, ...] = HIDDEN_VARIANTS,
     student_submissions: dict[str, ExecutionPolicySubmission] | None = None,
+    policy_ids: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Return cached built-ins and evaluate only newly supplied custom policies."""
     variants = tuple(variants)
@@ -958,7 +1050,15 @@ def benchmark_matrix(
         or any(variant not in HIDDEN_VARIANTS for variant in variants)
     ):
         raise ValueError("benchmark variants must be a unique non-empty subset of hidden variants")
-    matrix = deepcopy(_builtin_benchmark_matrix(tuple(seeds), variants))
+    if policy_ids is not None:
+        if (
+            not policy_ids
+            or len(set(policy_ids)) != len(policy_ids)
+            or any(policy_id not in POLICIES for policy_id in policy_ids)
+        ):
+            raise ValueError("benchmark policy IDs must be unique registered built-ins")
+        policy_ids = tuple(policy_ids)
+    matrix = deepcopy(_builtin_benchmark_matrix(tuple(seeds), variants, policy_ids))
     if not student_submissions:
         return matrix
     rows = matrix["rows"]

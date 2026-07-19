@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -37,7 +37,7 @@ from app.arena import (
     public_dataset,
     validate_submission_csv,
 )
-from app.calibration import build_demo_calibration_pack, calibrate_bootstrap
+from app.calibration import CalibrationPackV1, build_demo_calibration_pack, calibrate_bootstrap
 from app.compiler import compile_world
 from app.execution_arena import (
     CHALLENGE_ID,
@@ -61,6 +61,8 @@ from app.execution_challenge_designer import (
 from app.execution_feedback import build_execution_evidence, generate_execution_feedback
 from app.execution_store import ArenaPhaseError, ArenaQuotaError, ArenaStore
 from app.experiments import run_batch, run_single, run_validation_campaign
+from app.external_adapter import adapter_provenance, execute_registered_strategy
+from app.governance import build_enterprise_validation_report
 from app.product import (
     DEFAULT_PROPERTIES,
     STORE,
@@ -71,7 +73,21 @@ from app.product import (
     scenario_hash,
     stable_id,
 )
+from app.scenario_studio import compile_scenario_pack
 from app.schemas import WorldSpec
+from app.simulation import run_simulation
+from app.strategy_lab import StrategyCreate, StressExperimentCreate
+from app.synthetic_market import (
+    SCENARIO_SCHEMA_VERSION,
+    WORLD_SCHEMA_VERSION,
+    RegressionSuiteCreate,
+    ScenarioPackCreate,
+    SyntheticWorldCreate,
+    new_registry_id,
+)
+from app.synthetic_market import (
+    utc_now as synthetic_utc_now,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT_ROOT = Path(os.getenv("MARKET_FUZZER_EXPERIMENT_ROOT", "artifacts")).expanduser().resolve()
@@ -96,6 +112,7 @@ DESIGN_PARAMETER_LABELS = {
     "max_spread_bps": "Maximum spread",
     "urgency_curve": "Urgency curve",
     "feed_latency_tolerance_ms": "Feed-latency tolerance",
+    "order_entry_latency_ms": "Order-entry latency",
     "cancel_after_ms": "Cancel-after interval",
     "completion_buffer_steps": "Completion buffer",
     "pause_during_halt": "Pause during halt",
@@ -248,7 +265,734 @@ def health() -> dict:
         "engine": "compact_deterministic_pov_harness",
         "arena_engine": "deterministic_synthetic_regime_engine",
         "arena_schema_version": ARENA_SCHEMA_VERSION,
+        "enterprise_product": "Synthetic Market World",
+        "enterprise_registry": "v1",
     }
+
+
+@app.get("/synthetic-market-world")
+def synthetic_market_world_landing() -> FileResponse:
+    """Enterprise product entry point; the existing Arena remains at /."""
+    return FileResponse(ROOT / "static" / "synthetic-market-world.html")
+
+
+@app.get("/strategy-stress-lab")
+def strategy_stress_lab_landing() -> FileResponse:
+    return FileResponse(ROOT / "static" / "stress-lab.html")
+
+
+@app.get("/api/enterprise/worlds")
+def enterprise_worlds() -> dict[str, Any]:
+    return {"worlds": _execution_store().synthetic_worlds()}
+
+
+@app.post("/api/enterprise/worlds")
+def enterprise_create_world(payload: SyntheticWorldCreate, request: Request) -> dict[str, Any]:
+    actor = _enterprise_actor(request)
+    manifest = payload.model_dump(mode="json")
+    manifest["schema_version"] = WORLD_SCHEMA_VERSION
+    manifest["created_at"] = synthetic_utc_now()
+    manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+    world_id = new_registry_id("world")
+    return _execution_store().create_synthetic_world(world_id, manifest, actor, manifest_hash)
+
+
+@app.get("/api/enterprise/worlds/{world_id}")
+def enterprise_world(world_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().synthetic_world(world_id)
+    except KeyError as exc:
+        raise HTTPException(404, "synthetic world not found") from exc
+
+
+@app.post("/api/enterprise/worlds/{world_id}/calibration")
+def enterprise_attach_calibration(world_id: str, pack: CalibrationPackV1, request: Request) -> dict[str, Any]:
+    actor = _enterprise_actor(request)
+    calibration = calibrate_bootstrap(pack, mode="quick")
+    calibration_run_id = new_registry_id("calibration-run")
+    try:
+        return _execution_store().attach_calibration_pack(
+            world_id,
+            pack.model_dump(mode="json"),
+            actor,
+            calibration.model_dump(mode="json"),
+            calibration_run_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, "synthetic world not found") from exc
+
+
+@app.get("/api/enterprise/calibration-packs/{pack_id}")
+def enterprise_calibration_pack(pack_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().calibration_pack(pack_id)
+    except KeyError as exc:
+        raise HTTPException(404, "calibration pack not found") from exc
+
+
+@app.get("/api/enterprise/calibration-runs/{calibration_run_id}")
+def enterprise_calibration_run(calibration_run_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().calibration_run(calibration_run_id)
+    except KeyError as exc:
+        raise HTTPException(404, "calibration run not found") from exc
+
+
+@app.get("/api/enterprise/scenario-packs")
+def enterprise_scenario_packs() -> dict[str, Any]:
+    return {"scenario_packs": _execution_store().scenario_packs()}
+
+
+@app.post("/api/enterprise/scenario-packs")
+def enterprise_create_scenario_pack(payload: ScenarioPackCreate, request: Request) -> dict[str, Any]:
+    actor = _enterprise_actor(request)
+    manifest = payload.model_dump(mode="json")
+    manifest["schema_version"] = SCENARIO_SCHEMA_VERSION
+    manifest["created_at"] = synthetic_utc_now()
+    manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+    scenario_pack_id = new_registry_id("scenario")
+    try:
+        return _execution_store().create_scenario_pack(scenario_pack_id, manifest, actor, manifest_hash)
+    except KeyError as exc:
+        raise HTTPException(404, "base synthetic world not found") from exc
+
+
+@app.get("/api/enterprise/scenario-packs/{scenario_pack_id}")
+def enterprise_scenario_pack(scenario_pack_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().scenario_pack(scenario_pack_id)
+    except KeyError as exc:
+        raise HTTPException(404, "scenario pack not found") from exc
+
+
+@app.post("/api/enterprise/scenario-packs/{scenario_pack_id}/compile")
+def enterprise_compile_scenario_pack(scenario_pack_id: str) -> dict[str, Any]:
+    try:
+        pack = _execution_store().scenario_pack(scenario_pack_id)
+        base_world = _execution_store().synthetic_world(str(pack["base_world_id"]))
+    except KeyError as exc:
+        raise HTTPException(404, "scenario pack or base world not found") from exc
+    try:
+        calibration_run = None
+        calibration_run_id = base_world["manifest"].get("calibration_run_id")
+        if calibration_run_id:
+            calibration_run = _execution_store().calibration_run(str(calibration_run_id))["result"]
+        return compile_scenario_pack(
+            {**pack["manifest"], "scenario_pack_id": scenario_pack_id},
+            base_world_manifest=base_world,
+            calibration_result=calibration_run,
+        )
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(422, f"scenario pack cannot be compiled: {exc}") from exc
+
+
+@app.get("/api/enterprise/regression-suites")
+def enterprise_regression_suites() -> dict[str, Any]:
+    return {"regression_suites": _execution_store().regression_suites()}
+
+
+@app.post("/api/enterprise/regression-suites")
+def enterprise_create_regression_suite(payload: RegressionSuiteCreate, request: Request) -> dict[str, Any]:
+    store = _execution_store()
+    try:
+        store.scenario_pack(payload.scenario_pack_id)
+    except KeyError as exc:
+        raise HTTPException(404, "scenario pack not found") from exc
+    return store.create_regression_suite(
+        new_registry_id("regression-suite"), payload.model_dump(mode="json"), _enterprise_actor(request)
+    )
+
+
+@app.get("/api/enterprise/regression-suites/{suite_id}")
+def enterprise_regression_suite(suite_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().regression_suite(suite_id)
+    except KeyError as exc:
+        raise HTTPException(404, "regression suite not found") from exc
+
+
+@app.post("/api/enterprise/regression-suites/{suite_id}/run")
+def enterprise_run_regression_suite(suite_id: str, request: Request) -> dict[str, Any]:
+    store = _execution_store()
+    try:
+        suite = store.regression_suite(suite_id)
+        pack = store.scenario_pack(suite["scenario_pack_id"])
+        base_world = store.synthetic_world(str(pack["base_world_id"]))
+    except KeyError as exc:
+        raise HTTPException(404, "regression suite or scenario pack not found") from exc
+    calibration_result = (
+        store.calibration_run(str(base_world["manifest"]["calibration_run_id"]))["result"]
+        if base_world["manifest"].get("calibration_run_id")
+        else None
+    )
+    try:
+        first = compile_scenario_pack(
+            {**pack["manifest"], "scenario_pack_id": suite["scenario_pack_id"]},
+            base_world_manifest=base_world,
+            calibration_result=calibration_result,
+        )
+        second = compile_scenario_pack(
+            {**pack["manifest"], "scenario_pack_id": suite["scenario_pack_id"]},
+            base_world_manifest=base_world,
+            calibration_result=calibration_result,
+        )
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(422, f"scenario pack cannot be compiled: {exc}") from exc
+
+    protected_worlds = first.get("protected_worlds", [])
+    world_hashes = [str(world["world_hash"]) for world in protected_worlds]
+    cases: dict[str, dict[str, Any]] = {
+        "protected_worlds_present": {
+            "passed": bool(protected_worlds),
+            "detail": f"{len(protected_worlds)} protected world(s) compiled.",
+        },
+        "world_hashes_stable": {
+            "passed": first.get("compile_hash") == second.get("compile_hash")
+            and [item["world_hash"] for item in first.get("protected_worlds", [])]
+            == [item["world_hash"] for item in second.get("protected_worlds", [])],
+            "detail": "Repeated compilation produced identical compile and world hashes.",
+        },
+        "intervention_steps_preserved": {
+            "passed": all(
+                bool(world["world"].get("events"))
+                and all(
+                    event.get("simulation_step") == world["intent"]["start_step"]
+                    for event in world["world"].get("events", [])
+                )
+                for world in protected_worlds
+            ),
+            "detail": "Every compiled world contains events at its declared intervention start step.",
+        },
+        "base_manifest_stable": {
+            "passed": first.get("base_world_manifest_hash") == base_world.get("manifest_hash"),
+            "detail": "The compiled pack remains tied to the registered base-world manifest.",
+        },
+    }
+    evidence = {
+        "suite_id": suite_id,
+        "scenario_pack_id": suite["scenario_pack_id"],
+        "compile_hash": first.get("compile_hash"),
+        "world_hashes": world_hashes,
+        "cases": [
+            {"case": case, **cases[case], "required": case in suite["required_cases"]} for case in cases
+        ],
+    }
+    required_results = [cases[case]["passed"] for case in suite["required_cases"]]
+    status = "passed" if all(required_results) else "failed"
+    return store.save_regression_run(
+        new_registry_id("regression-run"),
+        suite_id,
+        status,
+        sum(required_results),
+        len(required_results),
+        evidence,
+    )
+
+
+@app.get("/api/enterprise/regression-suites/{suite_id}/release-check")
+def enterprise_regression_release_check(suite_id: str) -> dict[str, Any]:
+    try:
+        suite = _execution_store().regression_suite(suite_id)
+    except KeyError as exc:
+        raise HTTPException(404, "regression suite not found") from exc
+    latest = suite.get("latest_run")
+    if latest is None or latest["status"] != "passed":
+        raise HTTPException(
+            409,
+            "governed release blocked: the latest required regression run did not pass",
+        )
+    return {
+        "suite_id": suite_id,
+        "scenario_pack_id": suite["scenario_pack_id"],
+        "release_status": "eligible",
+        "run_id": latest["run_id"],
+        "run_hash": latest["run_hash"],
+    }
+
+
+@app.post("/api/enterprise/scenario-packs/{scenario_pack_id}/release")
+def enterprise_release_scenario_pack(scenario_pack_id: str, request: Request) -> dict[str, Any]:
+    store = _execution_store()
+    try:
+        store.scenario_pack(scenario_pack_id)
+    except KeyError as exc:
+        raise HTTPException(404, "scenario pack not found") from exc
+    try:
+        return store.approve_scenario_pack(
+            new_registry_id("release"), scenario_pack_id, _enterprise_actor(request)
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.get("/api/enterprise/scenario-packs/{scenario_pack_id}/release-manifest")
+def enterprise_scenario_pack_release_manifest(scenario_pack_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().scenario_pack_release(scenario_pack_id)
+    except KeyError as exc:
+        raise HTTPException(404, "scenario pack release manifest not found") from exc
+
+
+@app.get("/api/enterprise/strategies")
+def enterprise_strategies() -> dict[str, Any]:
+    return {"strategies": _execution_store().strategies()}
+
+
+@app.post("/api/enterprise/strategies")
+def enterprise_create_strategy(payload: StrategyCreate, request: Request) -> dict[str, Any]:
+    actor = _enterprise_actor(request)
+    if payload.strategy_type == "arena_policy" and payload.builtin_policy_id is None:
+        raise HTTPException(422, "arena_policy strategies require a registered built-in policy ID")
+    if payload.strategy_type == "external_adapter" and payload.external_adapter is None:
+        raise HTTPException(422, "external_adapter strategies require a bounded adapter contract")
+    strategy_id = new_registry_id("strategy")
+    record = payload.model_dump(mode="json")
+    if payload.external_adapter is not None:
+        record["builtin_policy_id"] = payload.external_adapter.policy_id
+    return _execution_store().create_strategy(strategy_id, record, actor)
+
+
+@app.get("/api/enterprise/strategies/{strategy_id}")
+def enterprise_strategy(strategy_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().strategy(strategy_id)
+    except KeyError as exc:
+        raise HTTPException(404, "strategy not found") from exc
+
+
+@app.post("/api/enterprise/experiments")
+def enterprise_run_experiment(payload: StressExperimentCreate, request: Request) -> dict[str, Any]:
+    actor = _enterprise_actor(request)
+    store = _execution_store()
+    try:
+        pack = store.scenario_pack(payload.scenario_pack_id)
+        base_world = store.synthetic_world(str(pack["base_world_id"]))
+        strategies = [store.strategy(strategy_id) for strategy_id in payload.strategy_ids]
+    except KeyError as exc:
+        raise HTTPException(404, "scenario pack or strategy not found") from exc
+    if any(strategy["builtin_policy_id"] is None for strategy in strategies):
+        raise HTTPException(422, "only built-in policy adapters are executable in this milestone")
+    calibration_result = (
+        store.calibration_run(str(base_world["manifest"]["calibration_run_id"]))["result"]
+        if base_world["manifest"].get("calibration_run_id")
+        else None
+    )
+    compiled_by_seed = {
+        seed: compile_scenario_pack(
+            {**pack["manifest"], "scenario_pack_id": payload.scenario_pack_id},
+            base_world_manifest=base_world,
+            calibration_result=calibration_result,
+            seed=seed,
+        )
+        for seed in sorted(payload.seeds)
+    }
+    compiled = compiled_by_seed[sorted(compiled_by_seed)[0]]
+    ensemble_runs: list[dict[str, Any]] = []
+    if calibration_result is not None:
+        for parameter_set in calibration_result.get("accepted_parameter_sets", []):
+            ensemble_compiled = compile_scenario_pack(
+                {**pack["manifest"], "scenario_pack_id": payload.scenario_pack_id},
+                base_world_manifest=base_world,
+                calibration_result={"accepted_parameter_sets": [parameter_set]},
+            )
+
+            def run_cell(protected: dict[str, Any]) -> dict[str, Any]:
+                simulation = run_simulation(WorldSpec.model_validate(protected["world"]))
+                return {
+                    "world_hash": protected["world_hash"],
+                    "filled_quantity": simulation.summary["filled_quantity"],
+                    "implementation_shortfall_bps": simulation.summary["implementation_shortfall_bps"],
+                    "completion_pct": simulation.summary["completion_pct"],
+                }
+
+            # Keep execution single-threaded until the simulator has an explicit
+            # worker boundary; this preserves restart safety and avoids sharing
+            # mutable engine state across request threads.
+            world_results = [
+                run_cell(protected)
+                for protected in sorted(
+                    ensemble_compiled["protected_worlds"], key=lambda item: item["world_hash"]
+                )
+            ]
+            ensemble_runs.append(
+                {
+                    "parameter_set_id": parameter_set["parameter_set_id"],
+                    "validation_distance": parameter_set["validation_distance"],
+                    "heldout_distance": parameter_set["heldout_distance"],
+                    "world_results": world_results,
+                }
+            )
+    selected: list[dict[str, Any]] = []
+    for strategy in sorted(strategies, key=lambda item: str(item["strategy_id"])):
+        strategy_id = str(strategy["strategy_id"])
+        for seed in sorted(payload.seeds):
+            compiled_for_seed = compiled_by_seed[seed]
+            for protected in sorted(
+                compiled_for_seed["protected_worlds"], key=lambda item: item["world_hash"]
+            ):
+                row = execute_registered_strategy(
+                    strategy,
+                    WorldSpec.model_validate(protected["world"]),
+                    source_world_hash=str(protected["world_hash"]),
+                    scenario_pack_id=payload.scenario_pack_id,
+                )
+                selected.append(
+                    {
+                        **row,
+                        "strategy_id": strategy_id,
+                        "seed": seed,
+                        "adapter_provenance": adapter_provenance(strategy, row["adapter_runtime"]),
+                    }
+                )
+    selected.sort(key=lambda row: (str(row["strategy_id"]), int(row["seed"]), str(row["world_hash"])))
+    baseline = benchmark_matrix(
+        seeds=tuple(sorted(payload.seeds)),
+        variants=("latency_shock",),
+        student_submissions=None,
+        policy_ids=tuple(str(strategy["builtin_policy_id"]) for strategy in strategies),
+    )
+    result = {
+        "experiment_type": "baseline_vs_protected_benchmark",
+        "compile_hash": compiled["compile_hash"],
+        "scenario_pack_id": payload.scenario_pack_id,
+        "strategy_results": selected,
+        "arena_baseline_comparator": baseline,
+        "cell_provenance": [
+            {
+                "strategy_id": row["strategy_id"],
+                "scenario_hash": compiled_by_seed[int(row["seed"])]["compile_hash"],
+                "world_hash": row["world_hash"],
+                "seed": row["seed"],
+                "result_hash": row["result_hash"],
+            }
+            for row in selected
+        ],
+        "claim_boundary": "Results are deterministic measurements inside the declared synthetic benchmark worlds.",
+        "calibration_ensemble": compiled.get("calibration_ensemble", []),
+        "calibration_ensemble_runs": ensemble_runs,
+    }
+    experiment_id = new_registry_id("experiment")
+    return store.save_stress_experiment(experiment_id, payload.model_dump(mode="json"), actor, result)
+
+
+@app.get("/api/enterprise/experiments")
+def enterprise_experiments(
+    limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)
+) -> dict[str, Any]:
+    return {
+        "experiments": _execution_store().stress_experiments(limit=limit, offset=offset),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@app.post("/api/enterprise/experiment-jobs")
+def enterprise_create_experiment_job(payload: StressExperimentCreate, request: Request) -> dict[str, Any]:
+    return _execution_store().create_experiment_job(
+        new_registry_id("job"), payload.model_dump(mode="json"), _enterprise_actor(request)
+    )
+
+
+@app.get("/api/enterprise/experiment-jobs/{job_id}")
+def enterprise_experiment_job(job_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().experiment_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment job not found") from exc
+
+
+@app.get("/api/enterprise/experiment-jobs")
+def enterprise_experiment_jobs(limit: int = Query(50, ge=1, le=200)) -> dict[str, Any]:
+    return {"jobs": _execution_store().experiment_jobs(limit=limit), "limit": limit}
+
+
+@app.post("/api/enterprise/experiment-jobs/{job_id}/resume")
+def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str, Any]:
+    store = _execution_store()
+    try:
+        job = store.experiment_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment job not found") from exc
+    if job["status"] == "completed":
+        try:
+            return job | {"artifact": store.experiment_artifact(job_id, "experiment-result")}
+        except KeyError:
+            return job
+    if job["status"] == "running":
+        raise HTTPException(409, "experiment job is already running")
+    payload = StressExperimentCreate.model_validate(job["payload"])
+    try:
+        pack = store.scenario_pack(payload.scenario_pack_id)
+        base_world = store.synthetic_world(str(pack["base_world_id"]))
+        strategies = [store.strategy(strategy_id) for strategy_id in payload.strategy_ids]
+    except KeyError as exc:
+        raise HTTPException(404, "scenario pack or strategy not found") from exc
+    if any(strategy["builtin_policy_id"] is None for strategy in strategies):
+        raise HTTPException(422, "only built-in policy adapters are executable in this milestone")
+    calibration_result = (
+        store.calibration_run(str(base_world["manifest"]["calibration_run_id"]))["result"]
+        if base_world["manifest"].get("calibration_run_id")
+        else None
+    )
+    compiled_by_seed = {
+        seed: compile_scenario_pack(
+            {**pack["manifest"], "scenario_pack_id": payload.scenario_pack_id},
+            base_world_manifest=base_world,
+            calibration_result=calibration_result,
+            seed=seed,
+        )
+        for seed in sorted(payload.seeds)
+    }
+    cell_total = sum(
+        len(payload.strategy_ids) * len(compiled["protected_worlds"])
+        for compiled in compiled_by_seed.values()
+    )
+    completed_before = sum(cell["status"] == "completed" for cell in job["cells"])
+    initial_progress = {
+        "completed_cells": completed_before,
+        "total_cells": cell_total,
+        "percent": round(100 * completed_before / cell_total) if cell_total else 0,
+    }
+    if not store.claim_experiment_job(job_id, initial_progress):
+        raise HTTPException(409, "experiment job is already running")
+    if cell_total == 0:
+        store.update_experiment_job(job_id, status="failed", progress=initial_progress)
+        raise HTTPException(422, "scenario pack compiled to no protected worlds")
+    job = store.experiment_job(job_id)
+    try:
+        completed_rows: list[dict[str, Any]] = []
+        for strategy in sorted(strategies, key=lambda item: str(item["strategy_id"])):
+            strategy_id = str(strategy["strategy_id"])
+            for seed in sorted(payload.seeds):
+                compiled = compiled_by_seed[seed]
+                for protected in compiled["protected_worlds"]:
+                    world_hash = str(protected["world_hash"])
+                    existing = next(
+                        (
+                            cell
+                            for cell in job["cells"]
+                            if cell["strategy_id"] == strategy_id
+                            and cell["scenario_hash"] == compiled["compile_hash"]
+                            and cell["world_hash"] == world_hash
+                            and cell["seed"] == seed
+                            and cell["status"] == "completed"
+                            and cell["result"] is not None
+                            and cell["result"].get("execution_source") == "compiled_scenario_pack"
+                        ),
+                        None,
+                    )
+                    if existing is not None:
+                        completed_rows.append(existing["result"])
+                        continue
+                    try:
+                        row = execute_registered_strategy(
+                            strategy,
+                            WorldSpec.model_validate(protected["world"]),
+                            source_world_hash=world_hash,
+                            scenario_pack_id=payload.scenario_pack_id,
+                        )
+                        store.upsert_experiment_cell(
+                            new_registry_id("cell"),
+                            job_id,
+                            strategy_id=strategy_id,
+                            scenario_hash=str(compiled["compile_hash"]),
+                            world_hash=world_hash,
+                            seed=seed,
+                            status="completed",
+                            result={
+                                **row,
+                                "strategy_id": strategy_id,
+                                "seed": seed,
+                                "adapter_provenance": adapter_provenance(strategy, row["adapter_runtime"]),
+                            },
+                        )
+                        completed_rows.append(
+                            {
+                                **row,
+                                "strategy_id": strategy_id,
+                                "seed": seed,
+                                "adapter_provenance": adapter_provenance(strategy, row["adapter_runtime"]),
+                            }
+                        )
+                    except Exception as exc:
+                        store.upsert_experiment_cell(
+                            new_registry_id("cell"),
+                            job_id,
+                            strategy_id=strategy_id,
+                            scenario_hash=str(compiled["compile_hash"]),
+                            world_hash=world_hash,
+                            seed=seed,
+                            status="failed",
+                            error=str(exc),
+                        )
+                        raise
+                    cells = store.experiment_cells(job_id)
+                    done = sum(cell["status"] == "completed" for cell in cells)
+                    store.update_experiment_job(
+                        job_id,
+                        status="running",
+                        progress={
+                            "completed_cells": done,
+                            "total_cells": cell_total,
+                            "percent": round(100 * done / cell_total),
+                        },
+                    )
+        completed_rows.sort(key=lambda row: (str(row["strategy_id"]), int(row["seed"])))
+        compiled = compiled_by_seed[sorted(compiled_by_seed)[0]]
+        baseline = benchmark_matrix(
+            seeds=tuple(sorted(payload.seeds)),
+            variants=("latency_shock",),
+            student_submissions=None,
+            policy_ids=tuple(str(strategy["builtin_policy_id"]) for strategy in strategies),
+        )
+        experiment = store.save_stress_experiment(
+            new_registry_id("experiment"),
+            payload.model_dump(mode="json"),
+            job["created_by"],
+            {
+                "experiment_type": "baseline_vs_protected_benchmark",
+                "compile_hash": compiled["compile_hash"],
+                "scenario_pack_id": payload.scenario_pack_id,
+                "strategy_results": completed_rows,
+                "arena_baseline_comparator": baseline,
+                "cell_provenance": [
+                    {
+                        "cell_id": cell["cell_id"],
+                        "strategy_id": cell["strategy_id"],
+                        "scenario_hash": cell["scenario_hash"],
+                        "world_hash": cell["world_hash"],
+                        "seed": cell["seed"],
+                        "result_hash": cell["result_hash"],
+                    }
+                    for cell in store.experiment_cells(job_id)
+                    if cell["status"] == "completed"
+                ],
+                "claim_boundary": "Results are deterministic measurements inside the declared synthetic benchmark worlds.",
+                "calibration_ensemble": next(iter(compiled_by_seed.values())).get("calibration_ensemble", []),
+            },
+        )
+        artifact = store.save_experiment_artifact(
+            new_registry_id("artifact"),
+            job_id,
+            "experiment-result",
+            experiment,
+            manifest={
+                "experiment_id": experiment["experiment_id"],
+                "scenario_pack_id": payload.scenario_pack_id,
+                "scenario_hashes": sorted(
+                    {
+                        cell["scenario_hash"]
+                        for cell in store.experiment_cells(job_id)
+                        if cell["status"] == "completed"
+                    }
+                ),
+                "world_hashes": sorted(
+                    {
+                        cell["world_hash"]
+                        for cell in store.experiment_cells(job_id)
+                        if cell["status"] == "completed"
+                    }
+                ),
+                "seeds": sorted({cell["seed"] for cell in store.experiment_cells(job_id)}),
+                "strategy_ids": sorted({cell["strategy_id"] for cell in store.experiment_cells(job_id)}),
+                "creator": job["created_by"],
+            },
+        )
+        return store.update_experiment_job(
+            job_id,
+            status="completed",
+            progress={"completed_cells": cell_total, "total_cells": cell_total, "percent": 100},
+            experiment_id=experiment["experiment_id"],
+        ) | {"artifact": artifact}
+    except Exception:
+        cells = store.experiment_cells(job_id)
+        done = sum(cell["status"] == "completed" for cell in cells)
+        store.update_experiment_job(
+            job_id,
+            status="failed",
+            progress={
+                "completed_cells": done,
+                "total_cells": cell_total,
+                "percent": round(100 * done / cell_total),
+            },
+        )
+        raise
+
+
+@app.get("/api/enterprise/experiment-jobs/{job_id}/artifacts/{kind}")
+def enterprise_experiment_artifact(job_id: str, kind: str) -> dict[str, Any]:
+    try:
+        return _execution_store().experiment_artifact(job_id, kind)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment artifact not found") from exc
+
+
+@app.get("/api/enterprise/experiments/{experiment_id}/artifacts/{kind}")
+def enterprise_experiment_artifact_by_experiment(experiment_id: str, kind: str) -> dict[str, Any]:
+    try:
+        return _execution_store().experiment_artifact_for_experiment(experiment_id, kind)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment artifact not found") from exc
+
+
+@app.get("/api/enterprise/experiments/{experiment_id}/artifacts/{kind}/download")
+def enterprise_experiment_artifact_download(experiment_id: str, kind: str) -> Response:
+    try:
+        artifact = _execution_store().experiment_artifact_for_experiment(experiment_id, kind)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment artifact not found") from exc
+    return Response(
+        content=json.dumps(artifact["content"], indent=2, sort_keys=True),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{experiment_id}-{kind}.json"'},
+    )
+
+
+@app.get("/api/enterprise/experiments/{experiment_id}")
+def enterprise_experiment(experiment_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().stress_experiment(experiment_id)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment not found") from exc
+
+
+@app.post("/api/enterprise/experiments/{experiment_id}/validate")
+def enterprise_validate_experiment(experiment_id: str, request: Request) -> dict[str, Any]:
+    actor = _enterprise_actor(request)
+    store = _execution_store()
+    try:
+        experiment = store.stress_experiment(experiment_id)
+    except KeyError as exc:
+        raise HTTPException(404, "experiment not found") from exc
+    try:
+        report = build_enterprise_validation_report(experiment)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return store.save_validation_report(
+        f"validation-{experiment_id}", experiment_id, report.model_dump(mode="json"), actor
+    )
+
+
+@app.get("/api/enterprise/experiments/{experiment_id}/validation")
+def enterprise_validation_report(experiment_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().validation_report(experiment_id)
+    except KeyError as exc:
+        raise HTTPException(404, "validation report not found") from exc
+
+
+@app.get("/api/enterprise/experiments/{experiment_id}/validation/export")
+def enterprise_validation_export(experiment_id: str) -> Response:
+    try:
+        record = _execution_store().validation_report(experiment_id)
+    except KeyError as exc:
+        raise HTTPException(404, "validation report not found") from exc
+    payload = json.dumps(record["report"], indent=2, sort_keys=True)
+    return Response(
+        content=payload,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{experiment_id}-validation.json"'},
+    )
 
 
 @app.get("/api/execution-challenge")
@@ -1334,6 +2078,16 @@ def _arena_identity_from_token(token: str) -> tuple[str, str] | None:
         return role, user_id
     except (binascii.Error, RuntimeError, ValueError, UnicodeDecodeError, sqlite3.Error):
         return None
+
+
+def _enterprise_actor(request: Request) -> str:
+    """Resolve a local actor while keeping enterprise writes auditable."""
+    role, user_id = _arena_identity(request)
+    if user_id != "anonymous-student":
+        return user_id
+    if os.getenv("ARENA_TEST_AUTH") == "1" and request.client and request.client.host == "testclient":
+        return f"test-{role}"
+    return "local-enterprise-demo"
 
 
 def _arena_identity(request: Request) -> tuple[str, str]:

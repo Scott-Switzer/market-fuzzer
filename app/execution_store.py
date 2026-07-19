@@ -150,6 +150,107 @@ class ArenaStore:
                     actor TEXT NOT NULL, action TEXT NOT NULL, occurred_at TEXT NOT NULL,
                     details_json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS synthetic_worlds (
+                    world_id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
+                    schema_version TEXT NOT NULL, status TEXT NOT NULL, created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS synthetic_world_versions (
+                    world_id TEXT NOT NULL, version INTEGER NOT NULL, manifest_json TEXT NOT NULL,
+                    manifest_hash TEXT NOT NULL, created_at TEXT NOT NULL,
+                    PRIMARY KEY(world_id, version), FOREIGN KEY(world_id) REFERENCES synthetic_worlds(world_id)
+                );
+                CREATE TABLE IF NOT EXISTS scenario_packs (
+                    scenario_pack_id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
+                    base_world_id TEXT NOT NULL, schema_version TEXT NOT NULL, manifest_json TEXT NOT NULL,
+                    manifest_hash TEXT NOT NULL, status TEXT NOT NULL, created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    FOREIGN KEY(base_world_id) REFERENCES synthetic_worlds(world_id)
+                );
+                CREATE TABLE IF NOT EXISTS regression_suites (
+                    suite_id TEXT PRIMARY KEY, name TEXT NOT NULL, scenario_pack_id TEXT NOT NULL,
+                    required_cases_json TEXT NOT NULL, status TEXT NOT NULL, created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    FOREIGN KEY(scenario_pack_id) REFERENCES scenario_packs(scenario_pack_id)
+                );
+                CREATE TABLE IF NOT EXISTS regression_runs (
+                    run_id TEXT PRIMARY KEY, suite_id TEXT NOT NULL, status TEXT NOT NULL,
+                    passed_cases INTEGER NOT NULL, total_cases INTEGER NOT NULL,
+                    evidence_json TEXT NOT NULL, run_hash TEXT NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY(suite_id) REFERENCES regression_suites(suite_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_regression_runs_suite
+                    ON regression_runs(suite_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS scenario_pack_releases (
+                    release_id TEXT PRIMARY KEY, scenario_pack_id TEXT UNIQUE NOT NULL,
+                    manifest_hash TEXT NOT NULL, suite_id TEXT NOT NULL, run_id TEXT NOT NULL,
+                    run_hash TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY(scenario_pack_id) REFERENCES scenario_packs(scenario_pack_id)
+                );
+                CREATE TABLE IF NOT EXISTS strategies (
+                    strategy_id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
+                    strategy_type TEXT NOT NULL, builtin_policy_id TEXT, version_label TEXT NOT NULL,
+                    intended_use TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS strategy_adapters (
+                    strategy_id TEXT PRIMARY KEY, contract_json TEXT NOT NULL,
+                    adapter_hash TEXT NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY(strategy_id) REFERENCES strategies(strategy_id)
+                );
+                CREATE TABLE IF NOT EXISTS stress_experiments (
+                    experiment_id TEXT PRIMARY KEY, name TEXT NOT NULL, scenario_pack_id TEXT NOT NULL,
+                    strategy_ids_json TEXT NOT NULL, seeds_json TEXT NOT NULL, status TEXT NOT NULL,
+                    result_json TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS experiment_jobs (
+                    job_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL, status TEXT NOT NULL,
+                    progress_json TEXT NOT NULL, experiment_id TEXT, created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    FOREIGN KEY(experiment_id) REFERENCES stress_experiments(experiment_id)
+                );
+                CREATE TABLE IF NOT EXISTS experiment_cells (
+                    cell_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, strategy_id TEXT NOT NULL,
+                    scenario_hash TEXT NOT NULL, world_hash TEXT NOT NULL, seed INTEGER NOT NULL,
+                    status TEXT NOT NULL, result_json TEXT, result_hash TEXT, error TEXT,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    UNIQUE(job_id, strategy_id, scenario_hash, world_hash, seed),
+                    FOREIGN KEY(job_id) REFERENCES experiment_jobs(job_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_experiment_cells_job
+                    ON experiment_cells(job_id, status, strategy_id, seed);
+                CREATE TABLE IF NOT EXISTS experiment_artifacts (
+                    artifact_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, kind TEXT NOT NULL,
+                    content_json TEXT NOT NULL, content_hash TEXT NOT NULL, created_at TEXT NOT NULL,
+                    UNIQUE(job_id, kind), FOREIGN KEY(job_id) REFERENCES experiment_jobs(job_id)
+                );
+                CREATE TABLE IF NOT EXISTS artifact_manifests (
+                    manifest_id TEXT PRIMARY KEY, artifact_id TEXT UNIQUE NOT NULL,
+                    manifest_json TEXT NOT NULL, manifest_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(artifact_id) REFERENCES experiment_artifacts(artifact_id)
+                );
+                CREATE TABLE IF NOT EXISTS validation_reports (
+                    report_id TEXT PRIMARY KEY, experiment_id TEXT UNIQUE NOT NULL,
+                    report_json TEXT NOT NULL, report_hash TEXT NOT NULL,
+                    created_by TEXT NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY(experiment_id) REFERENCES stress_experiments(experiment_id)
+                );
+                CREATE TABLE IF NOT EXISTS calibration_packs (
+                    pack_id TEXT PRIMARY KEY, pack_json TEXT NOT NULL, checksum TEXT NOT NULL,
+                    created_by TEXT NOT NULL, created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS world_calibrations (
+                    world_id TEXT PRIMARY KEY, pack_id TEXT NOT NULL, attached_at TEXT NOT NULL,
+                    attached_by TEXT NOT NULL, FOREIGN KEY(world_id) REFERENCES synthetic_worlds(world_id),
+                    FOREIGN KEY(pack_id) REFERENCES calibration_packs(pack_id)
+                );
+                CREATE TABLE IF NOT EXISTS calibration_runs (
+                    calibration_run_id TEXT PRIMARY KEY, pack_id TEXT NOT NULL,
+                    mode TEXT NOT NULL, result_json TEXT NOT NULL, result_hash TEXT NOT NULL,
+                    created_by TEXT NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY(pack_id) REFERENCES calibration_packs(pack_id)
+                );
                 CREATE INDEX IF NOT EXISTS idx_submission_challenge_user
                     ON policy_submissions(challenge_id, user_id);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_final_submission
@@ -746,3 +847,818 @@ class ArenaStore:
             value["details"] = json.loads(value.pop("details_json"))
             values.append(value)
         return values
+
+    def create_synthetic_world(
+        self, world_id: str, payload: dict[str, Any], actor: str, manifest_hash: str
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "INSERT INTO synthetic_worlds VALUES (?, ?, ?, ?, 'draft', ?, ?, ?)",
+                (
+                    world_id,
+                    payload["name"],
+                    payload["description"],
+                    payload["schema_version"],
+                    actor,
+                    now,
+                    now,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO synthetic_world_versions VALUES (?, 1, ?, ?, ?)",
+                (world_id, json.dumps(payload, sort_keys=True), manifest_hash, now),
+            )
+            self._audit_in_transaction(
+                connection,
+                None,
+                actor,
+                "synthetic_world_created",
+                {"world_id": world_id, "manifest_hash": manifest_hash},
+                occurred_at=now,
+            )
+        return self.synthetic_world(world_id)
+
+    def synthetic_world(self, world_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            world = connection.execute(
+                "SELECT * FROM synthetic_worlds WHERE world_id = ?", (world_id,)
+            ).fetchone()
+            version = connection.execute(
+                "SELECT * FROM synthetic_world_versions WHERE world_id = ? ORDER BY version DESC LIMIT 1",
+                (world_id,),
+            ).fetchone()
+        if world is None or version is None:
+            raise KeyError(world_id)
+        value = dict(world)
+        value["version"] = int(version["version"])
+        value["manifest"] = json.loads(version["manifest_json"])
+        value["manifest_hash"] = version["manifest_hash"]
+        return value
+
+    def synthetic_worlds(self) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT world_id FROM synthetic_worlds ORDER BY created_at DESC"
+            ).fetchall()
+        return [self.synthetic_world(str(row["world_id"])) for row in rows]
+
+    def attach_calibration_pack(
+        self,
+        world_id: str,
+        pack: dict[str, Any],
+        actor: str,
+        calibration_run: dict[str, Any],
+        calibration_run_id: str,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        payload = json.dumps(pack, sort_keys=True, separators=(",", ":"))
+        checksum = str(pack["checksum"])
+        run_payload = json.dumps(calibration_run, sort_keys=True, separators=(",", ":"))
+        run_hash = hashlib.sha256(run_payload.encode()).hexdigest()
+        with self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            world = connection.execute(
+                "SELECT 1 FROM synthetic_worlds WHERE world_id = ?", (world_id,)
+            ).fetchone()
+            if world is None:
+                raise KeyError(world_id)
+            connection.execute(
+                "INSERT OR IGNORE INTO calibration_packs VALUES (?, ?, ?, ?, ?)",
+                (pack["pack_id"], payload, checksum, actor, now),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO calibration_runs VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    calibration_run_id,
+                    pack["pack_id"],
+                    calibration_run["mode"],
+                    run_payload,
+                    run_hash,
+                    actor,
+                    now,
+                ),
+            )
+            latest = connection.execute(
+                "SELECT version, manifest_json FROM synthetic_world_versions WHERE world_id = ? ORDER BY version DESC LIMIT 1",
+                (world_id,),
+            ).fetchone()
+            if latest is None:
+                raise KeyError(world_id)
+            manifest = json.loads(latest["manifest_json"])
+            manifest["calibration_pack_id"] = pack["pack_id"]
+            manifest["calibration_checksum"] = checksum
+            manifest["calibration_run_id"] = calibration_run_id
+            manifest["calibration_stable"] = bool(calibration_run["heldout_stability"]["stable"])
+            manifest["updated_at"] = now
+            manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+            connection.execute(
+                "INSERT INTO synthetic_world_versions VALUES (?, ?, ?, ?, ?)",
+                (
+                    world_id,
+                    int(latest["version"]) + 1,
+                    json.dumps(manifest, sort_keys=True),
+                    manifest_hash,
+                    now,
+                ),
+            )
+            connection.execute(
+                "INSERT OR REPLACE INTO world_calibrations VALUES (?, ?, ?, ?)",
+                (world_id, pack["pack_id"], now, actor),
+            )
+            self._audit_in_transaction(
+                connection,
+                None,
+                actor,
+                "calibration_pack_attached",
+                {
+                    "world_id": world_id,
+                    "pack_id": pack["pack_id"],
+                    "calibration_run_id": calibration_run_id,
+                    "manifest_hash": manifest_hash,
+                },
+                occurred_at=now,
+            )
+        return self.synthetic_world(world_id)
+
+    def calibration_pack(self, pack_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM calibration_packs WHERE pack_id = ?", (pack_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(pack_id)
+        value = dict(row)
+        value["pack"] = json.loads(value.pop("pack_json"))
+        return value
+
+    def calibration_run(self, calibration_run_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM calibration_runs WHERE calibration_run_id = ?", (calibration_run_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(calibration_run_id)
+        value = dict(row)
+        value["result"] = json.loads(value.pop("result_json"))
+        return value
+
+    def create_scenario_pack(
+        self, scenario_pack_id: str, payload: dict[str, Any], actor: str, manifest_hash: str
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            exists = connection.execute(
+                "SELECT 1 FROM synthetic_worlds WHERE world_id = ?", (payload["base_world_id"],)
+            ).fetchone()
+            if exists is None:
+                raise KeyError(payload["base_world_id"])
+            connection.execute(
+                "INSERT INTO scenario_packs VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)",
+                (
+                    scenario_pack_id,
+                    payload["name"],
+                    payload["description"],
+                    payload["base_world_id"],
+                    payload["schema_version"],
+                    json.dumps(payload, sort_keys=True),
+                    manifest_hash,
+                    actor,
+                    now,
+                    now,
+                ),
+            )
+            self._audit_in_transaction(
+                connection,
+                None,
+                actor,
+                "scenario_pack_created",
+                {"scenario_pack_id": scenario_pack_id, "manifest_hash": manifest_hash},
+                occurred_at=now,
+            )
+        return self.scenario_pack(scenario_pack_id)
+
+    def scenario_pack(self, scenario_pack_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM scenario_packs WHERE scenario_pack_id = ?", (scenario_pack_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(scenario_pack_id)
+        value = dict(row)
+        value["manifest"] = json.loads(value.pop("manifest_json"))
+        return value
+
+    def scenario_packs(self) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT scenario_pack_id FROM scenario_packs ORDER BY created_at DESC"
+            ).fetchall()
+        return [self.scenario_pack(str(row["scenario_pack_id"])) for row in rows]
+
+    def approve_scenario_pack(self, release_id: str, scenario_pack_id: str, actor: str) -> dict[str, Any]:
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            evidence = connection.execute(
+                """
+                SELECT s.suite_id, r.run_id, r.run_hash
+                FROM regression_suites AS s
+                JOIN regression_runs AS r ON r.run_id = (
+                    SELECT latest.run_id
+                    FROM regression_runs AS latest
+                    WHERE latest.suite_id = s.suite_id
+                    ORDER BY latest.created_at DESC
+                    LIMIT 1
+                )
+                WHERE s.scenario_pack_id = ? AND r.status = 'passed'
+                ORDER BY r.created_at DESC
+                LIMIT 1
+                """,
+                (scenario_pack_id,),
+            ).fetchone()
+            if evidence is None:
+                raise ValueError("scenario pack release blocked: no passing regression suite")
+            updated = connection.execute(
+                """
+                UPDATE scenario_packs SET status = 'approved', updated_at = ?
+                WHERE scenario_pack_id = ? AND status = 'draft'
+                """,
+                (now, scenario_pack_id),
+            )
+            if updated.rowcount != 1:
+                row = connection.execute(
+                    "SELECT status FROM scenario_packs WHERE scenario_pack_id = ?",
+                    (scenario_pack_id,),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(scenario_pack_id)
+                raise ValueError(f"scenario pack is already {row['status']}")
+            pack = connection.execute(
+                "SELECT manifest_hash FROM scenario_packs WHERE scenario_pack_id = ?",
+                (scenario_pack_id,),
+            ).fetchone()
+            assert pack is not None
+            release_manifest = {
+                "release_id": release_id,
+                "scenario_pack_id": scenario_pack_id,
+                "scenario_pack_manifest_hash": pack["manifest_hash"],
+                "suite_id": evidence["suite_id"],
+                "run_id": evidence["run_id"],
+                "run_hash": evidence["run_hash"],
+                "created_by": actor,
+                "created_at": now,
+            }
+            release_manifest_hash = hashlib.sha256(
+                json.dumps(release_manifest, sort_keys=True).encode()
+            ).hexdigest()
+            self._audit_in_transaction(
+                connection,
+                None,
+                actor,
+                "scenario_pack_approved",
+                {
+                    "scenario_pack_id": scenario_pack_id,
+                    "suite_id": evidence["suite_id"],
+                    "run_id": evidence["run_id"],
+                    "run_hash": evidence["run_hash"],
+                },
+                occurred_at=now,
+            )
+            connection.execute(
+                """
+                INSERT INTO scenario_pack_releases
+                    (release_id, scenario_pack_id, manifest_hash, suite_id, run_id,
+                     run_hash, created_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    release_id,
+                    scenario_pack_id,
+                    release_manifest_hash,
+                    str(evidence["suite_id"]),
+                    str(evidence["run_id"]),
+                    str(evidence["run_hash"]),
+                    actor,
+                    now,
+                ),
+            )
+        return self.scenario_pack(scenario_pack_id) | {
+            "release_gate": {
+                "status": "approved",
+                "suite_id": evidence["suite_id"],
+                "run_id": evidence["run_id"],
+                "run_hash": evidence["run_hash"],
+            },
+            "release_manifest": self.scenario_pack_release(scenario_pack_id),
+        }
+
+    def scenario_pack_release(self, scenario_pack_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM scenario_pack_releases WHERE scenario_pack_id = ?",
+                (scenario_pack_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(scenario_pack_id)
+        return dict(row)
+
+    def create_regression_suite(self, suite_id: str, payload: dict[str, Any], actor: str) -> dict[str, Any]:
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO regression_suites
+                    (suite_id, name, scenario_pack_id, required_cases_json, status,
+                     created_by, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'draft', ?, ?, ?)
+                """,
+                (
+                    suite_id,
+                    payload["name"],
+                    payload["scenario_pack_id"],
+                    json.dumps(sorted(payload["required_cases"])),
+                    actor,
+                    now,
+                    now,
+                ),
+            )
+            self._audit_in_transaction(
+                connection,
+                None,
+                actor,
+                "regression_suite_created",
+                {"suite_id": suite_id, "scenario_pack_id": payload["scenario_pack_id"]},
+                occurred_at=now,
+            )
+        return self.regression_suite(suite_id)
+
+    def regression_suite(self, suite_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM regression_suites WHERE suite_id = ?", (suite_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(suite_id)
+        value = dict(row)
+        value["required_cases"] = json.loads(value.pop("required_cases_json"))
+        value["latest_run"] = self.latest_regression_run(suite_id)
+        return value
+
+    def regression_suites(self) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT suite_id FROM regression_suites ORDER BY created_at DESC"
+            ).fetchall()
+        return [self.regression_suite(str(row["suite_id"])) for row in rows]
+
+    def save_regression_run(
+        self,
+        run_id: str,
+        suite_id: str,
+        status: str,
+        passed_cases: int,
+        total_cases: int,
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        now = utc_now()
+        encoded = json.dumps(evidence, sort_keys=True, separators=(",", ":"))
+        run_hash = hashlib.sha256(encoded.encode()).hexdigest()
+        with self.connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO regression_runs
+                    (run_id, suite_id, status, passed_cases, total_cases,
+                     evidence_json, run_hash, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (run_id, suite_id, status, passed_cases, total_cases, encoded, run_hash, now),
+            )
+            connection.execute(
+                "UPDATE regression_suites SET status = ?, updated_at = ? WHERE suite_id = ?",
+                ("passed" if status == "passed" else "failed", now, suite_id),
+            )
+        return self.regression_run(run_id)
+
+    def regression_run(self, run_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute("SELECT * FROM regression_runs WHERE run_id = ?", (run_id,)).fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        value = dict(row)
+        value["evidence"] = json.loads(value.pop("evidence_json"))
+        return value
+
+    def latest_regression_run(self, suite_id: str) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM regression_runs
+                WHERE suite_id = ? ORDER BY created_at DESC LIMIT 1
+                """,
+                (suite_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        value = dict(row)
+        value["evidence"] = json.loads(value.pop("evidence_json"))
+        return value
+
+    def create_strategy(self, strategy_id: str, payload: dict[str, Any], actor: str) -> dict[str, Any]:
+        now = utc_now()
+        adapter = payload.get("external_adapter")
+        adapter_hash = None
+        if adapter is not None:
+            encoded = json.dumps(adapter, sort_keys=True, separators=(",", ":"))
+            adapter_hash = hashlib.sha256(encoded.encode()).hexdigest()
+        with self.connection() as connection:
+            connection.execute(
+                "INSERT INTO strategies VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    strategy_id,
+                    payload["name"],
+                    payload["description"],
+                    payload["strategy_type"],
+                    payload.get("builtin_policy_id"),
+                    payload["version_label"],
+                    payload["intended_use"],
+                    actor,
+                    now,
+                    now,
+                ),
+            )
+            if adapter is not None and adapter_hash is not None:
+                connection.execute(
+                    "INSERT INTO strategy_adapters VALUES (?, ?, ?, ?)",
+                    (strategy_id, json.dumps(adapter, sort_keys=True), adapter_hash, now),
+                )
+            self._audit_in_transaction(
+                connection, None, actor, "strategy_registered", {"strategy_id": strategy_id}, occurred_at=now
+            )
+        return self.strategy(strategy_id)
+
+    def strategy(self, strategy_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM strategies WHERE strategy_id = ?", (strategy_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(strategy_id)
+        value = dict(row)
+        with self.connection() as connection:
+            adapter = connection.execute(
+                "SELECT contract_json, adapter_hash FROM strategy_adapters WHERE strategy_id = ?",
+                (strategy_id,),
+            ).fetchone()
+        if adapter is not None:
+            value["external_adapter"] = json.loads(adapter["contract_json"])
+            value["adapter_hash"] = adapter["adapter_hash"]
+        return value
+
+    def strategies(self) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT strategy_id FROM strategies ORDER BY created_at DESC"
+            ).fetchall()
+        return [self.strategy(str(row["strategy_id"])) for row in rows]
+
+    def save_stress_experiment(
+        self, experiment_id: str, payload: dict[str, Any], actor: str, result: dict[str, Any]
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute(
+                "INSERT INTO stress_experiments VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?)",
+                (
+                    experiment_id,
+                    payload["name"],
+                    payload["scenario_pack_id"],
+                    json.dumps(payload["strategy_ids"]),
+                    json.dumps(payload["seeds"]),
+                    json.dumps(result, sort_keys=True),
+                    actor,
+                    now,
+                    now,
+                ),
+            )
+            self._audit_in_transaction(
+                connection,
+                None,
+                actor,
+                "stress_experiment_completed",
+                {"experiment_id": experiment_id},
+                occurred_at=now,
+            )
+        return self.stress_experiment(experiment_id)
+
+    def stress_experiment(self, experiment_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM stress_experiments WHERE experiment_id = ?", (experiment_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(experiment_id)
+        value = dict(row)
+        value["strategy_ids"] = json.loads(value.pop("strategy_ids_json"))
+        value["seeds"] = json.loads(value.pop("seeds_json"))
+        value["result"] = json.loads(value.pop("result_json")) if value.get("result_json") else None
+        value.pop("result_json", None)
+        return value
+
+    def stress_experiments(
+        self, *, limit: int = 50, offset: int = 0, include_results: bool = False
+    ) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 200:
+            raise ValueError("limit must be between 1 and 200")
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT e.*,
+                       EXISTS(
+                           SELECT 1
+                           FROM experiment_artifacts AS a
+                           JOIN experiment_jobs AS j ON j.job_id = a.job_id
+                           WHERE j.experiment_id = e.experiment_id
+                             AND a.kind = 'experiment-result'
+                       ) AS has_artifact
+                FROM stress_experiments AS e
+                ORDER BY e.created_at DESC LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            ).fetchall()
+        results = []
+        for row in rows:
+            value = dict(row)
+            value["strategy_ids"] = json.loads(value.pop("strategy_ids_json"))
+            value["seeds"] = json.loads(value.pop("seeds_json"))
+            result_json = value.pop("result_json")
+            value["has_artifact"] = bool(value["has_artifact"])
+            if include_results:
+                value["result"] = json.loads(result_json) if result_json else None
+            else:
+                value["has_result"] = bool(result_json)
+            results.append(value)
+        return results
+
+    def create_experiment_job(self, job_id: str, payload: dict[str, Any], actor: str) -> dict[str, Any]:
+        now = utc_now()
+        progress = {"completed_cells": 0, "total_cells": 0, "percent": 0}
+        with self.connection() as connection:
+            connection.execute(
+                "INSERT INTO experiment_jobs VALUES (?, ?, 'queued', ?, NULL, ?, ?, ?)",
+                (job_id, json.dumps(payload, sort_keys=True), json.dumps(progress), actor, now, now),
+            )
+        return self.experiment_job(job_id)
+
+    def update_experiment_job(
+        self, job_id: str, *, status: str, progress: dict[str, Any], experiment_id: str | None = None
+    ) -> dict[str, Any]:
+        with self.connection() as connection:
+            updated = connection.execute(
+                "UPDATE experiment_jobs SET status = ?, progress_json = ?, experiment_id = COALESCE(?, experiment_id), updated_at = ? WHERE job_id = ?",
+                (status, json.dumps(progress, sort_keys=True), experiment_id, utc_now(), job_id),
+            )
+        if updated.rowcount != 1:
+            raise KeyError(job_id)
+        return self.experiment_job(job_id)
+
+    def claim_experiment_job(self, job_id: str, progress: dict[str, Any]) -> bool:
+        """Atomically claim a queued or failed job for one resume attempt."""
+        with self.connection() as connection:
+            updated = connection.execute(
+                """
+                UPDATE experiment_jobs
+                SET status = 'running', progress_json = ?, updated_at = ?
+                WHERE job_id = ? AND status IN ('queued', 'failed')
+                """,
+                (json.dumps(progress, sort_keys=True), utc_now(), job_id),
+            )
+        if updated.rowcount == 1:
+            return True
+        with self.connection() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM experiment_jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+        if exists is None:
+            raise KeyError(job_id)
+        return False
+
+    def experiment_job(self, job_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute("SELECT * FROM experiment_jobs WHERE job_id = ?", (job_id,)).fetchone()
+        if row is None:
+            raise KeyError(job_id)
+        value = dict(row)
+        value["payload"] = json.loads(value.pop("payload_json"))
+        value["progress"] = json.loads(value.pop("progress_json"))
+        value["cells"] = self.experiment_cells(job_id)
+        return value
+
+    def experiment_jobs(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 200:
+            raise ValueError("limit must be between 1 and 200")
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT job_id FROM experiment_jobs ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [self.experiment_job(str(row["job_id"])) for row in rows]
+
+    def upsert_experiment_cell(
+        self,
+        cell_id: str,
+        job_id: str,
+        *,
+        strategy_id: str,
+        scenario_hash: str,
+        world_hash: str,
+        seed: int,
+        status: str,
+        result: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        encoded = json.dumps(result, sort_keys=True) if result is not None else None
+        result_hash = hashlib.sha256(encoded.encode()).hexdigest() if encoded is not None else None
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO experiment_cells
+                    (cell_id, job_id, strategy_id, scenario_hash, world_hash, seed, status,
+                     result_json, result_hash, error, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_id, strategy_id, scenario_hash, world_hash, seed) DO UPDATE SET
+                    status = excluded.status, result_json = excluded.result_json,
+                    result_hash = excluded.result_hash, error = excluded.error,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    cell_id,
+                    job_id,
+                    strategy_id,
+                    scenario_hash,
+                    world_hash,
+                    seed,
+                    status,
+                    encoded,
+                    result_hash,
+                    error,
+                    now,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                """
+                SELECT * FROM experiment_cells
+                WHERE job_id = ? AND strategy_id = ? AND scenario_hash = ?
+                  AND world_hash = ? AND seed = ?
+                """,
+                (job_id, strategy_id, scenario_hash, world_hash, seed),
+            ).fetchone()
+        assert row is not None
+        return self._experiment_cell_value(row)
+
+    @staticmethod
+    def _experiment_cell_value(row: sqlite3.Row) -> dict[str, Any]:
+        value = dict(row)
+        value["result"] = json.loads(value.pop("result_json")) if value.get("result_json") else None
+        return value
+
+    def experiment_cells(self, job_id: str) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM experiment_cells
+                WHERE job_id = ? ORDER BY strategy_id, seed, world_hash
+                """,
+                (job_id,),
+            ).fetchall()
+        return [self._experiment_cell_value(row) for row in rows]
+
+    def save_experiment_artifact(
+        self,
+        artifact_id: str,
+        job_id: str,
+        kind: str,
+        content: dict[str, Any],
+        manifest: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        encoded = json.dumps(content, sort_keys=True, separators=(",", ":"))
+        record = {
+            "artifact_id": artifact_id,
+            "job_id": job_id,
+            "kind": kind,
+            "content": content,
+            "content_hash": hashlib.sha256(encoded.encode()).hexdigest(),
+            "created_at": utc_now(),
+        }
+        with self.connection() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO experiment_artifacts VALUES (?, ?, ?, ?, ?, ?)",
+                (artifact_id, job_id, kind, encoded, record["content_hash"], record["created_at"]),
+            )
+            manifest_value = {
+                "schema_version": "artifact-manifest-v1",
+                "job_id": job_id,
+                "artifact_id": artifact_id,
+                "artifact_kind": kind,
+                "content_hash": record["content_hash"],
+                "created_at": record["created_at"],
+                **(manifest or {}),
+            }
+            manifest_encoded = json.dumps(manifest_value, sort_keys=True, separators=(",", ":"))
+            connection.execute(
+                "INSERT OR REPLACE INTO artifact_manifests VALUES (?, ?, ?, ?, ?)",
+                (
+                    f"manifest-{artifact_id}",
+                    artifact_id,
+                    manifest_encoded,
+                    hashlib.sha256(manifest_encoded.encode()).hexdigest(),
+                    record["created_at"],
+                ),
+            )
+            record["manifest"] = manifest_value
+        return record
+
+    def experiment_artifact(self, job_id: str, kind: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM experiment_artifacts WHERE job_id = ? AND kind = ?", (job_id, kind)
+            ).fetchone()
+        if row is None:
+            raise KeyError((job_id, kind))
+        value = dict(row)
+        value["content"] = json.loads(value.pop("content_json"))
+        with self.connection() as connection:
+            manifest = connection.execute(
+                "SELECT manifest_json, manifest_hash FROM artifact_manifests WHERE artifact_id = ?",
+                (value["artifact_id"],),
+            ).fetchone()
+        if manifest is not None:
+            value["manifest"] = json.loads(manifest["manifest_json"])
+            value["manifest_hash"] = manifest["manifest_hash"]
+        return value
+
+    def experiment_artifact_for_experiment(self, experiment_id: str, kind: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT a.* FROM experiment_artifacts a
+                JOIN experiment_jobs j ON j.job_id = a.job_id
+                WHERE j.experiment_id = ? AND a.kind = ?
+                """,
+                (experiment_id, kind),
+            ).fetchone()
+        if row is None:
+            raise KeyError((experiment_id, kind))
+        value = dict(row)
+        value["content"] = json.loads(value.pop("content_json"))
+        with self.connection() as connection:
+            manifest = connection.execute(
+                "SELECT manifest_json, manifest_hash FROM artifact_manifests WHERE artifact_id = ?",
+                (value["artifact_id"],),
+            ).fetchone()
+        if manifest is not None:
+            value["manifest"] = json.loads(manifest["manifest_json"])
+            value["manifest_hash"] = manifest["manifest_hash"]
+        return value
+
+    def save_validation_report(
+        self, report_id: str, experiment_id: str, report: dict[str, Any], actor: str
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO validation_reports VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    report_id,
+                    experiment_id,
+                    json.dumps(report, sort_keys=True),
+                    report["report_hash"],
+                    actor,
+                    now,
+                ),
+            )
+            self._audit_in_transaction(
+                connection,
+                None,
+                actor,
+                "validation_report_saved",
+                {"report_id": report_id, "experiment_id": experiment_id},
+                occurred_at=now,
+            )
+        return self.validation_report(experiment_id)
+
+    def validation_report(self, experiment_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM validation_reports WHERE experiment_id = ?", (experiment_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(experiment_id)
+        value = dict(row)
+        value["report"] = json.loads(value.pop("report_json"))
+        return value
