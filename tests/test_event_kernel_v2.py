@@ -11,6 +11,7 @@ from app.exchange.v2 import (
     OrderTypeV2,
     RunManifestV2,
     SideV2,
+    TimeInForceV2,
 )
 
 
@@ -54,3 +55,19 @@ def test_validation_and_duplicate_commands_fail_with_typed_errors() -> None:
     rejected = kernel.admit(command(command_id="cmd-2"))
     assert rejected.kind == EventKindV2.ORDER_REJECTED
     assert rejected.payload == {"reason": "duplicate_order_id"}
+
+
+def test_time_in_force_rejects_unprotected_fok_market_orders() -> None:
+    with pytest.raises(ExchangeValidationError, match="price protection"):
+        OrderCommandV2(
+            "fok-market",
+            "order",
+            "acct",
+            "NOVA",
+            SideV2.BUY,
+            OrderTypeV2.MARKET,
+            10,
+            0,
+            0,
+            time_in_force=TimeInForceV2.FOK,
+        )
