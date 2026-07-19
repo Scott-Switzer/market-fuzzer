@@ -9,11 +9,12 @@ Build a sealed, procedurally generated market-evaluation platform that measures 
 M0B — execution controls and review hygiene.
 
 - Current branch: `codex/m0b-execution-controls`
-- Current PR: not yet opened
+- Current PR: [#15](https://github.com/Scott-Switzer/market-fuzzer/pull/15)
 - Clean-main baseline SHA: `591780357335fc0e603c8c3fff5340700687dabf`
 - M0B controls implementation SHA: `9a5f503fa345dcd99deccde113dd00c2f207f30b`
+- Current branch head before this ledger checkpoint: `02fcf8dc856563219d513dc85c5463e39d3f2268`
 - Latest substantive Greptile-reviewed SHA: `0fda71eb2c8832b61e30a5a1a3f690be677bd7c1`
-- Latest self-reviewed SHA: `f1af98feaccaf48d9cc45524e195562216fef46f`
+- Latest self-reviewed SHA: `02fcf8dc856563219d513dc85c5463e39d3f2268`
 
 ## Completed evidence
 
