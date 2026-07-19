@@ -47,7 +47,6 @@ from app.execution_arena import (
     challenge_overview,
     public_leaderboard_matrix,
     run_execution_challenge,
-    run_policy_on_compiled_world,
     run_policy_submission,
 )
 from app.execution_arena import (
@@ -62,6 +61,7 @@ from app.execution_challenge_designer import (
 from app.execution_feedback import build_execution_evidence, generate_execution_feedback
 from app.execution_store import ArenaPhaseError, ArenaQuotaError, ArenaStore
 from app.experiments import run_batch, run_single, run_validation_campaign
+from app.external_adapter import adapter_provenance, execute_registered_strategy
 from app.governance import build_enterprise_validation_report
 from app.product import (
     DEFAULT_PROPERTIES,
@@ -572,20 +572,21 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
         raise HTTPException(404, "scenario pack or strategy not found") from exc
     if any(strategy["builtin_policy_id"] is None for strategy in strategies):
         raise HTTPException(422, "only built-in policy adapters are executable in this milestone")
-    compiled = compile_scenario_pack(
-        {**pack["manifest"], "scenario_pack_id": payload.scenario_pack_id},
-        base_world_manifest=base_world,
-        calibration_result=(
-            store.calibration_run(str(base_world["manifest"]["calibration_run_id"]))["result"]
-            if base_world["manifest"].get("calibration_run_id")
-            else None
-        ),
-    )
     calibration_result = (
         store.calibration_run(str(base_world["manifest"]["calibration_run_id"]))["result"]
         if base_world["manifest"].get("calibration_run_id")
         else None
     )
+    compiled_by_seed = {
+        seed: compile_scenario_pack(
+            {**pack["manifest"], "scenario_pack_id": payload.scenario_pack_id},
+            base_world_manifest=base_world,
+            calibration_result=calibration_result,
+            seed=seed,
+        )
+        for seed in sorted(payload.seeds)
+    }
+    compiled = compiled_by_seed[sorted(compiled_by_seed)[0]]
     ensemble_runs: list[dict[str, Any]] = []
     if calibration_result is not None:
         for parameter_set in calibration_result.get("accepted_parameter_sets", []):
@@ -621,31 +622,51 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
                     "world_results": world_results,
                 }
             )
-    policy_ids = [str(strategy["builtin_policy_id"]) for strategy in strategies]
-    matrix = benchmark_matrix(
-        seeds=tuple(payload.seeds),
+    selected: list[dict[str, Any]] = []
+    for strategy in sorted(strategies, key=lambda item: str(item["strategy_id"])):
+        strategy_id = str(strategy["strategy_id"])
+        for seed in sorted(payload.seeds):
+            compiled_for_seed = compiled_by_seed[seed]
+            for protected in sorted(
+                compiled_for_seed["protected_worlds"], key=lambda item: item["world_hash"]
+            ):
+                row = execute_registered_strategy(
+                    strategy,
+                    WorldSpec.model_validate(protected["world"]),
+                    source_world_hash=str(protected["world_hash"]),
+                    scenario_pack_id=payload.scenario_pack_id,
+                )
+                selected.append(
+                    {
+                        **row,
+                        "strategy_id": strategy_id,
+                        "seed": seed,
+                        "adapter_provenance": adapter_provenance(strategy, row["adapter_runtime"]),
+                    }
+                )
+    selected.sort(key=lambda row: (str(row["strategy_id"]), int(row["seed"]), str(row["world_hash"])))
+    baseline = benchmark_matrix(
+        seeds=tuple(sorted(payload.seeds)),
         variants=("latency_shock",),
         student_submissions=None,
-        policy_ids=tuple(policy_ids),
+        policy_ids=tuple(str(strategy["builtin_policy_id"]) for strategy in strategies),
     )
-    selected = matrix["rows"]
-    strategy_by_policy = {str(strategy["builtin_policy_id"]): strategy for strategy in strategies}
-    selected = [
-        row
-        | {
-            "adapter_provenance": {
-                "strategy_type": strategy_by_policy[str(row["policy_id"])]["strategy_type"],
-                "adapter_hash": strategy_by_policy[str(row["policy_id"])].get("adapter_hash"),
-                "adapter_contract": strategy_by_policy[str(row["policy_id"])].get("external_adapter"),
-            }
-        }
-        for row in selected
-    ]
     result = {
         "experiment_type": "baseline_vs_protected_benchmark",
         "compile_hash": compiled["compile_hash"],
         "scenario_pack_id": payload.scenario_pack_id,
         "strategy_results": selected,
+        "arena_baseline_comparator": baseline,
+        "cell_provenance": [
+            {
+                "strategy_id": row["strategy_id"],
+                "scenario_hash": compiled_by_seed[int(row["seed"])]["compile_hash"],
+                "world_hash": row["world_hash"],
+                "seed": row["seed"],
+                "result_hash": row["result_hash"],
+            }
+            for row in selected
+        ],
         "claim_boundary": "Results are deterministic measurements inside the declared synthetic benchmark worlds.",
         "calibration_ensemble": compiled.get("calibration_ensemble", []),
         "calibration_ensemble_runs": ensemble_runs,
@@ -742,7 +763,6 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
         completed_rows: list[dict[str, Any]] = []
         for strategy in sorted(strategies, key=lambda item: str(item["strategy_id"])):
             strategy_id = str(strategy["strategy_id"])
-            builtin_policy_id = str(strategy["builtin_policy_id"])
             for seed in sorted(payload.seeds):
                 compiled = compiled_by_seed[seed]
                 for protected in compiled["protected_worlds"]:
@@ -765,17 +785,12 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
                         completed_rows.append(existing["result"])
                         continue
                     try:
-                        row = run_policy_on_compiled_world(
-                            builtin_policy_id,
+                        row = execute_registered_strategy(
+                            strategy,
                             WorldSpec.model_validate(protected["world"]),
                             source_world_hash=world_hash,
                             scenario_pack_id=payload.scenario_pack_id,
                         )
-                        adapter_provenance = {
-                            "strategy_type": strategy["strategy_type"],
-                            "adapter_hash": strategy.get("adapter_hash"),
-                            "adapter_contract": strategy.get("external_adapter"),
-                        }
                         store.upsert_experiment_cell(
                             new_registry_id("cell"),
                             job_id,
@@ -788,7 +803,7 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
                                 **row,
                                 "strategy_id": strategy_id,
                                 "seed": seed,
-                                "adapter_provenance": adapter_provenance,
+                                "adapter_provenance": adapter_provenance(strategy, row["adapter_runtime"]),
                             },
                         )
                         completed_rows.append(
@@ -796,7 +811,7 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
                                 **row,
                                 "strategy_id": strategy_id,
                                 "seed": seed,
-                                "adapter_provenance": adapter_provenance,
+                                "adapter_provenance": adapter_provenance(strategy, row["adapter_runtime"]),
                             }
                         )
                     except Exception as exc:

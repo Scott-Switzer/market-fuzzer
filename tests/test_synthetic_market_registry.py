@@ -301,6 +301,9 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
     record = experiment.json()
     assert record["status"] == "completed"
     assert record["result"]["strategy_results"][0]["policy_id"] == "guarded_pov"
+    assert record["result"]["strategy_results"][0]["execution_source"] == "compiled_scenario_pack"
+    assert record["result"]["strategy_results"][0]["adapter_runtime"]["user_code_execution"] is False
+    assert record["result"]["cell_provenance"][0]["scenario_hash"]
     job = client.post(
         "/api/enterprise/experiment-jobs",
         json={
