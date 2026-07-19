@@ -42,19 +42,26 @@ def backup_database(source: Path, destination: Path) -> dict[str, Any]:
     finally:
         if temporary.exists():
             temporary.unlink()
-    manifest = {
-        "schema_version": "operator_backup_v1",
-        "created_at": datetime.now(UTC).isoformat(),
-        "source_database": source.name,
-        "backup_database": destination.name,
-        "backup_sha256": _sha256(destination),
-        "backup_bytes": destination.stat().st_size,
-        "integrity_check": "ok",
-        "sqlite_user_version": user_version,
-        "claim_boundary": "durability evidence for the supported single-database appliance; not disaster recovery or HA proof",
-    }
     manifest_path = destination.with_suffix(destination.suffix + ".manifest.json")
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    try:
+        manifest = {
+            "schema_version": "operator_backup_v1",
+            "created_at": datetime.now(UTC).isoformat(),
+            "source_database": source.name,
+            "backup_database": destination.name,
+            "backup_sha256": _sha256(destination),
+            "backup_bytes": destination.stat().st_size,
+            "integrity_check": "ok",
+            "sqlite_user_version": user_version,
+            "claim_boundary": "durability evidence for the supported single-database appliance; not disaster recovery or HA proof",
+        }
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    except Exception:
+        if destination.exists():
+            destination.unlink()
+        if manifest_path.exists():
+            manifest_path.unlink()
+        raise
     return {**manifest, "manifest_path": str(manifest_path)}
 
 
@@ -65,7 +72,11 @@ def main() -> None:
         default=os.getenv("ARENA_DB_PATH", "artifacts/arena.sqlite3"),
         help="SQLite database path; defaults to ARENA_DB_PATH",
     )
-    parser.add_argument("--output-dir", default="backups", help="Directory for the backup and manifest")
+    parser.add_argument(
+        "--output-dir",
+        default=os.getenv("ARENA_BACKUP_DIR", "/data/backups"),
+        help="Directory for the backup and manifest; defaults to ARENA_BACKUP_DIR or /data/backups",
+    )
     parser.add_argument("--label", default="arena", help="Backup filename label")
     args = parser.parse_args()
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")

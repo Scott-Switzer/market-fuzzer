@@ -33,11 +33,11 @@ Stop writes before copying the volume or use SQLite's online backup procedure:
 docker compose exec quant-challenge-arena \
   python scripts/operator_backup.py --database /data/arena.sqlite3 --output-dir /data/backups
 docker compose cp quant-challenge-arena:/data/backups ./arena-backups
+```
 
 The backup command uses SQLite's online backup API, runs `PRAGMA integrity_check`,
 and writes a SHA-256 manifest beside the backup. Preserve the backup database,
 manifest, and `/data/artifacts` together.
-```
 
 Preserve `/data/artifacts` with the database. Experiment artifacts include
 content hashes and manifests that reference world hashes, scenario packs, seeds,
