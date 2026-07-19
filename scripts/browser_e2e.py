@@ -8,6 +8,7 @@ boundary as the visible pages.
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -120,6 +121,53 @@ def _assert_same_public_world(run: dict[str, Any]) -> None:
 def _collect_console(page: Page, errors: list[str]) -> None:
     page.on("console", lambda message: errors.append(message.text) if message.type == "error" else None)
     page.on("pageerror", lambda error: errors.append(str(error)))
+
+
+def _assert_stress_lab_decision_states(browser: Any, base_url: str) -> None:
+    """Keep optional decision evidence from breaking the operator workflow."""
+
+    def route_handler(response_status: int, body: dict[str, Any]) -> Any:
+        def fulfill(route: Any, _request: Any) -> None:
+            route.fulfill(
+                status=response_status,
+                content_type="application/json",
+                body=json.dumps(body),
+            )
+
+        return fulfill
+
+    cases = (
+        (404, {}, "Decision evidence unavailable"),
+        (500, {}, "Decision evidence could not be loaded"),
+        (200, {"decision_changed": True, "public_winner": {}}, "Decision evidence incomplete"),
+        (None, None, "Decision changed under stress"),
+    )
+    for status, response_body, expected_heading in cases:
+        console_errors: list[str] = []
+        context = browser.new_context(base_url=base_url)
+        page = context.new_page()
+        _collect_console(page, console_errors)
+        if status is not None:
+            page.route(
+                "**/api/enterprise/decision-benchmark",
+                route_handler(status, response_body),
+            )
+        try:
+            page.goto("/strategy-stress-lab", wait_until="networkidle")
+            page.locator("#readiness-grid .readiness-item").first.wait_for(timeout=30_000)
+            page.get_by_role("heading", name=expected_heading, exact=True).wait_for(timeout=30_000)
+            assert "deterministic demo fixture" in page.locator("#decision-benchmark").inner_text().lower()
+            assert page.locator("#readiness-grid .readiness-item").count() == 4
+            unexpected_errors = [
+                error
+                for error in console_errors
+                if not (status is not None and status >= 400 and error.startswith("Failed to load resource"))
+            ]
+            assert not unexpected_errors, "stress lab browser console errors:\n" + "\n".join(
+                unexpected_errors
+            )
+        finally:
+            context.close()
 
 
 def main() -> None:
@@ -394,11 +442,13 @@ def main() -> None:
             student_page.get_by_role("button", name="Start with POV example", exact=False).click()
             student_page.get_by_role("heading", name="What are we testing?", exact=True).wait_for()
 
+            _assert_stress_lab_decision_states(browser, base_url)
+
             assert not console_errors, "browser console errors:\n" + "\n".join(console_errors)
             print(
                 "browser e2e: independent-pair+stale-clear+replay+custom-submission+designer+"
                 "lock+evaluate+quality+reversal+release+heatmap+student-aggregate+responsive+"
-                "feedback+market-fuzzer=pass console=clean"
+                "feedback+market-fuzzer+stress-lab-decision-states=pass console=clean"
             )
         finally:
             student.close()
