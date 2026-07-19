@@ -23,12 +23,23 @@ class OrderRejectedError(ExchangeValidationError):
     """Raised when an order cannot be admitted to the kernel."""
 
 
+class ExchangeInvariantError(ExchangeValidationError):
+    """Raised when an internal conservation invariant is violated."""
+
+
 class EventKindV2(StrEnum):
     ORDER_ACKNOWLEDGED = "order_acknowledged"
     ORDER_REJECTED = "order_rejected"
     COMMAND_ACCEPTED = "command_accepted"
     ORDER_CANCELLED = "order_cancelled"
+    ORDER_REPLACED = "order_replaced"
     TRADE_EXECUTED = "trade_executed"
+    SESSION_OPENED = "session_opened"
+    SESSION_CLOSED = "session_closed"
+    INSTRUMENT_HALTED = "instrument_halted"
+    INSTRUMENT_RESUMED = "instrument_resumed"
+    KILL_SWITCH_ENABLED = "kill_switch_enabled"
+    KILL_SWITCH_DISABLED = "kill_switch_disabled"
 
 
 class SideV2(StrEnum):
@@ -95,6 +106,31 @@ class OrderCommandV2:
             raise ExchangeValidationError("market order must not set price_ticks")
         if self.time_in_force == TimeInForceV2.FOK and self.order_type == OrderTypeV2.MARKET:
             raise ExchangeValidationError("FOK market orders require an explicit price protection limit")
+
+
+@dataclass(frozen=True, slots=True)
+class ReplaceOrderCommandV2:
+    """Amend a live DAY limit order without reusing its original command ID."""
+
+    command_id: str
+    order_id: str
+    account_id: str
+    exchange_time_ns: int
+    venue_sequence: int
+    quantity: int
+    price_ticks: int
+
+    def __post_init__(self) -> None:
+        for value, name in (
+            (self.command_id, "command_id"),
+            (self.order_id, "order_id"),
+            (self.account_id, "account_id"),
+        ):
+            _require_nonempty(value, name)
+        if self.exchange_time_ns < 0 or self.venue_sequence < 0:
+            raise ExchangeValidationError("time and venue sequence must be non-negative")
+        if self.quantity <= 0 or self.price_ticks <= 0:
+            raise ExchangeValidationError("replacement quantity and price_ticks must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,6 +270,24 @@ class EventKernelV2:
             command_id=command.command_id,
             order_id=command.order_id,
             payload={"reason": "duplicate_order_id"} if rejected else {"accepted_quantity": command.quantity},
+        )
+        self.ledger.append(event)
+        return event
+
+    def admit_replace(self, command: ReplaceOrderCommandV2) -> OrderEventV2:
+        if command.command_id in self._command_ids:
+            raise OrderRejectedError(f"duplicate command_id {command.command_id}")
+        self._command_ids.add(command.command_id)
+        self._event_sequence += 1
+        event = OrderEventV2(
+            event_id=f"evt-{self._event_sequence:020d}",
+            kind=EventKindV2.ORDER_REPLACED,
+            exchange_time_ns=command.exchange_time_ns,
+            venue_sequence=command.venue_sequence,
+            event_priority=10,
+            command_id=command.command_id,
+            order_id=command.order_id,
+            payload={"quantity": command.quantity, "price_ticks": command.price_ticks},
         )
         self.ledger.append(event)
         return event

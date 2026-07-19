@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from dataclasses import replace as dataclass_replace
+from enum import StrEnum
 from math import ceil
 
 from .v2 import (
     EventKernelV2,
     EventKindV2,
+    ExchangeInvariantError,
     ExchangeValidationError,
     OrderCommandV2,
+    OrderEventV2,
     OrderRejectedError,
     OrderTypeV2,
+    ReplaceOrderCommandV2,
     SelfTradePreventionV2,
     SideV2,
     TimeInForceV2,
@@ -31,6 +36,27 @@ class AccountStateV2:
 
     def available_position(self, instrument_id: str) -> int:
         return self.positions.get(instrument_id, 0) - self.reserved_positions.get(instrument_id, 0)
+
+
+@dataclass(frozen=True, slots=True)
+class AccountRiskLimitsV2:
+    """Fail-closed admission limits for the cash-like venue profile."""
+
+    max_order_quantity: int | None = None
+    max_order_notional_cents: int | None = None
+
+    def __post_init__(self) -> None:
+        for value, name in (
+            (self.max_order_quantity, "max_order_quantity"),
+            (self.max_order_notional_cents, "max_order_notional_cents"),
+        ):
+            if value is not None and value <= 0:
+                raise ExchangeValidationError(f"{name} must be positive when configured")
+
+
+class SessionStateV2(StrEnum):
+    OPEN = "open"
+    CLOSED = "closed"
 
 
 @dataclass(slots=True)
@@ -76,27 +102,105 @@ class MatchingExchangeV2:
         self.maker_fee_bps = maker_fee_bps
         self.taker_fee_bps = taker_fee_bps
         self.accounts: dict[str, AccountStateV2] = {}
+        self._risk_limits: dict[str, AccountRiskLimitsV2] = {}
+        self._killed_accounts: set[str] = set()
+        self._halted_instruments: set[str] = set()
+        self.session_state = SessionStateV2.OPEN
         self._books: dict[str, dict[SideV2, dict[int, list[str]]]] = {}
         self._orders: dict[str, RestingOrderV2] = {}
         self._sequence = 0
         self._trade_sequence = 0
         self.fee_account_cents = 0
 
-    def register(self, account: AccountStateV2) -> None:
+    def register(self, account: AccountStateV2, *, risk_limits: AccountRiskLimitsV2 | None = None) -> None:
         if account.account_id in self.accounts:
             raise ExchangeValidationError(f"duplicate account {account.account_id}")
         if account.cash_cents < 0 or any(quantity < 0 for quantity in account.positions.values()):
             raise ExchangeValidationError("cash and initial positions must be non-negative")
         self.accounts[account.account_id] = account
+        self._risk_limits[account.account_id] = risk_limits or AccountRiskLimitsV2()
+
+    def close_session(self, *, exchange_time_ns: int, venue_sequence: int) -> None:
+        if self.session_state == SessionStateV2.CLOSED:
+            raise ExchangeValidationError("session is already closed")
+        self.session_state = SessionStateV2.CLOSED
+        self._control_event(EventKindV2.SESSION_CLOSED, "session", exchange_time_ns, venue_sequence)
+        for order_id in sorted(self._orders):
+            order = self._orders.get(order_id)
+            if order is not None and order.command.time_in_force == TimeInForceV2.DAY:
+                self.cancel(
+                    account_id=order.command.account_id,
+                    order_id=order_id,
+                    exchange_time_ns=exchange_time_ns,
+                    venue_sequence=venue_sequence,
+                )
+
+    def open_session(self, *, exchange_time_ns: int, venue_sequence: int) -> None:
+        if self.session_state == SessionStateV2.OPEN:
+            raise ExchangeValidationError("session is already open")
+        self.session_state = SessionStateV2.OPEN
+        self._control_event(EventKindV2.SESSION_OPENED, "session", exchange_time_ns, venue_sequence)
+
+    def halt_instrument(self, instrument_id: str, *, exchange_time_ns: int, venue_sequence: int) -> None:
+        if not instrument_id or instrument_id in self._halted_instruments:
+            raise ExchangeValidationError("instrument must be active before it can halt")
+        self._halted_instruments.add(instrument_id)
+        self._control_event(EventKindV2.INSTRUMENT_HALTED, instrument_id, exchange_time_ns, venue_sequence)
+
+    def resume_instrument(self, instrument_id: str, *, exchange_time_ns: int, venue_sequence: int) -> None:
+        if instrument_id not in self._halted_instruments:
+            raise ExchangeValidationError("instrument is not halted")
+        self._halted_instruments.remove(instrument_id)
+        self._control_event(EventKindV2.INSTRUMENT_RESUMED, instrument_id, exchange_time_ns, venue_sequence)
+
+    def set_kill_switch(
+        self,
+        account_id: str,
+        *,
+        enabled: bool,
+        exchange_time_ns: int,
+        venue_sequence: int,
+    ) -> None:
+        if account_id not in self.accounts:
+            raise ExchangeValidationError("unknown account")
+        if enabled == (account_id in self._killed_accounts):
+            raise ExchangeValidationError("kill switch already has requested state")
+        if enabled:
+            self._killed_accounts.add(account_id)
+            self._control_event(EventKindV2.KILL_SWITCH_ENABLED, account_id, exchange_time_ns, venue_sequence)
+            for order_id in sorted(
+                order_id for order_id, order in self._orders.items() if order.command.account_id == account_id
+            ):
+                self.cancel(
+                    account_id=account_id,
+                    order_id=order_id,
+                    exchange_time_ns=exchange_time_ns,
+                    venue_sequence=venue_sequence,
+                )
+        else:
+            self._killed_accounts.remove(account_id)
+            self._control_event(
+                EventKindV2.KILL_SWITCH_DISABLED, account_id, exchange_time_ns, venue_sequence
+            )
 
     def submit(self, command: OrderCommandV2) -> tuple[TradeV2, ...]:
         acknowledgement = self.kernel.admit(command)
         if acknowledgement.kind == EventKindV2.ORDER_REJECTED:
             return ()
+        if self.session_state != SessionStateV2.OPEN:
+            self._reject(command, "session_closed")
+            return ()
+        if command.instrument_id in self._halted_instruments:
+            self._reject(command, "instrument_halted")
+            return ()
+        if command.account_id in self._killed_accounts:
+            self._reject(command, "kill_switch_enabled")
+            return ()
         if command.account_id not in self.accounts:
             self._reject(command, "unknown_account")
             return ()
         try:
+            self._validate_risk(command)
             self._reserve(command)
         except OrderRejectedError as error:
             self._reject(command, str(error))
@@ -144,6 +248,51 @@ class MatchingExchangeV2:
         )
         self._assert_conservation()
 
+    def replace(self, command: ReplaceOrderCommandV2) -> tuple[TradeV2, ...]:
+        """Apply a native replace while preserving priority only for a size reduction at the same price."""
+        order = self._orders.get(command.order_id)
+        if order is None:
+            raise OrderRejectedError("unknown_resting_order")
+        if order.command.account_id != command.account_id:
+            raise OrderRejectedError("replace_not_owner")
+        if self.session_state != SessionStateV2.OPEN:
+            raise OrderRejectedError("session_closed")
+        if order.command.instrument_id in self._halted_instruments:
+            raise OrderRejectedError("instrument_halted")
+        if command.account_id in self._killed_accounts:
+            raise OrderRejectedError("kill_switch_enabled")
+        replacement = dataclass_replace(
+            order.command,
+            command_id=command.command_id,
+            quantity=command.quantity,
+            price_ticks=command.price_ticks,
+            exchange_time_ns=command.exchange_time_ns,
+            venue_sequence=command.venue_sequence,
+        )
+        self._validate_risk(replacement)
+        if not self._can_reserve_replacement(order, replacement):
+            raise OrderRejectedError("insufficient_available_resources_for_replace")
+        self.kernel.admit_replace(command)
+        same_price_reduction = (
+            replacement.price_ticks == order.command.price_ticks
+            and replacement.quantity <= order.remaining_quantity
+        )
+        if same_price_reduction:
+            self._release(order.command, order.remaining_quantity - replacement.quantity)
+            order.command = replacement
+            order.remaining_quantity = replacement.quantity
+            self._assert_conservation()
+            return ()
+        self._remove_resting(order)
+        self._release(order.command, order.remaining_quantity)
+        self._reserve(replacement)
+        incoming = RestingOrderV2(replacement, replacement.quantity)
+        trades = self._match(incoming)
+        if incoming.remaining_quantity:
+            self._rest(incoming)
+        self._assert_conservation()
+        return tuple(trades)
+
     def _reserve(self, command: OrderCommandV2) -> None:
         account = self.accounts[command.account_id]
         if command.side == SideV2.SELL:
@@ -160,6 +309,31 @@ class MatchingExchangeV2:
             raise OrderRejectedError("insufficient_available_cash")
         account.reserved_cash_cents += needed
 
+    def _validate_risk(self, command: OrderCommandV2) -> None:
+        limits = self._risk_limits[command.account_id]
+        if limits.max_order_quantity is not None and command.quantity > limits.max_order_quantity:
+            raise OrderRejectedError("risk_max_order_quantity")
+        if limits.max_order_notional_cents is None:
+            return
+        if command.price_ticks is None:
+            raise OrderRejectedError("risk_requires_price_protection")
+        notional = command.price_ticks * self.tick_size_cents * command.quantity
+        if notional > limits.max_order_notional_cents:
+            raise OrderRejectedError("risk_max_order_notional")
+
+    def _can_reserve_replacement(self, order: RestingOrderV2, replacement: OrderCommandV2) -> bool:
+        account = self.accounts[order.command.account_id]
+        if replacement.side == SideV2.SELL:
+            return (
+                account.available_position(replacement.instrument_id) + order.remaining_quantity
+                >= replacement.quantity
+            )
+        if order.command.price_ticks is None or replacement.price_ticks is None:
+            raise ExchangeValidationError("cash replacement requires protected limit prices")
+        released = self._maximum_cost(order.command.price_ticks, order.remaining_quantity)
+        required = self._maximum_cost(replacement.price_ticks, replacement.quantity)
+        return account.available_cash_cents() + released >= required
+
     def _release(self, command: OrderCommandV2, quantity: int) -> None:
         account = self.accounts[command.account_id]
         if command.side == SideV2.SELL:
@@ -167,7 +341,8 @@ class MatchingExchangeV2:
             if account.reserved_positions[command.instrument_id] == 0:
                 del account.reserved_positions[command.instrument_id]
         else:
-            assert command.price_ticks is not None
+            if command.price_ticks is None:
+                raise ExchangeValidationError("buy reservation requires a protected limit price")
             account.reserved_cash_cents -= self._maximum_cost(command.price_ticks, quantity)
 
     def _can_fully_execute(self, command: OrderCommandV2) -> bool:
@@ -295,11 +470,19 @@ class MatchingExchangeV2:
         )
 
     def _rest(self, order: RestingOrderV2) -> None:
-        assert order.command.price_ticks is not None
+        if order.command.price_ticks is None:
+            raise ExchangeValidationError("only protected limit orders may rest")
         self._levels(order.command.instrument_id, order.command.side).setdefault(
             order.command.price_ticks, []
         ).append(order.command.order_id)
         self._orders[order.command.order_id] = order
+
+    def _remove_resting(self, order: RestingOrderV2) -> None:
+        level = self._levels(order.command.instrument_id, order.command.side)[order.command.price_ticks or 0]
+        level.remove(order.command.order_id)
+        if not level:
+            del self._levels(order.command.instrument_id, order.command.side)[order.command.price_ticks or 0]
+        del self._orders[order.command.order_id]
 
     def _levels(self, instrument_id: str, side: SideV2) -> dict[int, list[str]]:
         book = self._books.setdefault(instrument_id, {SideV2.BUY: {}, SideV2.SELL: {}})
@@ -313,7 +496,8 @@ class MatchingExchangeV2:
     def _crosses(command: OrderCommandV2, price: int) -> bool:
         if command.order_type == OrderTypeV2.MARKET:
             return True
-        assert command.price_ticks is not None
+        if command.price_ticks is None:
+            raise ExchangeValidationError("limit order requires a protected limit price")
         return command.price_ticks >= price if command.side == SideV2.BUY else command.price_ticks <= price
 
     def _maximum_cost(self, price_ticks: int, quantity: int) -> int:
@@ -334,7 +518,7 @@ class MatchingExchangeV2:
     ) -> None:
         self._sequence += 1
         self.kernel.ledger.append(
-            self.kernel.ledger.events[0].__class__(
+            OrderEventV2(
                 event_id=f"match-{self._sequence:020d}",
                 kind=kind,
                 exchange_time_ns=command.exchange_time_ns if exchange_time_ns is None else exchange_time_ns,
@@ -346,15 +530,32 @@ class MatchingExchangeV2:
             )
         )
 
+    def _control_event(
+        self, kind: EventKindV2, target: str, exchange_time_ns: int, venue_sequence: int
+    ) -> None:
+        self._sequence += 1
+        self.kernel.ledger.append(
+            OrderEventV2(
+                event_id=f"control-{self._sequence:020d}",
+                kind=kind,
+                exchange_time_ns=exchange_time_ns,
+                venue_sequence=venue_sequence,
+                event_priority=15,
+                command_id=f"control:{kind.value}:{target}",
+                order_id=f"control:{target}",
+                payload={"target": target},
+            )
+        )
+
     def _reject(self, command: OrderCommandV2, reason: str) -> None:
         self._event(command, EventKindV2.ORDER_REJECTED, {"reason": reason})
 
     def _assert_conservation(self) -> None:
         if any(account.cash_cents < account.reserved_cash_cents for account in self.accounts.values()):
-            raise AssertionError("reservation exceeds cash")
+            raise ExchangeInvariantError("reservation exceeds cash")
         if any(
             account.available_position(symbol) < 0
             for account in self.accounts.values()
             for symbol in account.positions
         ):
-            raise AssertionError("reservation exceeds position")
+            raise ExchangeInvariantError("reservation exceeds position")
