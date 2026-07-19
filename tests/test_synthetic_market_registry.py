@@ -368,6 +368,8 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
     assert record["result"]["strategy_results"][0]["policy_id"] == "guarded_pov"
     assert record["result"]["strategy_results"][0]["execution_source"] == "compiled_scenario_pack"
     assert record["result"]["strategy_results"][0]["adapter_runtime"]["user_code_execution"] is False
+    assert record["result"]["evaluation_evidence"]["scope"] == "development_fixture"
+    assert "not sealed primary" in record["result"]["evaluation_evidence"]["claim_boundary"].lower()
     assert record["result"]["cell_provenance"][0]["scenario_hash"]
     job = client.post(
         "/api/enterprise/experiment-jobs",
@@ -402,6 +404,7 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
     experiment_detail = client.get(f"/api/enterprise/experiments/{resumed_record['experiment_id']}").json()
     assert experiment_detail["result"]["strategy_results"][0]["execution_source"] == "compiled_scenario_pack"
     assert experiment_detail["result"]["arena_baseline_comparator"]["rows"]
+    assert experiment_detail["result"]["evaluation_evidence"]["scope"] == "development_fixture"
     artifact_detail = client.get(
         f"/api/enterprise/experiments/{resumed_record['experiment_id']}/artifacts/experiment-result"
     )
@@ -437,6 +440,8 @@ def test_strategy_stress_lab_persists_experiment_result(tmp_path, monkeypatch) -
     report = validation.json()["report"]
     assert report["overall_verdict"] == "LIMITED"
     assert len(report["evidence_manifest"]["evidence_ids"]) == 1
+    assert report["evidence_manifest"]["evaluation_scope"] == "development_fixture"
+    assert len(report["evidence_manifest"]["evaluation_evidence_digest"]) == 64
     exported = client.get(f"/api/enterprise/experiments/{record['experiment_id']}/validation/export")
     assert exported.status_code == 200
     assert exported.headers["content-type"].startswith("application/json")

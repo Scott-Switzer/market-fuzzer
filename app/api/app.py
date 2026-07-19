@@ -45,6 +45,7 @@ from app.calibration import (
 )
 from app.compiler import compile_world
 from app.decision_benchmark import build_decision_change_benchmark
+from app.evaluation import development_fixture_evidence
 from app.execution_arena import (
     CHALLENGE_ID,
     HIDDEN_VARIANTS,
@@ -103,6 +104,19 @@ app = FastAPI(title="Quant Challenge Arena", version="0.3.0")
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 JOBS: dict[str, dict] = {}
 PRODUCT_PROJECTS: dict[str, dict] = {}
+
+
+def _development_stress_evidence(result: dict[str, Any]) -> dict[str, Any]:
+    """State the boundary for legacy deterministic Stress Lab result artifacts."""
+    return development_fixture_evidence(
+        payload=result,
+        limitation=(
+            "Stress Lab currently uses declared deterministic scenario packs and fixed seeds; "
+            "it is a development fixture until it runs a sealed V2 campaign."
+        ),
+    ).to_dict()
+
+
 PRODUCT_FAILURES: dict[str, dict] = {}
 _LOCAL_DEMO_SESSION_SECRET = os.urandom(32)
 _EXECUTION_STORE_CACHE_SIZE = 8
@@ -812,6 +826,7 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
         "calibration_ensemble": compiled.get("calibration_ensemble", []),
         "calibration_ensemble_runs": ensemble_runs,
     }
+    result["evaluation_evidence"] = _development_stress_evidence(result)
     experiment_id = new_registry_id("experiment")
     return store.save_stress_experiment(experiment_id, payload.model_dump(mode="json"), actor, result)
 
@@ -1000,31 +1015,33 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
             student_submissions=None,
             policy_ids=tuple(str(strategy["builtin_policy_id"]) for strategy in strategies),
         )
+        result = {
+            "experiment_type": "baseline_vs_protected_benchmark",
+            "compile_hash": compiled["compile_hash"],
+            "scenario_pack_id": payload.scenario_pack_id,
+            "strategy_results": completed_rows,
+            "arena_baseline_comparator": baseline,
+            "cell_provenance": [
+                {
+                    "cell_id": cell["cell_id"],
+                    "strategy_id": cell["strategy_id"],
+                    "scenario_hash": cell["scenario_hash"],
+                    "world_hash": cell["world_hash"],
+                    "seed": cell["seed"],
+                    "result_hash": cell["result_hash"],
+                }
+                for cell in store.experiment_cells(job_id)
+                if cell["status"] == "completed"
+            ],
+            "claim_boundary": "Results are deterministic measurements inside the declared synthetic benchmark worlds.",
+            "calibration_ensemble": next(iter(compiled_by_seed.values())).get("calibration_ensemble", []),
+        }
+        result["evaluation_evidence"] = _development_stress_evidence(result)
         experiment = store.save_stress_experiment(
             new_registry_id("experiment"),
             payload.model_dump(mode="json"),
             job["created_by"],
-            {
-                "experiment_type": "baseline_vs_protected_benchmark",
-                "compile_hash": compiled["compile_hash"],
-                "scenario_pack_id": payload.scenario_pack_id,
-                "strategy_results": completed_rows,
-                "arena_baseline_comparator": baseline,
-                "cell_provenance": [
-                    {
-                        "cell_id": cell["cell_id"],
-                        "strategy_id": cell["strategy_id"],
-                        "scenario_hash": cell["scenario_hash"],
-                        "world_hash": cell["world_hash"],
-                        "seed": cell["seed"],
-                        "result_hash": cell["result_hash"],
-                    }
-                    for cell in store.experiment_cells(job_id)
-                    if cell["status"] == "completed"
-                ],
-                "claim_boundary": "Results are deterministic measurements inside the declared synthetic benchmark worlds.",
-                "calibration_ensemble": next(iter(compiled_by_seed.values())).get("calibration_ensemble", []),
-            },
+            result,
         )
         artifact = store.save_experiment_artifact(
             new_registry_id("artifact"),

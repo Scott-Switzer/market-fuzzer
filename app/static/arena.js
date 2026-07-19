@@ -742,9 +742,17 @@ function renderWorldHeatmap(matrix) {
     return `<td style="--heat-hue:${hue}" aria-label="${fmt(value.shortfall)} basis points implementation shortfall, ${completion}${isWorst ? ", worst world" : ""}"><strong>${fmt(value.shortfall)} bps</strong><span>${completion}</span>${isWorst ? '<span class="worst-badge">Worst world</span>' : ""}</td>`;
   };
   const matrixHash = matrix.provenance?.matrix_hash || matrix.matrix_hash;
+  const evidence = matrix.provenance?.evaluation_evidence || {};
+  const developmentFixture = evidence.scope === "development_fixture";
+  const evidenceLabel = developmentFixture
+    ? "Deterministic development-fixture outcomes"
+    : "Released policy × protected-world outcomes";
+  const evidenceBoundary = developmentFixture
+    ? "This fixed-seed result is development evidence, not sealed primary evaluation."
+    : String(evidence.claim_boundary || "Evidence scope was not supplied.");
   const target = $("#world-heatmap");
   target.className = "heatmap-shell";
-  target.innerHTML = `<h4>Released policy × protected-world outcomes</h4><p class="muted">Cells show mean implementation shortfall and completion across deterministic seeds. Green is lower shortfall; the worst shortfall world is labeled.${matrixHash ? ` Matrix ${esc(matrixHash.slice(0, 12))}.` : ""}</p><table class="heatmap"><thead><tr><th>Policy</th><th>Robustness score</th>${worldLabels.map((label) => `<th>${esc(String(label).replaceAll("_", " "))}</th>`).join("")}<th>Worst-world status</th></tr></thead><tbody>${aggregates.map((row) => `<tr><td class="policy-label">${esc(row.name)}</td><td class="robustness-cell"><strong>${row.robustness == null ? "—" : fmt(row.robustness, 2)}</strong></td>${worldLabels.map((label) => cell(row.values[label], row.worst?.[0] === label)).join("")}<td class="worst-cell">${row.worst ? `<strong>${esc(String(row.worst[0]).replaceAll("_", " "))}</strong><span>${fmt(row.worst[1].shortfall)} bps · ${row.worst[1].completion == null ? "completion unavailable" : `${fmt(row.worst[1].completion)}% complete`}</span>` : "—"}</td></tr>`).join("")}</tbody></table>`;
+  target.innerHTML = `<h4>${esc(evidenceLabel)}</h4><p class="muted">${esc(evidenceBoundary)} Cells show mean implementation shortfall and completion across deterministic seeds. Green is lower shortfall; the worst shortfall world is labeled.${matrixHash ? ` Matrix ${esc(matrixHash.slice(0, 12))}.` : ""}</p><table class="heatmap"><thead><tr><th>Policy</th><th>Robustness score</th>${worldLabels.map((label) => `<th>${esc(String(label).replaceAll("_", " "))}</th>`).join("")}<th>Worst-world status</th></tr></thead><tbody>${aggregates.map((row) => `<tr><td class="policy-label">${esc(row.name)}</td><td class="robustness-cell"><strong>${row.robustness == null ? "—" : fmt(row.robustness, 2)}</strong></td>${worldLabels.map((label) => cell(row.values[label], row.worst?.[0] === label)).join("")}<td class="worst-cell">${row.worst ? `<strong>${esc(String(row.worst[0]).replaceAll("_", " "))}</strong><span>${fmt(row.worst[1].shortfall)} bps · ${row.worst[1].completion == null ? "completion unavailable" : `${fmt(row.worst[1].completion)}% complete`}</span>` : "—"}</td></tr>`).join("")}</tbody></table>`;
 }
 
 function resetMeasuredQuality(

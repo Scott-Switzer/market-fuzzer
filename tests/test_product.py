@@ -22,6 +22,8 @@ def test_fragile_pov_baseline_passes_and_search_finds_reproducible_failure():
     failure = run_search(strategy, DEFAULT_PROPERTIES)
     assert failure["found"]
     assert failure["reproduction"]["seeds_failed"] >= 2
+    assert failure["evaluation_evidence"]["scope"] == "adaptive_diagnostic"
+    assert "not independently selected primary" in failure["evaluation_evidence"]["claim_boundary"].lower()
 
 
 def test_fragile_failure_is_targeted_minimized_and_corrected_strategy_passes(tmp_path, monkeypatch):

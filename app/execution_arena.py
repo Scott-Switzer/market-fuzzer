@@ -18,6 +18,7 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.evaluation import development_fixture_evidence
 from app.schemas import WorldSpec
 from app.simulation import ExecutionDecider, SimulationResult, run_simulation
 from app.world.scenarios import build_demo_world, mutate_scenario
@@ -1036,10 +1037,22 @@ def _builtin_benchmark_matrix(
         "order_hygiene_scoring": "omitted_market_order_only_not_comparable",
         "quality": _challenge_quality_report(robust_ranked),
     }
+    provenance["evaluation_evidence"] = _development_matrix_evidence(robust_ranked, provenance)
     provenance["matrix_hash"] = sha256(
         json.dumps({"rows": robust_ranked, "provenance": provenance}, sort_keys=True, default=str).encode()
     ).hexdigest()
     return {"challenge": challenge_overview(), "rows": robust_ranked, "provenance": provenance}
+
+
+def _development_matrix_evidence(rows: list[dict[str, Any]], provenance: dict[str, Any]) -> dict[str, Any]:
+    """Hash matrix inputs without recursively embedding prior evidence metadata."""
+    payload_provenance = {
+        key: value for key, value in provenance.items() if key not in {"evaluation_evidence", "matrix_hash"}
+    }
+    return development_fixture_evidence(
+        payload={"rows": rows, "provenance": payload_provenance},
+        limitation="The current Arena benchmark uses declared fixed seeds and variants; it is a development fixture until migrated to a sealed campaign.",
+    ).to_dict()
 
 
 def benchmark_matrix(
@@ -1077,6 +1090,9 @@ def benchmark_matrix(
     matrix["provenance"]["student_submission_ids"] = sorted(student_submissions)
     matrix["provenance"]["quality"] = _challenge_quality_report(matrix["rows"])
     matrix["provenance"].pop("matrix_hash", None)
+    matrix["provenance"]["evaluation_evidence"] = _development_matrix_evidence(
+        matrix["rows"], matrix["provenance"]
+    )
     matrix["provenance"]["matrix_hash"] = sha256(
         json.dumps(
             {"rows": matrix["rows"], "provenance": matrix["provenance"]},

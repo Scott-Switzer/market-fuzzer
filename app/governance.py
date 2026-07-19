@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.evaluation import development_fixture_evidence
 
 
 class EvidenceManifest(BaseModel):
@@ -21,6 +23,8 @@ class EvidenceManifest(BaseModel):
     evidence_ids: list[str]
     calibration_parameter_set_ids: list[str] = Field(default_factory=list)
     deterministic_authority: str = "application_simulator"
+    evaluation_scope: Literal["development_fixture", "sealed_primary", "adaptive_diagnostic"]
+    evaluation_evidence_digest: str
     claim_boundary: str
 
 
@@ -78,6 +82,7 @@ def build_enterprise_validation_report(experiment: dict) -> EnterpriseValidation
         raise ValueError(
             f"Experiment {experiment['experiment_id']!r} has no completed result; cannot build validation report."
         )
+    evaluation_evidence = _evaluation_evidence(result)
     evidence_ids = [
         "evidence:"
         + hashlib.sha256(f"{experiment['experiment_id']}:{index}:{row['policy_id']}".encode()).hexdigest()[
@@ -95,6 +100,11 @@ def build_enterprise_validation_report(experiment: dict) -> EnterpriseValidation
         calibration_parameter_set_ids=[
             item["parameter_set_id"] for item in result.get("calibration_ensemble", [])
         ],
+        evaluation_scope=cast(
+            Literal["development_fixture", "sealed_primary", "adaptive_diagnostic"],
+            evaluation_evidence["scope"],
+        ),
+        evaluation_evidence_digest=str(evaluation_evidence["evidence_digest"]),
         claim_boundary=result["claim_boundary"],
     )
     ensemble_runs = result.get("calibration_ensemble_runs", [])
@@ -197,3 +207,15 @@ def build_enterprise_validation_report(experiment: dict) -> EnterpriseValidation
         json.dumps(report.model_dump(mode="json", exclude={"report_hash"}), sort_keys=True).encode()
     ).hexdigest()
     return report
+
+
+def _evaluation_evidence(result: dict[str, Any]) -> dict[str, Any]:
+    """Read the shared envelope, safely labelling historical deterministic results."""
+    evidence = result.get("evaluation_evidence")
+    required = {"scope", "evidence_digest", "claim_boundary"}
+    if isinstance(evidence, dict) and required.issubset(evidence):
+        return evidence
+    return development_fixture_evidence(
+        payload=result,
+        limitation="This historical Stress Lab result predates the shared evidence envelope.",
+    ).to_dict()

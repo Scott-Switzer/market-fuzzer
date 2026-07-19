@@ -19,6 +19,20 @@
 4. Move Arena and Market Fuzzer read paths to shared manifests only after parity tests pass.
 5. Remove legacy paths only when the replacement has equal-or-stronger tests and an economically justified compatibility decision is recorded.
 
+## Evidence migration status
+
+`app/evaluation/evidence_v1.py` is the first shared workflow boundary. It emits a
+canonical envelope with one of three mutually exclusive scopes:
+
+- `development_fixture` for declared deterministic public fixtures;
+- `sealed_primary` only for a frozen-artifact M5 campaign result; and
+- `adaptive_diagnostic` for strategy-aware failure search.
+
+The existing Arena benchmark matrix is therefore explicitly a development
+fixture, and the existing Market Fuzzer search is explicitly an adaptive
+diagnostic. Neither is permitted to claim sealed-primary ranking until the V2
+kernel adapter and hidden campaign execution pass parity and leakage tests.
+
 ## Current gaps to close
 
 The current product has deterministic replay, price-time-priority evidence, protected matrices, role-scoped release, and bounded calibration. It does not yet provide a typed immutable V2 ledger, post-freeze secret campaign generation, family holdouts, isolated customer-code execution, or a multi-family sealed evaluator. Those gaps define M2 through M9; none are represented as completed capability.

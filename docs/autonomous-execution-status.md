@@ -6,13 +6,13 @@ Build a sealed, procedurally generated market-evaluation platform that measures 
 
 ## Current milestone
 
-M3B — V2 lifecycle and risk controls.
+M6 — shared evaluation evidence integration.
 
-- Current branch: `codex/m3-lifecycle-risk-controls`
+- Current branch: `codex/m6-shared-evaluation-v2`
 - Current PR: not yet opened
-- Clean-main baseline SHA: `cf2973dcbfa6d511742ab3e5a104c72e2d64ffbd`
+- Clean-main baseline SHA: `6b54dc309208fedd6ae339caaebf4976dbba2758`
 - Latest substantive Greptile-reviewed SHA: `0fda71eb2c8832b61e30a5a1a3f690be677bd7c1`
-- Latest self-reviewed SHA: `cf2973dcbfa6d511742ab3e5a104c72e2d64ffbd`
+- Latest self-reviewed SHA: `4b1b127416a5468089d667db2572f326da5eeab4` (will change when this ledger update is amended)
 
 ## Completed evidence
 
@@ -25,15 +25,19 @@ M3B — V2 lifecycle and risk controls.
 - PR #19 received latest-head self-review with zero unresolved GitHub threads. Two complete GitHub verification runs passed (6m49s and 7m19s); two Docker smoke jobs passed (35s and 39s).
 - M5 merged as PR #20 at `cf2973dcbfa6d511742ab3e5a104c72e2d64ffbd`; sealed campaign commitments, frozen artifacts, hidden family and parameter commitments, neutral observations, replay, and post-finalization reveal verification are now on `main`.
 - PR #20 received latest-head self-review with zero unresolved GitHub threads. Two complete GitHub verification runs passed (5m23s and 6m59s); two Docker smoke jobs passed (35s and 38s).
+- M3B merged as PR #21 at `6b54dc309208fedd6ae339caaebf4976dbba2758`; V2 now enforces session close expiry, instrument halts, account risk limits, kill switches, native replace priority semantics, and typed conservation failures.
+- PR #21 received latest-head self-review with zero unresolved GitHub threads. Two complete GitHub verification runs passed (6m19s and 6m32s); two Docker smoke jobs passed (39s each).
 - Decision evidence now degrades independently for unavailable, failed, and partial benchmark responses; browser coverage asserts those paths and the complete response.
 - M0A local `make verify`, browser E2E, and Docker smoke passed. GitHub test and Docker checks passed on `f1af98feaccaf48d9cc45524e195562216fef46f`.
 - Clean `main` was checked out and its verification and Docker smoke were rerun after the merge.
+- M6 implementation has local evidence: canonical development, sealed-primary, and adaptive-diagnostic envelopes; Arena and Stress Lab legacy outputs label themselves as development fixtures; Market Fuzzer labels strategy-aware failure searches as adaptive diagnostics; governed report exports retain the evaluation scope and evidence digest.
+- M6 local validation passed: focused evidence/Arena/Product/registry tests, full `make verify`, clean browser E2E, static analysis, and `DOCKER_DEFAULT_PLATFORM=linux/amd64 make docker-smoke`.
 
 ## Current work and next executable action
 
-- Complete the V2 exchange controls that must exist before Arena and Market Fuzzer can share the kernel: session boundaries with DAY expiry, instrument halts, account risk limits, kill switches, and native replace priority semantics.
-- The M6 audit confirmed the existing customer workflows still use a separate fixed-seed legacy matrix. Do not migrate them until this V2 behavior has equivalent or stronger correctness proof.
-- Next executable action: complete full repository verification and Docker smoke for the focused M3B diff, then self-review, open the PR, and await its exact-head CI.
+- Establish one canonical evidence envelope across Arena development fixtures, sealed primary results, and Market Fuzzer adaptive diagnostics.
+- Do not represent fixed-seed legacy matrices as sealed-primary results; a parity-tested V2 kernel adapter remains required before workflow execution migrates.
+- Next executable action: stage the self-reviewed M6 diff, commit and push it, then open its focused PR and await exact-head CI.
 
 ## Unresolved findings and blockers
 
@@ -49,10 +53,11 @@ M3B — V2 lifecycle and risk controls.
 | M1 — product contract and threat model | merged and clean-main verified |
 | M2 — deterministic event kernel | merged and clean-main verified |
 | M3 — exchange correctness | merged and clean-main verified |
-| M3B — V2 lifecycle and risk controls | in progress |
+| M3B — V2 lifecycle and risk controls | merged and clean-main verified |
 | M4 — generator ensemble | merged and clean-main verified |
 | M5 — sealed evaluation protocol | merged and clean-main verified |
-| M6–M10 | pending |
+| M6 — shared evaluation evidence integration | in progress |
+| M7–M10 | pending |
 
 ## Claims currently permitted
 
@@ -67,3 +72,4 @@ M3B — V2 lifecycle and risk controls.
 - Live profitability, universal market realism, best execution, production readiness, or all-asset-class coverage.
 - Order-level calibration, queue-position realism, cancellation behavior, or fill probability inferred solely from OHLCV data.
 - A customer-supplied strategy has not yet been executed in an isolated no-network runner; M5 only establishes the sealed campaign and observation boundary. M8 must enforce production runtime isolation.
+- The existing Arena benchmark matrix uses declared fixed seeds and variants; it is development-fixture evidence, not sealed primary evaluation.
