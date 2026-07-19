@@ -6,13 +6,13 @@ Build a sealed, procedurally generated market-evaluation platform that measures 
 
 ## Current milestone
 
-M3 — exchange correctness.
+M4 — synthetic generator ensemble v1.
 
-- Current branch: `codex/m3-exchange-correctness`
+- Current branch: `codex/m4-generator-ensemble`
 - Current PR: not yet opened
-- Clean-main baseline SHA: `32302ac4f891c29f4a67d2a155b7459efa22125b`
+- Clean-main baseline SHA: `b4bc0091fbae11d0c4e666eb0c3fa6cbd82737d0`
 - Latest substantive Greptile-reviewed SHA: `0fda71eb2c8832b61e30a5a1a3f690be677bd7c1`
-- Latest self-reviewed SHA: `32302ac4f891c29f4a67d2a155b7459efa22125b`
+- Latest self-reviewed SHA: `b4bc0091fbae11d0c4e666eb0c3fa6cbd82737d0`
 
 ## Completed evidence
 
@@ -20,14 +20,15 @@ M3 — exchange correctness.
 - M0B merged as PR #15 at `e042536397b4655ba11171b6a0e9da0ff581c7c7`; review controls and secret-safe ignore rules are now on `main`.
 - M1 merged as PR #16 at `1f0162a37ca9fa46c7d6e3711c1e9b79db09faf2`; the sealed-evaluation contract and migration map now govern implementation.
 - M2 merged as PR #17 at `32302ac4f891c29f4a67d2a155b7459efa22125b`; immutable V2 command, event, manifest, scheduler, and ledger primitives are now on `main`.
+- M3 merged as PR #18 at `b4bc0091fbae11d0c4e666eb0c3fa6cbd82737d0`; V2 cash-like price-time matching, reservations, settlement, fees, and lifecycle tests are now on `main`.
 - Decision evidence now degrades independently for unavailable, failed, and partial benchmark responses; browser coverage asserts those paths and the complete response.
 - M0A local `make verify`, browser E2E, and Docker smoke passed. GitHub test and Docker checks passed on `f1af98feaccaf48d9cc45524e195562216fef46f`.
 - Clean `main` was checked out and its verification and Docker smoke were rerun after the merge.
 
 ## Current work and next executable action
 
-- Add a V2 price-time matching engine with reservations, cash-like settlement, fees, cancels, time-in-force, risk limits, halts, and conservation/property tests.
-- Keep Arena, Stress Lab, and Market Fuzzer on legacy adapters until V2 behavior passes equal-or-stronger parity tests.
+- Add three independent interpretable generator families with immutable events, assumptions, parameter manifests, diagnostics, claims, and limitations.
+- Do not use a single averaged realism score or represent generated paths as copied historical data.
 
 ## Unresolved findings and blockers
 
@@ -42,8 +43,9 @@ M3 — exchange correctness.
 | M0B — execution controls | merged and clean-main verified |
 | M1 — product contract and threat model | merged and clean-main verified |
 | M2 — deterministic event kernel | merged and clean-main verified |
-| M3 — exchange correctness | in progress |
-| M4–M10 | pending |
+| M3 — exchange correctness | merged and clean-main verified |
+| M4 — generator ensemble | in progress |
+| M5–M10 | pending |
 
 ## Claims currently permitted
 
