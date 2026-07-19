@@ -122,7 +122,7 @@ def adaptive_diagnostic_evidence(
         strategy_artifact_digest=None,
         campaign_commitment_digest=None,
         result_digest=_canonical_digest(payload),
-        claim_boundary="Adaptive, strategy-aware diagnostic evidence; it is not an independently selected primary score.",
+        claim_boundary="Adaptive, strategy-aware diagnostic evidence; it is not independently selected primary evaluation evidence or a primary score.",
         limitations=(limitation,),
         mechanism=mechanism,
         parent_primary_result_digest=parent_primary_result_digest,
