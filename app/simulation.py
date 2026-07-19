@@ -317,8 +317,20 @@ def run_simulation(spec: WorldSpec, *, execution_decider: ExecutionDecider | Non
         )
         return queued + resting
 
+    def normalize_order_quantity(order: Order) -> bool:
+        """Apply the exchange lot contract before recording or submitting an order."""
+
+        normalized = (max(0, int(order.quantity)) // spec.exchange.lot_size) * spec.exchange.lot_size
+        if normalized <= 0:
+            return False
+        order.quantity = normalized
+        order.remaining = normalized
+        return True
+
     def schedule_order(order: Order, step: int, latency: LatencyProfile) -> None:
         nonlocal pending_sequence
+        if not normalize_order_quantity(order):
+            return
         _stamp_order(order, step, latency)
         exchange.record_submission(order)
         arrival_step = int(order.exchange_arrival_step or step)
@@ -392,6 +404,8 @@ def run_simulation(spec: WorldSpec, *, execution_decider: ExecutionDecider | Non
                     liquidity_multiplier,
                 )
                 for order in agent.decide(context, rng, 0):
+                    if not normalize_order_quantity(order):
+                        continue
                     _stamp_order(order, 0, LatencyProfile(0, 0, 0, 0))
                     submit_to_exchange(order, 0)
 
@@ -534,6 +548,7 @@ def run_simulation(spec: WorldSpec, *, execution_decider: ExecutionDecider | Non
                             "step": step,
                             "strategy_id": agent.agent_id,
                             "symbol": asset.ticker,
+                            "side": agent.side.value,
                             "observed_volume": observed_volume,
                             "best_bid_ticks": bid,
                             "best_ask_ticks": ask,
@@ -657,12 +672,12 @@ def run_simulation(spec: WorldSpec, *, execution_decider: ExecutionDecider | Non
                                     )
                                 adjusted = min(adjusted, participation_budget)
                         else:
-                            adjusted = order.quantity
+                            adjusted = (order.quantity // spec.exchange.lot_size) * spec.exchange.lot_size
                         order.quantity = min(available, adjusted)
+                        order.quantity = (order.quantity // spec.exchange.lot_size) * spec.exchange.lot_size
+                        if order.quantity <= 0:
+                            continue
                         order.remaining = order.quantity
-                        if order.quantity > available:
-                            order.quantity = available
-                            order.remaining = available
                     try:
                         schedule_order(order, step, latency)
                     except RuntimeError:

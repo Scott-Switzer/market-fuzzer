@@ -22,6 +22,7 @@ from app.strategy_lab import ExternalAdapterContract
 from app.strategy_protocol import StrategyActionV1, StrategyObservationV1
 
 SUPPORTED_POLICY_IDS = frozenset({"twap", "aggressive_pov", "guarded_pov", "completion_first"})
+_MAX_ADAPTER_RESPONSE_BYTES = 64 * 1024
 
 
 def _contract_hash(contract: dict[str, Any]) -> str:
@@ -86,10 +87,17 @@ def _http_decider(contract: ExternalAdapterContract) -> tuple[httpx.Client, Any,
 
     def decide(observation: dict[str, Any]) -> dict[str, Any]:
         payload = _observation_payload(observation)
-        response = client.post(endpoint_url, json=payload)
-        response.raise_for_status()
+        body = bytearray()
+        with client.stream("POST", endpoint_url, json=payload) as response:
+            response.raise_for_status()
+            for chunk in response.iter_bytes():
+                body.extend(chunk)
+                if len(body) > _MAX_ADAPTER_RESPONSE_BYTES:
+                    raise ValueError(
+                        f"HTTP adapter response exceeds {_MAX_ADAPTER_RESPONSE_BYTES} byte limit"
+                    )
         try:
-            action = StrategyActionV1.model_validate(response.json())
+            action = StrategyActionV1.model_validate(json.loads(body))
         except (ValueError, TypeError) as exc:
             raise ValueError("HTTP adapter returned an invalid execution_action_v1 response") from exc
         return action.model_dump(mode="json")

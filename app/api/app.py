@@ -379,6 +379,9 @@ async def enterprise_import_calibration(
         raise HTTPException(413, "calibration CSV exceeds the 20 MB single-tenant limit")
     try:
         parsed_date = date.fromisoformat(retrieval_date) if retrieval_date else date.today()
+    except ValueError as exc:
+        raise HTTPException(422, "retrieval_date must be ISO 8601 (YYYY-MM-DD)") from exc
+    try:
         pack = compile_canonical_csv_bytes(
             payload,
             pack_id=pack_id,

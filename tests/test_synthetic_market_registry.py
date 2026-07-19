@@ -92,6 +92,28 @@ def test_customer_csv_calibration_import_retains_aggregate_evidence_only(tmp_pat
     assert body["manifest"]["calibration_pack_id"] == "customer-pack-v1"
 
 
+def test_customer_csv_calibration_import_reports_invalid_retrieval_date(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("ARENA_TEST_AUTH", "1")
+    client = TestClient(app)
+    world = client.post(
+        "/api/enterprise/worlds",
+        json={
+            "name": "Date validation world",
+            "description": "A world used to verify precise calibration import errors.",
+            "asset_universe": ["NOVA"],
+            "agent_ecology": ["market_maker", "execution_agent"],
+        },
+    ).json()
+    response = client.post(
+        f"/api/enterprise/worlds/{world['world_id']}/calibration/import?retrieval_date=not-a-date",
+        content=b"timestamp,price,spread_bps,bid_depth,ask_depth,volume,signed_volume\n",
+        headers={"content-type": "text/csv"},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "retrieval_date must be ISO 8601 (YYYY-MM-DD)"
+
+
 def test_enterprise_api_key_guards_single_tenant_deployment(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ARENA_DB_PATH", str(tmp_path / "registry.sqlite3"))
     monkeypatch.setenv("ARENA_ENTERPRISE_API_KEY", "single-tenant-secret")
