@@ -10,7 +10,8 @@ M0B — execution controls and review hygiene.
 
 - Current branch: `codex/m0b-execution-controls`
 - Current PR: not yet opened
-- Current head SHA: `591780357335fc0e603c8c3fff5340700687dabf`
+- Clean-main baseline SHA: `591780357335fc0e603c8c3fff5340700687dabf`
+- M0B controls implementation SHA: `9a5f503fa345dcd99deccde113dd00c2f207f30b`
 - Latest substantive Greptile-reviewed SHA: `0fda71eb2c8832b61e30a5a1a3f690be677bd7c1`
 - Latest self-reviewed SHA: `f1af98feaccaf48d9cc45524e195562216fef46f`
 
