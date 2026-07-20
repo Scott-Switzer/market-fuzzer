@@ -42,6 +42,12 @@ class StrategyDecisionPortV1(Protocol):
     def decide(self, observation: dict[str, Any]) -> StrategyResponseRecordV1: ...
 
 
+class StrategyDecisionPortFactoryV1(Protocol):
+    """Build a fresh isolated strategy port for one hidden world."""
+
+    def __call__(self) -> StrategyDecisionPortV1: ...
+
+
 def _digest(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -350,3 +356,25 @@ class SealedV2WorldRunnerV1:
             raise SealedV2RunnerError(
                 "strategy lifecycle action may reference only a previously observed own order ID"
             )
+
+
+class IsolatedSealedV2WorldRunnerV1:
+    """Reset strategy process state between hidden worlds while keeping each world streaming."""
+
+    def __init__(
+        self,
+        strategy_port_factory: StrategyDecisionPortFactoryV1,
+        *,
+        config: SealedV2RunnerConfigV1 | None = None,
+    ) -> None:
+        self.strategy_port_factory = strategy_port_factory
+        self.config = config
+
+    def run(self, world: GeneratedWorldV1, manifest: RunManifestV2) -> PrimaryWorldExecutionV1:
+        strategy_port = self.strategy_port_factory()
+        try:
+            return SealedV2WorldRunnerV1(strategy_port, config=self.config).run(world, manifest)
+        finally:
+            close = getattr(strategy_port, "close", None)
+            if callable(close):
+                close()

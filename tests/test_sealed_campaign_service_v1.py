@@ -19,6 +19,7 @@ def _digest(value: object) -> str:
 class _HoldPort:
     def __init__(self, artifact_digest: str) -> None:
         self.artifact_digest = artifact_digest
+        self.closed = 0
 
     def decide(self, observation: dict) -> StrategyResponseRecordV1:
         action = StrategyActionV2(action_type="hold", rationale_code="test").model_dump(mode="json")
@@ -31,6 +32,9 @@ class _HoldPort:
             response_digest=_digest(action),
             action=action,
         )
+
+    def close(self) -> None:
+        self.closed += 1
 
 
 def _store(tmp_path) -> ArenaStore:
@@ -72,9 +76,14 @@ def _policy() -> CampaignPolicyV1:
 
 
 def test_service_persists_private_commitment_freezes_runs_and_reveals_after_finalization(tmp_path) -> None:
-    service = SealedCampaignServiceV1(
-        _store(tmp_path), session_factory=lambda artifact: _HoldPort(artifact.artifact_digest)
-    )
+    ports: list[_HoldPort] = []
+
+    def session_factory(artifact):
+        port = _HoldPort(artifact.artifact_digest)
+        ports.append(port)
+        return port
+
+    service = SealedCampaignServiceV1(_store(tmp_path), session_factory=session_factory)
     prepared = service.prepare(
         campaign_id="campaign-v2",
         strategy_id="strategy-v2",
@@ -99,6 +108,8 @@ def test_service_persists_private_commitment_freezes_runs_and_reveals_after_fina
     assert finalized["result"]["result_namespace"] == "sealed_primary_v1"
     assert len(finalized["result"]["worlds"]) == 3
     assert "heterogeneous_agent_v1" not in json.dumps(finalized)
+    assert len(ports) == 3
+    assert all(port.closed == 1 for port in ports)
 
     reveal = service.reveal("campaign-v2")
     assert reveal["secret_seed_material_hex"] == (b"s" * 32).hex()
