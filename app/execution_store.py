@@ -44,6 +44,10 @@ class ArenaQuotaError(ValueError):
     """A persisted per-user challenge quota has been exhausted."""
 
 
+class ArtifactIntegrityError(RuntimeError):
+    """Persisted evidence no longer matches its recorded content digest."""
+
+
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -231,6 +235,9 @@ class ArenaStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_sealed_campaign_jobs_claim
                     ON sealed_campaign_jobs(status, lease_expires_at, created_at);
+                CREATE TABLE IF NOT EXISTS sealed_worker_heartbeats (
+                    worker_id TEXT PRIMARY KEY, last_seen_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS stress_experiments (
                     experiment_id TEXT PRIMARY KEY, name TEXT NOT NULL, scenario_pack_id TEXT NOT NULL,
                     strategy_ids_json TEXT NOT NULL, seeds_json TEXT NOT NULL, status TEXT NOT NULL,
@@ -1636,6 +1643,33 @@ class ArenaStore:
             raise KeyError(job_id)
         return None
 
+    def next_claimable_sealed_campaign_job_id(self) -> str | None:
+        now = utc_now()
+        with self.connection() as connection:
+            row = connection.execute(
+                """SELECT job_id FROM sealed_campaign_jobs
+                WHERE status = 'queued'
+                   OR (status = 'running' AND lease_expires_at <= ?)
+                ORDER BY created_at, job_id LIMIT 1""",
+                (now,),
+            ).fetchone()
+        return None if row is None else str(row["job_id"])
+
+    def heartbeat_sealed_worker(self, worker_id: str) -> None:
+        with self.connection() as connection:
+            connection.execute(
+                """INSERT INTO sealed_worker_heartbeats VALUES (?, ?)
+                ON CONFLICT(worker_id) DO UPDATE SET last_seen_at = excluded.last_seen_at""",
+                (worker_id, utc_now()),
+            )
+
+    def sealed_worker_heartbeats(self) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM sealed_worker_heartbeats ORDER BY last_seen_at DESC"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def finish_sealed_campaign_job(
         self, job_id: str, *, status: str, error: str | None = None
     ) -> dict[str, Any]:
@@ -1888,13 +1922,13 @@ class ArenaStore:
                 (artifact_id, job_id, kind, encoded, record["content_hash"], record["created_at"]),
             )
             manifest_value = {
+                **(manifest or {}),
                 "schema_version": "artifact-manifest-v1",
                 "job_id": job_id,
                 "artifact_id": artifact_id,
                 "artifact_kind": kind,
                 "content_hash": record["content_hash"],
                 "created_at": record["created_at"],
-                **(manifest or {}),
             }
             manifest_encoded = json.dumps(manifest_value, sort_keys=True, separators=(",", ":"))
             connection.execute(
@@ -1918,14 +1952,21 @@ class ArenaStore:
         if row is None:
             raise KeyError((job_id, kind))
         value = dict(row)
-        value["content"] = json.loads(value.pop("content_json"))
+        content_json = value.pop("content_json")
+        if hashlib.sha256(content_json.encode()).hexdigest() != value["content_hash"]:
+            raise ArtifactIntegrityError("artifact content digest mismatch")
+        value["content"] = json.loads(content_json)
         with self.connection() as connection:
             manifest = connection.execute(
                 "SELECT manifest_json, manifest_hash FROM artifact_manifests WHERE artifact_id = ?",
                 (value["artifact_id"],),
             ).fetchone()
         if manifest is not None:
+            if hashlib.sha256(manifest["manifest_json"].encode()).hexdigest() != manifest["manifest_hash"]:
+                raise ArtifactIntegrityError("artifact manifest digest mismatch")
             value["manifest"] = json.loads(manifest["manifest_json"])
+            if value["manifest"].get("content_hash") != value["content_hash"]:
+                raise ArtifactIntegrityError("artifact manifest content linkage mismatch")
             value["manifest_hash"] = manifest["manifest_hash"]
         return value
 
@@ -1942,14 +1983,21 @@ class ArenaStore:
         if row is None:
             raise KeyError((experiment_id, kind))
         value = dict(row)
-        value["content"] = json.loads(value.pop("content_json"))
+        content_json = value.pop("content_json")
+        if hashlib.sha256(content_json.encode()).hexdigest() != value["content_hash"]:
+            raise ArtifactIntegrityError("artifact content digest mismatch")
+        value["content"] = json.loads(content_json)
         with self.connection() as connection:
             manifest = connection.execute(
                 "SELECT manifest_json, manifest_hash FROM artifact_manifests WHERE artifact_id = ?",
                 (value["artifact_id"],),
             ).fetchone()
         if manifest is not None:
+            if hashlib.sha256(manifest["manifest_json"].encode()).hexdigest() != manifest["manifest_hash"]:
+                raise ArtifactIntegrityError("artifact manifest digest mismatch")
             value["manifest"] = json.loads(manifest["manifest_json"])
+            if value["manifest"].get("content_hash") != value["content_hash"]:
+                raise ArtifactIntegrityError("artifact manifest content linkage mismatch")
             value["manifest_hash"] = manifest["manifest_hash"]
         return value
 

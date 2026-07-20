@@ -5,6 +5,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import logging
 import os
 import sqlite3
 import time
@@ -72,7 +73,7 @@ from app.execution_challenge_designer import (
     generate_execution_challenge_design,
 )
 from app.execution_feedback import build_execution_evidence, generate_execution_feedback
-from app.execution_store import ArenaPhaseError, ArenaQuotaError, ArenaStore
+from app.execution_store import ArenaPhaseError, ArenaQuotaError, ArenaStore, ArtifactIntegrityError
 from app.experiments import run_batch, run_single, run_validation_campaign
 from app.external_adapter import adapter_provenance, execute_registered_strategy
 from app.governance import build_enterprise_validation_report
@@ -127,6 +128,7 @@ PRODUCT_FAILURES: dict[str, dict] = {}
 _LOCAL_DEMO_SESSION_SECRET = os.urandom(32)
 _EXECUTION_STORE_CACHE_SIZE = 8
 _MAX_CALIBRATION_UPLOAD_BYTES = 20 * 1024 * 1024
+_REQUEST_LOG = logging.getLogger("arena.requests")
 
 
 @app.middleware("http")
@@ -145,7 +147,29 @@ async def enterprise_api_key_guard(request: Request, call_next):
                 status_code=401,
                 headers={"WWW-Authenticate": "Bearer"},
             )
-    return await call_next(request)
+    started = time.perf_counter()
+    supplied_request_id = request.headers.get("x-request-id", "")
+    request_id = (
+        supplied_request_id
+        if 1 <= len(supplied_request_id) <= 128 and supplied_request_id.isprintable()
+        else uuid4().hex
+    )
+    response = await call_next(request)
+    response.headers["x-request-id"] = request_id
+    _REQUEST_LOG.info(
+        json.dumps(
+            {
+                "event": "http_request",
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status": response.status_code,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+            },
+            sort_keys=True,
+        )
+    )
+    return response
 
 
 DESIGN_INTERVENTION_LABELS = {
@@ -351,12 +375,19 @@ def readiness() -> dict[str, Any]:
     try:
         store = _execution_store()
         with store.connection() as connection:
-            database_probe = connection.execute("SELECT 1").fetchone()
+            database_probe = connection.execute("PRAGMA quick_check").fetchone()
         artifact_root_ready = ARTIFACT_ROOT.is_dir() and os.access(ARTIFACT_ROOT, os.W_OK)
     except (OSError, sqlite3.Error) as exc:
         raise HTTPException(503, f"service is not ready: {exc}") from exc
-    if database_probe is None or not artifact_root_ready:
+    if database_probe is None or database_probe[0] != "ok" or not artifact_root_ready:
         raise HTTPException(503, "service is not ready: registry or artifact volume unavailable")
+    heartbeats = store.sealed_worker_heartbeats()
+    worker_state = "not_seen"
+    if heartbeats:
+        age = (datetime.now(UTC) - datetime.fromisoformat(heartbeats[0]["last_seen_at"])).total_seconds()
+        worker_state = "ok" if age <= 30 else "stale"
+    if os.getenv("ARENA_REQUIRE_SEALED_WORKER") == "1" and worker_state != "ok":
+        raise HTTPException(503, "service is not ready: sealed worker heartbeat unavailable")
     return {
         "status": "ready",
         "database": "ok",
@@ -364,7 +395,13 @@ def readiness() -> dict[str, Any]:
         "deployment_mode": "single_tenant_research_appliance",
         "database_file": store.path.name,
         "artifact_root": str(ARTIFACT_ROOT),
+        "sealed_worker": worker_state,
     }
+
+
+@app.get("/sealed-campaign")
+def sealed_campaign_ui() -> FileResponse:
+    return FileResponse(ROOT / "static" / "sealed-campaign.html")
 
 
 @app.get("/synthetic-market-world")
@@ -1225,6 +1262,8 @@ def enterprise_experiment_artifact(job_id: str, kind: str) -> dict[str, Any]:
         return _execution_store().experiment_artifact(job_id, kind)
     except KeyError as exc:
         raise HTTPException(404, "experiment artifact not found") from exc
+    except ArtifactIntegrityError as exc:
+        raise HTTPException(409, "experiment artifact integrity verification failed") from exc
 
 
 @app.get("/api/enterprise/experiments/{experiment_id}/artifacts/{kind}")
@@ -1233,6 +1272,8 @@ def enterprise_experiment_artifact_by_experiment(experiment_id: str, kind: str) 
         return _execution_store().experiment_artifact_for_experiment(experiment_id, kind)
     except KeyError as exc:
         raise HTTPException(404, "experiment artifact not found") from exc
+    except ArtifactIntegrityError as exc:
+        raise HTTPException(409, "experiment artifact integrity verification failed") from exc
 
 
 @app.get("/api/enterprise/experiments/{experiment_id}/artifacts/{kind}/download")
@@ -1241,6 +1282,8 @@ def enterprise_experiment_artifact_download(experiment_id: str, kind: str) -> Re
         artifact = _execution_store().experiment_artifact_for_experiment(experiment_id, kind)
     except KeyError as exc:
         raise HTTPException(404, "experiment artifact not found") from exc
+    except ArtifactIntegrityError as exc:
+        raise HTTPException(409, "experiment artifact integrity verification failed") from exc
     return Response(
         content=json.dumps(artifact["content"], indent=2, sort_keys=True),
         media_type="application/json",

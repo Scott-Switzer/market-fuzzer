@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -63,6 +64,37 @@ def backup_database(source: Path, destination: Path) -> dict[str, Any]:
             manifest_path.unlink()
         raise
     return {**manifest, "manifest_path": str(manifest_path)}
+
+
+def restore_database(
+    backup: Path, manifest_path: Path, destination: Path, *, force: bool = False
+) -> dict[str, Any]:
+    """Verify a backup and atomically restore it to a stopped appliance."""
+    backup, manifest_path, destination = (
+        value.expanduser().resolve() for value in (backup, manifest_path, destination)
+    )
+    manifest = json.loads(manifest_path.read_text())
+    if manifest.get("schema_version") != "operator_backup_v1":
+        raise ValueError("unsupported backup manifest")
+    if manifest.get("backup_database") != backup.name or manifest.get("backup_sha256") != _sha256(backup):
+        raise ValueError("backup checksum verification failed")
+    if destination.exists() and not force:
+        raise FileExistsError(destination)
+    with sqlite3.connect(f"file:{backup}?mode=ro", uri=True) as connection:
+        if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise ValueError("backup SQLite integrity verification failed")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.restore.tmp")
+    try:
+        shutil.copy2(backup, temporary)
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return {
+        "schema_version": "operator_restore_v1",
+        "database": str(destination),
+        "source_sha256": _sha256(backup),
+    }
 
 
 def main() -> None:

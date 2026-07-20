@@ -20,12 +20,47 @@ services:
       ARENA_ENTERPRISE_API_KEY: "${ARENA_ENTERPRISE_API_KEY:-}"
       ARENA_ADAPTER_ALLOWED_HOSTS: "${ARENA_ADAPTER_ALLOWED_HOSTS:-127.0.0.1,localhost}"
       ARENA_BACKUP_DIR: /data/backups
+      ARENA_REQUIRE_SEALED_WORKER: "${ARENA_REQUIRE_SEALED_WORKER:-0}"
       OPENAI_MODEL: gpt-5.6
       PORT: 8000
       MARKET_FUZZER_ARTIFACT_ROOT: /data/artifacts/market_fuzzer
       MARKET_FUZZER_EXPERIMENT_ROOT: /data/artifacts
     volumes:
       - arena-data:/data
+
+  sealed-worker:
+    profiles: ["sealed-worker"]
+    init: true
+    restart: unless-stopped
+    read_only: true
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    build:
+      context: .
+      args:
+        GIT_COMMIT_SHA: "${GIT_COMMIT_SHA:-unavailable}"
+    command: ["python", "scripts/run_sealed_campaign_worker.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "from app.execution_store import ArenaStore; assert ArenaStore().sealed_worker_heartbeats()"]
+      interval: 10s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+    environment:
+      ARENA_DB_PATH: /data/arena.sqlite3
+      MARKET_FUZZER_ARTIFACT_ROOT: /data/artifacts/market_fuzzer
+      MARKET_FUZZER_EXPERIMENT_ROOT: /data/artifacts
+      ARENA_CONTAINER_ALLOWED_REGISTRIES: "${ARENA_CONTAINER_ALLOWED_REGISTRIES:-docker.io}"
+    volumes:
+      - arena-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Docker-socket access is deliberately opt-in for this trusted, single-host
+    # profile. It is not a multi-tenant isolation boundary.
+    group_add:
+      - "${DOCKER_GID:-0}"
 
 volumes:
   arena-data:

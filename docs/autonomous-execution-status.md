@@ -6,11 +6,11 @@ Build a sealed, procedurally generated market-evaluation platform that measures 
 
 ## Current milestone
 
-M10 — durable sealed campaign worker.
+M10 — release-candidate production appliance.
 
-- Current branch: `codex/m10-sealed-campaign-jobs`
+- Current branch: `codex/rc1-production-appliance`
 - Current PR: not yet opened
-- Clean-main baseline SHA: `2c05eda` (PR #40)
+- Clean-main baseline SHA: `e1c4480` (PR #41)
 - Latest substantive Greptile-reviewed SHA: `0fda71eb2c8832b61e30a5a1a3f690be677bd7c1`
 - Latest self-reviewed SHA: `814c92e7f08696f2c6b890b738ef5ad6f5848b06`; Greptile is unavailable because trial credits are exhausted.
 
@@ -51,9 +51,10 @@ M10 — durable sealed campaign worker.
 
 ## Current work and next executable action
 
-- PR #40 merged at `2c05eda`; latest-head GitHub tests and Docker checks passed, followed by clean-main `make verify`.
-- Durable sealed-campaign jobs now have an evaluator-owned external worker, atomic SQLite lease claims, expired-lease recovery, and public-safe queue APIs. Focused worker, registry, and persistence tests pass.
-- Next executable action: complete full verification and Docker smoke, self-review, publish the worker milestone, and merge only after latest-head checks pass.
+- PR #41 merged at `e1c4480`; latest-head GitHub tests and Docker checks passed.
+- RC1 adds the customer campaign lifecycle UI, continuous opt-in Docker worker, restart heartbeat/recovery, verified backup/restore, fail-closed artifact integrity, structured request logs, readiness monitoring, bounded load smoke, and operator-authenticated evidence.
+- A real digest-pinned `python:3.12-slim` container completed three hidden generator-family worlds through the durable worker; its commitment reveal verified.
+- Next executable action: complete full verification, Docker/browser clean-host workflow, sign the evidence envelope, self-review, publish, merge, verify clean main, and tag `v1.0.0-rc.1`.
 
 ## Unresolved findings and blockers
 
@@ -74,9 +75,9 @@ M10 — durable sealed campaign worker.
 | M5 — sealed evaluation protocol | merged and clean-main verified |
 | M6 — shared evaluation evidence integration | merged and clean-main verified |
 | M7 — historical calibration boundary | merged and clean-main verified |
-| M8 — strategy runtime isolation | V2 protocol, durable campaign lifecycle, and bounded streaming sealed-session runtime merged; public API lifecycle integration in progress; appliance hardening remains M10 |
-| M9 — decision evidence | in progress |
-| M10 — product appliance | pending |
+| M8 — strategy runtime isolation | merged and clean-main verified |
+| M9 — decision evidence | merged and clean-main verified |
+| M10 — product appliance | RC1 verification in progress |
 
 ## Claims currently permitted
 

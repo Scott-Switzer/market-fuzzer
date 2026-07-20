@@ -43,6 +43,10 @@ def main() -> None:
     assert status == 200
     assert "Market Fuzzer" in fuzzer
 
+    status, _, sealed = _get("/sealed-campaign")
+    assert status == 200
+    assert "Campaign lifecycle" in sealed
+
     status, content_type, body = _get("/api/arena/execution/challenges/trade-the-shock")
     public_challenge = json.loads(body)
     assert status == 200
