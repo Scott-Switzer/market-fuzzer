@@ -1,0 +1,22 @@
+# Decision evidence contract
+
+`paired_decision_evidence` compares a candidate and baseline only on the same
+declared world/seed block. It reports a paired mean effect, deterministic
+nonparametric bootstrap interval, exact two-sided sign-test value, and
+generator-family effects. It deliberately does not choose worlds, alter a
+primary score, or infer live-market profitability.
+
+The result is `insufficient_evidence` when fewer than eight unique paired
+blocks are available or when the 95% bootstrap interval crosses zero. A metric
+with a non-zero point estimate therefore cannot be presented as supported
+without uncertainty evidence. Generator-family effects are sensitivity outputs,
+not independent family-level inference.
+
+The pairing follows common-random-number simulation comparisons; repeated
+metric decisions must apply a declared multiplicity procedure before any
+customer-facing discovery claim. See [Nelson (1991)](https://doi.org/10.1287/opre.39.4.583)
+and [Benjamini and Hochberg (1995)](https://www.jstor.org/stable/2346101).
+
+This initial contract is a portable evaluator primitive. Campaign-level block
+bootstrap, family holdout summaries, and multiplicity-adjusted report assembly
+remain separate M9 integrations.

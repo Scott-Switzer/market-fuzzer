@@ -6,11 +6,11 @@ Build a sealed, procedurally generated market-evaluation platform that measures 
 
 ## Current milestone
 
-M8 — isolated strategy runtime hardening.
+M9 — decision evidence.
 
-- Current branch: `codex/m8-artifact-policy`
+- Current branch: `codex/m9-evidence-contract`
 - Current PR: not yet opened
-- Clean-main baseline SHA: `3386d67` (PR #28)
+- Clean-main baseline SHA: `ddae6b7` (PR #29)
 - Latest substantive Greptile-reviewed SHA: `0fda71eb2c8832b61e30a5a1a3f690be677bd7c1`
 - Latest self-reviewed SHA: `3386d67`; Greptile is unavailable because trial credits are exhausted.
 
@@ -38,11 +38,12 @@ M8 — isolated strategy runtime hardening.
 - M8 digest-pinned no-egress container session merged as PR #25 at `babf674` and registered-strategy integration merged as PR #26 at `a429def`; both latest-head GitHub verification and Docker checks passed with zero unresolved GitHub review threads.
 - M8 durable response journaling merged as PR #27 at `80a695b`; full latest-head GitHub verification and Docker checks passed with zero unresolved GitHub review threads.
 - M8 deterministic crash recovery merged as PR #28 at `3386d67`; full latest-head GitHub verification and Docker checks passed with zero unresolved GitHub review threads.
+- M8 registry allowlisting merged as PR #29 at `ddae6b7`; full latest-head GitHub verification and Docker checks passed with zero unresolved GitHub review threads.
 
 ## Current work and next executable action
 
-- Enforce an explicit container registry allowlist in addition to image digest pinning.
-- Next executable action: run full verification, self-review the artifact-policy diff, open a focused PR, and merge only after latest-head checks pass.
+- Add deterministic paired decision evidence with uncertainty and insufficient-evidence outcomes.
+- Next executable action: run full verification, self-review the M9 evidence contract, open a focused PR, and merge only after latest-head checks pass.
 
 ## Unresolved findings and blockers
 
