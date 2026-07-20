@@ -1,7 +1,9 @@
 from dataclasses import replace
 
 from app.exchange.v2 import (
+    CancelOrderCommandV2,
     EventKernelV2,
+    EventKindV2,
     OrderCommandV2,
     OrderTypeV2,
     ReplaceOrderCommandV2,
@@ -129,6 +131,24 @@ def test_session_and_instrument_halts_reject_new_orders_but_preserve_cancel_righ
     exchange.resume_instrument("NOVA", exchange_time_ns=850, venue_sequence=9)
     exchange.submit(command("active", "seller-a", SideV2.SELL, 101, sequence=10))
     assert "active" in exchange._orders
+
+
+def test_typed_cancel_commands_audit_success_and_rejection_against_the_original_order() -> None:
+    exchange = make_exchange()
+    exchange.submit(command("resting", "seller-a", SideV2.SELL, 101, sequence=1))
+    accepted = CancelOrderCommandV2("cancel-1", "resting", "seller-a", 150, 2)
+    assert exchange.cancel_command(accepted) is True
+    assert "resting" not in exchange._orders
+    assert exchange.kernel.ledger.events[-2].kind == EventKindV2.COMMAND_ACCEPTED
+    assert exchange.kernel.ledger.events[-1].kind == EventKindV2.ORDER_CANCELLED
+    assert exchange.kernel.ledger.events[-1].command_id == "cancel-1"
+
+    rejected = CancelOrderCommandV2("cancel-2", "resting", "seller-a", 250, 3)
+    assert exchange.cancel_command(rejected) is False
+    event = exchange.kernel.ledger.events[-1]
+    assert event.kind == EventKindV2.CANCEL_REJECTED
+    assert event.command_id == "cancel-2"
+    assert event.payload == {"orig_order_id": "resting", "reason": "unknown_resting_order"}
 
 
 def test_risk_limits_reject_quantity_and_notional_before_reservation() -> None:

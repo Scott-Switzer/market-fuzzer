@@ -8,11 +8,11 @@ Build a sealed, procedurally generated market-evaluation platform that measures 
 
 M9 — decision evidence.
 
-- Current branch: `codex/m9-v2-runner-adapter`
+- Current branch: `codex/m8-strategy-protocol-v2`
 - Current PR: not yet opened
-- Clean-main baseline SHA: `42e8bff` (PR #34)
+- Clean-main baseline SHA: `911506b` (PR #35)
 - Latest substantive Greptile-reviewed SHA: `0fda71eb2c8832b61e30a5a1a3f690be677bd7c1`
-- Latest self-reviewed SHA: `42e8bff`; Greptile is unavailable because trial credits are exhausted.
+- Latest self-reviewed SHA: `911506b`; Greptile is unavailable because trial credits are exhausted.
 
 ## Completed evidence
 
@@ -43,11 +43,12 @@ M9 — decision evidence.
 - M9 sealed metric binding merged as PR #31 at `d0ed609`, and sealed metric comparison merged as PR #32 at `10113ec`.
 - M9 Benjamini-Hochberg multiplicity control merged as PR #33 at `711d99c`; two latest-head GitHub verification runs passed (6m45s and 6m52s), two Docker smokes passed (38s and 45s), and no GitHub review threads remained.
 - M9 committed metric-policy and vector-report evidence merged as PR #34 at `42e8bff`; two latest-head GitHub verification runs passed (6m41s and 7m3s), two Docker smokes passed (36s each), and clean `main` verification passed.
+- M9 V2 sealed-world execution merged as PR #35 at `911506b`; generated flow is executed through the V2 exchange, and each primary world records opaque ledger and strategy-response-journal digests. Two latest-head GitHub verification runs passed (5m37s and 6m50s), with Docker smokes passing in 41s and 36s; clean `main` verification passed.
 
 ## Current work and next executable action
 
-- Execute hidden generated event flow through V2, bind every strategy response to its frozen artifact and durable journal before admission, and record opaque exchange-ledger evidence with sealed metric cells.
-- Next executable action: complete full verification, self-review the focused V2 runner adapter, open a PR, and merge only after latest-head checks pass.
+- Extend the strategy command boundary with explicit, idempotent V2 cancel and replace semantics rather than leaving lifecycle controls implicit or callback-only.
+- Next executable action: complete full verification, self-review the typed cancellation command, open a PR, and merge only after latest-head checks pass.
 
 ## Unresolved findings and blockers
 

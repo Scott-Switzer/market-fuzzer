@@ -8,6 +8,7 @@ from enum import StrEnum
 from math import ceil
 
 from .v2 import (
+    CancelOrderCommandV2,
     EventKernelV2,
     EventKindV2,
     ExchangeInvariantError,
@@ -253,6 +254,26 @@ class MatchingExchangeV2:
             venue_sequence,
         )
         self._assert_conservation()
+
+    def cancel_command(self, command: CancelOrderCommandV2) -> bool:
+        """Process a uniquely identified cancel with auditable acceptance or rejection."""
+        self.kernel.admit_cancel(command)
+        order = self._orders.get(command.order_id)
+        if order is None:
+            self._command_event(command, EventKindV2.CANCEL_REJECTED, {"reason": "unknown_resting_order"})
+            return False
+        if order.command.account_id != command.account_id:
+            self._command_event(command, EventKindV2.CANCEL_REJECTED, {"reason": "cancel_not_owner"})
+            return False
+        level = self._levels(order.command.instrument_id, order.command.side)[order.command.price_ticks or 0]
+        level.remove(command.order_id)
+        if not level:
+            del self._levels(order.command.instrument_id, order.command.side)[order.command.price_ticks or 0]
+        del self._orders[command.order_id]
+        self._release(order.command, order.remaining_quantity)
+        self._command_event(command, EventKindV2.ORDER_CANCELLED, {"quantity": order.remaining_quantity})
+        self._assert_conservation()
+        return True
 
     def replace(self, command: ReplaceOrderCommandV2) -> tuple[TradeV2, ...]:
         """Apply a native replace while preserving priority only for a size reduction at the same price."""
@@ -550,6 +571,23 @@ class MatchingExchangeV2:
                 command_id=f"control:{kind.value}:{target}",
                 order_id=f"control:{target}",
                 payload={"target": target},
+            )
+        )
+
+    def _command_event(
+        self, command: CancelOrderCommandV2, kind: EventKindV2, payload: dict[str, object]
+    ) -> None:
+        self._sequence += 1
+        self.kernel.ledger.append(
+            OrderEventV2(
+                event_id=f"match-{self._sequence:020d}",
+                kind=kind,
+                exchange_time_ns=command.exchange_time_ns,
+                venue_sequence=command.venue_sequence,
+                event_priority=20,
+                command_id=command.command_id,
+                order_id=command.order_id,
+                payload={"orig_order_id": command.order_id, **payload},
             )
         )
 

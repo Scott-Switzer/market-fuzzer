@@ -1,6 +1,7 @@
 import pytest
 
 from app.exchange.v2 import (
+    CancelOrderCommandV2,
     DeterministicSchedulerV2,
     EventKernelV2,
     EventKindV2,
@@ -71,3 +72,13 @@ def test_time_in_force_rejects_unprotected_fok_market_orders() -> None:
             0,
             time_in_force=TimeInForceV2.FOK,
         )
+
+
+def test_cancel_command_has_its_own_idempotent_transport_acknowledgement() -> None:
+    kernel = EventKernelV2(manifest())
+    cancel = CancelOrderCommandV2("cancel-1", "order-1", "acct", 100, 1)
+    acknowledgement = kernel.admit_cancel(cancel)
+    assert acknowledgement.kind == EventKindV2.COMMAND_ACCEPTED
+    assert acknowledgement.payload == {"command_type": "cancel", "orig_order_id": "order-1"}
+    with pytest.raises(OrderRejectedError, match="duplicate command_id"):
+        kernel.admit_cancel(cancel)
