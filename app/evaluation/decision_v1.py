@@ -38,6 +38,14 @@ class DecisionEvidenceV1:
     limitations: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class AdjustedDecisionEvidenceV1:
+    metric_name: str
+    raw_p_value: float
+    adjusted_p_value: float
+    discovery_supported: bool
+
+
 def _quantile(sorted_values: list[float], probability: float) -> float:
     index = min(len(sorted_values) - 1, max(0, round((len(sorted_values) - 1) * probability)))
     return sorted_values[index]
@@ -144,4 +152,36 @@ def sealed_metric_decision_evidence(
         ],
         bootstrap_draws=bootstrap_draws,
         bootstrap_seed=bootstrap_seed,
+    )
+
+
+def benjamini_hochberg_adjust(
+    evidence: list[DecisionEvidenceV1], *, false_discovery_rate: float = 0.05
+) -> tuple[AdjustedDecisionEvidenceV1, ...]:
+    """Apply declared BH adjustment; metrics without a p-value cannot be discoveries."""
+    if not 0 < false_discovery_rate < 1:
+        raise ValueError("false_discovery_rate must be between zero and one")
+    eligible = sorted(
+        (item for item in evidence if item.two_sided_sign_p_value is not None),
+        key=lambda item: (
+            item.two_sided_sign_p_value if item.two_sided_sign_p_value is not None else 1.0,
+            item.metric_name,
+        ),
+    )
+    total = len(eligible)
+    adjusted: dict[str, float] = {}
+    running = 1.0
+    for rank, item in reversed(list(enumerate(eligible, start=1))):
+        assert item.two_sided_sign_p_value is not None
+        running = min(running, item.two_sided_sign_p_value * total / rank)
+        adjusted[item.metric_name] = running
+    return tuple(
+        AdjustedDecisionEvidenceV1(
+            item.metric_name,
+            item.two_sided_sign_p_value if item.two_sided_sign_p_value is not None else 1.0,
+            adjusted.get(item.metric_name, 1.0),
+            item.verdict == "evidence_of_difference"
+            and adjusted.get(item.metric_name, 1.0) <= false_discovery_rate,
+        )
+        for item in sorted(evidence, key=lambda item: item.metric_name)
     )

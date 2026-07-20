@@ -1,5 +1,13 @@
-from app.evaluation.decision_v1 import PairedOutcomeV1, paired_decision_evidence
-from app.evaluation.sealed_v1 import PrimaryEvaluationResultV1, PrimaryWorldMetricV1, PrimaryWorldResultV1
+from app.evaluation.decision_v1 import (
+    PairedOutcomeV1,
+    benjamini_hochberg_adjust,
+    paired_decision_evidence,
+)
+from app.evaluation.sealed_v1 import (
+    PrimaryEvaluationResultV1,
+    PrimaryWorldMetricV1,
+    PrimaryWorldResultV1,
+)
 
 
 def _outcomes() -> list[PairedOutcomeV1]:
@@ -46,3 +54,11 @@ def test_sealed_metric_comparison_pairs_only_matching_opaque_receipts() -> None:
     from app.evaluation.decision_v1 import sealed_metric_decision_evidence
 
     assert sealed_metric_decision_evidence("cost", candidate, baseline, bootstrap_draws=100).sample_size == 8
+
+
+def test_bh_adjustment_does_not_promote_insufficient_evidence() -> None:
+    strong = paired_decision_evidence("strong", _outcomes(), bootstrap_draws=100)
+    weak = paired_decision_evidence("weak", _outcomes()[:3], bootstrap_draws=100)
+    adjusted = {item.metric_name: item for item in benjamini_hochberg_adjust([strong, weak])}
+    assert adjusted["weak"].discovery_supported is False
+    assert adjusted["weak"].adjusted_p_value == 1.0
