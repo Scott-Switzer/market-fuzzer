@@ -13,7 +13,7 @@ class ExternalAdapterContract(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["1.0"] = "1.0"
-    adapter_id: Literal["declarative_in_process_v1", "http_json_v1"]
+    adapter_id: Literal["declarative_in_process_v1", "http_json_v1", "container_jsonl_v1"]
     adapter_version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
     policy_id: Literal["twap", "aggressive_pov", "guarded_pov", "completion_first"]
     input_observation_schema: Literal["market_observation_v1"]
@@ -22,6 +22,8 @@ class ExternalAdapterContract(BaseModel):
     error_policy: Literal["fail_cell", "reject_action"] = "fail_cell"
     endpoint_url: str | None = Field(default=None, max_length=500)
     auth_env_var: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]{2,80}$")
+    image_digest: str | None = Field(default=None, max_length=500)
+    command: tuple[str, ...] | None = None
 
     @model_validator(mode="after")
     def _bounded_contract(self) -> ExternalAdapterContract:
@@ -29,6 +31,10 @@ class ExternalAdapterContract(BaseModel):
             raise ValueError("http_json_v1 adapters require an endpoint_url")
         if self.adapter_id == "declarative_in_process_v1" and self.endpoint_url:
             raise ValueError("in-process adapters cannot include an endpoint_url")
+        if self.adapter_id == "container_jsonl_v1" and (not self.image_digest or not self.command):
+            raise ValueError("container_jsonl_v1 adapters require image_digest and command")
+        if self.adapter_id == "container_jsonl_v1" and (self.endpoint_url or self.auth_env_var):
+            raise ValueError("container adapters cannot include HTTP endpoint metadata")
         return self
 
 

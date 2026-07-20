@@ -20,6 +20,7 @@ from app.execution_arena import run_policy_on_compiled_world
 from app.schemas import WorldSpec
 from app.strategy_lab import ExternalAdapterContract
 from app.strategy_protocol import StrategyActionV1, StrategyObservationV1
+from app.strategy_runtime import ContainerStrategyArtifactV1, ContainerStrategySessionV1
 
 SUPPORTED_POLICY_IDS = frozenset({"twap", "aggressive_pov", "guarded_pov", "completion_first"})
 _MAX_ADAPTER_RESPONSE_BYTES = 64 * 1024
@@ -158,6 +159,27 @@ def execute_registered_strategy(
                     "production_eligible": False,
                     "endpoint_host": host,
                     "auth_env_var": parsed.auth_env_var,
+                }
+            )
+            reported_policy_id = str(strategy.get("strategy_id") or policy_id)
+        elif parsed.adapter_id == "container_jsonl_v1":
+            artifact = ContainerStrategyArtifactV1(
+                image_digest=str(parsed.image_digest),
+                command=tuple(parsed.command or ()),
+                timeout_ms=parsed.timeout_ms,
+            )
+            session = ContainerStrategySessionV1(artifact)
+
+            def execution_decider(observation: dict[str, Any]) -> dict[str, Any]:
+                return session.decide(_observation_payload(observation)).action
+
+            runtime.update(
+                {
+                    "execution_boundary": "isolated_container_jsonl",
+                    "network_access": False,
+                    "user_code_execution": True,
+                    "production_eligible": True,
+                    "strategy_artifact_digest": artifact.artifact_digest,
                 }
             )
             reported_policy_id = str(strategy.get("strategy_id") or policy_id)
