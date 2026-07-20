@@ -1,6 +1,7 @@
 from .market import Account, Exchange
 from .orders import CancelRequest, Order, OrderType, Side, Trade
 from .v2 import (
+    CancelOrderCommandV2,
     DeterministicSchedulerV2,
     EventKernelV2,
     EventKindV2,
@@ -24,6 +25,7 @@ __all__ = [
     "AccountRiskLimitsV2",
     "AccountStateV2",
     "CancelRequest",
+    "CancelOrderCommandV2",
     "DeterministicSchedulerV2",
     "EventKernelV2",
     "EventKindV2",
