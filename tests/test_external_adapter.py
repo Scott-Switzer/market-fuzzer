@@ -261,6 +261,7 @@ def test_http_adapter_rejects_oversized_response(monkeypatch) -> None:
 
 
 def test_container_adapter_uses_isolated_runtime_without_premature_production_claim(monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_STRATEGY_ALLOWED_REGISTRIES", "registry.example")
     contract = ExternalAdapterContract(
         adapter_id="container_jsonl_v1",
         adapter_version="1.0.0",
@@ -328,6 +329,32 @@ def test_container_adapter_uses_isolated_runtime_without_premature_production_cl
     assert row["adapter_runtime"]["production_eligible"] is True
     assert row["adapter_runtime"]["production_blockers"] == ()
     assert recorded[0].action["action_type"] == "hold"
+
+
+def test_container_adapter_fails_closed_without_an_allowed_registry() -> None:
+    contract = ExternalAdapterContract(
+        adapter_id="container_jsonl_v1",
+        adapter_version="1.0.0",
+        policy_id="guarded_pov",
+        input_observation_schema="market_observation_v1",
+        output_action_schema="execution_action_v1",
+        timeout_ms=250,
+        image_digest="registry.example/strategy@sha256:" + "a" * 64,
+        command=("/runner",),
+    ).model_dump(mode="json")
+    strategy = {**_strategy(), "external_adapter": contract}
+    strategy["adapter_hash"] = hashlib.sha256(
+        json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    with pytest.raises(ValueError, match="ARENA_STRATEGY_ALLOWED_REGISTRIES"):
+        execute_registered_strategy(
+            strategy,
+            build_demo_world(42),
+            source_world_hash="world-hash",
+            scenario_pack_id="scenario-pack-test",
+            response_recorder=lambda _: None,
+            response_lookup=lambda _: None,
+        )
 
 
 def test_http_adapter_reject_action_policy_holds_on_protocol_error(monkeypatch) -> None:
