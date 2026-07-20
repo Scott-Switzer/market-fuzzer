@@ -36,6 +36,26 @@ def _legacy_http_adapter_enabled() -> bool:
     return os.getenv("ARENA_ALLOW_LEGACY_HTTP_ADAPTER", "").strip().lower() in {"1", "true", "yes"}
 
 
+def _allowed_container_registries() -> frozenset[str]:
+    return frozenset(
+        value.strip().lower()
+        for value in os.getenv("ARENA_STRATEGY_ALLOWED_REGISTRIES", "").split(",")
+        if value.strip()
+    )
+
+
+def _require_allowed_container_image(image_digest: str) -> None:
+    image = image_digest.rsplit("@sha256:", 1)[0]
+    registry = image.split("/", 1)[0].lower()
+    allowed = _allowed_container_registries()
+    if not allowed:
+        raise ValueError(
+            "container strategy execution is disabled until ARENA_STRATEGY_ALLOWED_REGISTRIES is set"
+        )
+    if registry not in allowed:
+        raise ValueError(f"container registry {registry!r} is not in ARENA_STRATEGY_ALLOWED_REGISTRIES")
+
+
 def _contract_hash(contract: dict[str, Any]) -> str:
     encoded = json.dumps(contract, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode()).hexdigest()
@@ -172,6 +192,7 @@ def execute_registered_strategy(
         elif parsed.adapter_id == "container_jsonl_v1":
             if response_recorder is None or response_lookup is None:
                 raise ValueError("container strategies require a durable response journal before execution")
+            _require_allowed_container_image(str(parsed.image_digest))
             artifact = ContainerStrategyArtifactV1(
                 image_digest=str(parsed.image_digest),
                 command=tuple(parsed.command or ()),

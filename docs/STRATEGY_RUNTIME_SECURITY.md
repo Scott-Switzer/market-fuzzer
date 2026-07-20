@@ -14,3 +14,8 @@ response is replayed without re-running customer code. A timeout or runner
 crash is persisted as a deterministic no-action response, so a retry cannot
 issue a different order. This runtime boundary does not make the overall
 product production-ready.
+
+Container execution is disabled unless `ARENA_STRATEGY_ALLOWED_REGISTRIES`
+contains the exact registry host for the digest-pinned image. This protects old
+registered contracts as well as new submissions; image digest pinning alone is
+not an image-provenance policy.

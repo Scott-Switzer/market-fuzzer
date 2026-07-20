@@ -8,11 +8,11 @@ Build a sealed, procedurally generated market-evaluation platform that measures 
 
 M8 — isolated strategy runtime hardening.
 
-- Current branch: `codex/m8-crash-recovery`
+- Current branch: `codex/m8-artifact-policy`
 - Current PR: not yet opened
-- Clean-main baseline SHA: `80a695b` (PR #27)
+- Clean-main baseline SHA: `3386d67` (PR #28)
 - Latest substantive Greptile-reviewed SHA: `0fda71eb2c8832b61e30a5a1a3f690be677bd7c1`
-- Latest self-reviewed SHA: `a429def`; Greptile is unavailable because trial credits are exhausted.
+- Latest self-reviewed SHA: `3386d67`; Greptile is unavailable because trial credits are exhausted.
 
 ## Completed evidence
 
@@ -37,11 +37,12 @@ M8 — isolated strategy runtime hardening.
 - M8 HTTP fail-closed enforcement merged as PR #24 at `cf5d189`; legacy callbacks require explicit local opt-in.
 - M8 digest-pinned no-egress container session merged as PR #25 at `babf674` and registered-strategy integration merged as PR #26 at `a429def`; both latest-head GitHub verification and Docker checks passed with zero unresolved GitHub review threads.
 - M8 durable response journaling merged as PR #27 at `80a695b`; full latest-head GitHub verification and Docker checks passed with zero unresolved GitHub review threads.
+- M8 deterministic crash recovery merged as PR #28 at `3386d67`; full latest-head GitHub verification and Docker checks passed with zero unresolved GitHub review threads.
 
 ## Current work and next executable action
 
-- Add deterministic recovery: replay persisted responses without rerunning customer code and persist runner failure as a no-action response.
-- Next executable action: run full verification, self-review the crash-recovery diff, open a focused PR, and merge only after latest-head checks pass.
+- Enforce an explicit container registry allowlist in addition to image digest pinning.
+- Next executable action: run full verification, self-review the artifact-policy diff, open a focused PR, and merge only after latest-head checks pass.
 
 ## Unresolved findings and blockers
 
