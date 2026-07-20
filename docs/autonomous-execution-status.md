@@ -8,9 +8,9 @@ Build a sealed, procedurally generated market-evaluation platform that measures 
 
 M9 — decision evidence.
 
-- Current branch: `codex/m8-isolated-strategy-protocol-v2`
+- Current branch: `codex/m8-sealed-campaign-lifecycle`
 - Current PR: not yet opened
-- Clean-main baseline SHA: `2ef3383` (PR #36)
+- Clean-main baseline SHA: `7c15785` (PR #37)
 - Latest substantive Greptile-reviewed SHA: `0fda71eb2c8832b61e30a5a1a3f690be677bd7c1`
 - Latest self-reviewed SHA: `2ef3383`; Greptile is unavailable because trial credits are exhausted.
 
@@ -45,11 +45,12 @@ M9 — decision evidence.
 - M9 committed metric-policy and vector-report evidence merged as PR #34 at `42e8bff`; two latest-head GitHub verification runs passed (6m41s and 7m3s), two Docker smokes passed (36s each), and clean `main` verification passed.
 - M9 V2 sealed-world execution merged as PR #35 at `911506b`; generated flow is executed through the V2 exchange, and each primary world records opaque ledger and strategy-response-journal digests. Two latest-head GitHub verification runs passed (5m37s and 6m50s), with Docker smokes passing in 41s and 36s; clean `main` verification passed.
 - M3 typed V2 cancellation merged as PR #36 at `2ef3383`; unique cancel requests now have acknowledgement, original-order-linked completion or rejection, and deterministic ledger evidence. Two latest-head GitHub verification runs passed (6m50s and 7m31s), with Docker smokes passing in 40s and 35s; clean `main` verification passed.
+- M8 isolated strategy protocol V2 merged as PR #37 at `7c15785`; sealed V2 observations expose only strategy-owned resting orders, lifecycle actions use typed cancel/replace commands, and guessed order IDs fail before admission. Latest-head GitHub verification and Docker smoke checks passed with zero unresolved GitHub review threads; clean `main` verification passed.
 
 ## Current work and next executable action
 
-- Expose strategy-owned resting orders through a versioned observation, validate typed submit/cancel/replace commands in the isolated runner, and preserve durable artifact-bound response evidence.
-- Next executable action: complete full verification, self-review the V2 isolated strategy protocol, open a PR, and merge only after latest-head checks pass.
+- Persist a server-side sealed V2 campaign lifecycle that commits private seed material and policy ranges, freezes a registered V2 container artifact, runs it through the V2 runner, and permits reveal only after finalization.
+- Next executable action: complete focused tests and static checks, self-review the lifecycle persistence boundary, open a PR, and merge only after latest-head checks pass.
 
 ## Unresolved findings and blockers
 
@@ -70,7 +71,7 @@ M9 — decision evidence.
 | M5 — sealed evaluation protocol | merged and clean-main verified |
 | M6 — shared evaluation evidence integration | merged and clean-main verified |
 | M7 — historical calibration boundary | merged and clean-main verified |
-| M8 — strategy runtime isolation | initial isolated no-egress runtime and durable journal merged; appliance hardening remains M10 |
+| M8 — strategy runtime isolation | V2 protocol merged; durable server-side sealed-campaign lifecycle in progress; appliance hardening remains M10 |
 | M9 — decision evidence | in progress |
 | M10 — product appliance | pending |
 
@@ -91,4 +92,4 @@ M9 — decision evidence.
 - Order-level calibration, queue-position realism, cancellation behavior, or fill probability inferred solely from OHLCV data.
 - Overall production readiness, including general multi-machine orchestration, operational incident response, and all M9–M10 evidence and appliance gates.
 - The existing Arena benchmark matrix uses declared fixed seeds and variants; it is development-fixture evidence, not sealed primary evaluation.
-- V2 runner evidence does not yet establish Arena lifecycle integration, cancellation/replace strategy protocol support, live-market execution fidelity, or production readiness.
+- V2 runner evidence does not yet establish Arena challenge lifecycle integration, live-market execution fidelity, or production readiness.

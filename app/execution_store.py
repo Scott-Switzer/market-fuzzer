@@ -205,6 +205,18 @@ class ArenaStore:
                     request_digest TEXT NOT NULL, response_digest TEXT NOT NULL,
                     action_json TEXT NOT NULL, created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS sealed_campaigns (
+                    campaign_id TEXT PRIMARY KEY, strategy_id TEXT NOT NULL,
+                    state TEXT NOT NULL, public_document_json TEXT NOT NULL,
+                    commitment_digest TEXT NOT NULL, policy_json TEXT NOT NULL,
+                    generator_bundle_digest TEXT NOT NULL, secret_seed_material_hex TEXT NOT NULL,
+                    instruments_json TEXT NOT NULL, steps INTEGER NOT NULL,
+                    artifact_digest TEXT, artifact_byte_length INTEGER,
+                    result_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    FOREIGN KEY(strategy_id) REFERENCES strategies(strategy_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_sealed_campaigns_strategy
+                    ON sealed_campaigns(strategy_id, created_at DESC);
                 CREATE TABLE IF NOT EXISTS stress_experiments (
                     experiment_id TEXT PRIMARY KEY, name TEXT NOT NULL, scenario_pack_id TEXT NOT NULL,
                     strategy_ids_json TEXT NOT NULL, seeds_json TEXT NOT NULL, status TEXT NOT NULL,
@@ -1402,6 +1414,145 @@ class ArenaStore:
                 "SELECT strategy_id FROM strategies ORDER BY created_at DESC"
             ).fetchall()
         return [self.strategy(str(row["strategy_id"])) for row in rows]
+
+    def create_sealed_campaign(
+        self,
+        *,
+        campaign_id: str,
+        strategy_id: str,
+        public_document: dict[str, Any],
+        commitment_digest: str,
+        policy: dict[str, Any],
+        generator_bundle_digest: str,
+        secret_seed_material_hex: str,
+        instruments: tuple[str, ...],
+        steps: int,
+        actor: str,
+    ) -> dict[str, Any]:
+        """Persist evaluator-private campaign material without serializing it to public reads."""
+        if not instruments or steps < 1:
+            raise ValueError("sealed campaigns require instruments and positive steps")
+        now = utc_now()
+        with self.connection() as connection:
+            if (
+                connection.execute(
+                    "SELECT 1 FROM strategies WHERE strategy_id = ?", (strategy_id,)
+                ).fetchone()
+                is None
+            ):
+                raise KeyError(strategy_id)
+            connection.execute(
+                """
+                INSERT INTO sealed_campaigns
+                (campaign_id, strategy_id, state, public_document_json, commitment_digest, policy_json,
+                 generator_bundle_digest, secret_seed_material_hex, instruments_json, steps,
+                 artifact_digest, artifact_byte_length, result_json, created_at, updated_at)
+                VALUES (?, ?, 'prepared', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
+                """,
+                (
+                    campaign_id,
+                    strategy_id,
+                    json.dumps(public_document, sort_keys=True),
+                    commitment_digest,
+                    json.dumps(policy, sort_keys=True),
+                    generator_bundle_digest,
+                    secret_seed_material_hex,
+                    json.dumps(list(instruments)),
+                    steps,
+                    now,
+                    now,
+                ),
+            )
+            self._audit_in_transaction(
+                connection,
+                None,
+                actor,
+                "sealed_campaign_prepared",
+                {
+                    "campaign_id": campaign_id,
+                    "strategy_id": strategy_id,
+                    "commitment_digest": commitment_digest,
+                },
+                occurred_at=now,
+            )
+        return self.sealed_campaign(campaign_id)
+
+    def _sealed_campaign(self, campaign_id: str, *, include_private: bool) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM sealed_campaigns WHERE campaign_id = ?", (campaign_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(campaign_id)
+        value = dict(row)
+        value["public_document"] = json.loads(value.pop("public_document_json"))
+        value["instruments"] = tuple(json.loads(value.pop("instruments_json")))
+        result_json = value.pop("result_json")
+        value["result"] = json.loads(result_json) if result_json else None
+        if include_private:
+            value["policy"] = json.loads(value.pop("policy_json"))
+        else:
+            value.pop("policy_json")
+            value.pop("secret_seed_material_hex")
+        return value
+
+    def sealed_campaign(self, campaign_id: str) -> dict[str, Any]:
+        """Return only customer-safe campaign state; never expose private seeds or ranges."""
+        return self._sealed_campaign(campaign_id, include_private=False)
+
+    def sealed_campaign_private(self, campaign_id: str) -> dict[str, Any]:
+        """Evaluator-only internal state. Callers must never pass this to strategy code or API responses."""
+        return self._sealed_campaign(campaign_id, include_private=True)
+
+    def freeze_sealed_campaign(
+        self, campaign_id: str, *, artifact_digest: str, artifact_byte_length: int, actor: str
+    ) -> dict[str, Any]:
+        if artifact_byte_length < 1:
+            raise ValueError("sealed strategy artifact must be non-empty")
+        now = utc_now()
+        with self.connection() as connection:
+            changed = connection.execute(
+                """
+                UPDATE sealed_campaigns SET state = 'frozen', artifact_digest = ?, artifact_byte_length = ?, updated_at = ?
+                WHERE campaign_id = ? AND state = 'prepared'
+                """,
+                (artifact_digest, artifact_byte_length, now, campaign_id),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("sealed campaign is not in prepared state")
+            self._audit_in_transaction(
+                connection,
+                None,
+                actor,
+                "sealed_campaign_strategy_frozen",
+                {"campaign_id": campaign_id, "artifact_digest": artifact_digest},
+                occurred_at=now,
+            )
+        return self.sealed_campaign(campaign_id)
+
+    def finalize_sealed_campaign(
+        self, campaign_id: str, *, result: dict[str, Any], actor: str
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self.connection() as connection:
+            changed = connection.execute(
+                """
+                UPDATE sealed_campaigns SET state = 'finalized', result_json = ?, updated_at = ?
+                WHERE campaign_id = ? AND state = 'frozen'
+                """,
+                (json.dumps(result, sort_keys=True), now, campaign_id),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("sealed campaign is not in frozen state")
+            self._audit_in_transaction(
+                connection,
+                None,
+                actor,
+                "sealed_campaign_finalized",
+                {"campaign_id": campaign_id},
+                occurred_at=now,
+            )
+        return self.sealed_campaign(campaign_id)
 
     def save_stress_experiment(
         self, experiment_id: str, payload: dict[str, Any], actor: str, result: dict[str, Any]

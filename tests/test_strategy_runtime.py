@@ -67,6 +67,36 @@ def test_container_artifact_canonical_bytes_match_its_sealed_digest() -> None:
     assert hashlib.sha256(artifact.canonical_bytes).hexdigest() == artifact.artifact_digest
 
 
+def test_container_artifact_freeze_binds_execution_resource_controls() -> None:
+    artifact = _artifact()
+    assert (
+        artifact.artifact_digest
+        != ContainerStrategyArtifactV1(
+            image_digest=artifact.image_digest,
+            command=artifact.command,
+            timeout_ms=artifact.timeout_ms + 1,
+        ).artifact_digest
+    )
+    assert (
+        artifact.artifact_digest
+        != ContainerStrategyArtifactV1(
+            image_digest=artifact.image_digest,
+            command=artifact.command,
+            timeout_ms=artifact.timeout_ms,
+            memory_mb=artifact.memory_mb + 64,
+        ).artifact_digest
+    )
+    assert (
+        artifact.artifact_digest
+        != ContainerStrategyArtifactV1(
+            image_digest=artifact.image_digest,
+            command=artifact.command,
+            timeout_ms=artifact.timeout_ms,
+            cpu_limit=0.5,
+        ).artifact_digest
+    )
+
+
 def test_container_session_preserves_v2_protocol_on_success_and_failure(monkeypatch, tmp_path) -> None:
     store = ArenaStore(tmp_path / "v2.sqlite3")
     monkeypatch.setattr(

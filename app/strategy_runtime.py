@@ -34,16 +34,23 @@ class ContainerStrategyArtifactV1:
 
     @property
     def artifact_digest(self) -> str:
-        return _digest({"image_digest": self.image_digest, "command": self.command})
+        return _digest(self._frozen_definition)
 
     @property
     def canonical_bytes(self) -> bytes:
         """Exact frozen-artifact preimage required by sealed campaign registration."""
-        return json.dumps(
-            {"image_digest": self.image_digest, "command": self.command},
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
+        return json.dumps(self._frozen_definition, sort_keys=True, separators=(",", ":")).encode()
+
+    @property
+    def _frozen_definition(self) -> dict[str, object]:
+        """Every execution-affecting artifact control belongs in the freeze preimage."""
+        return {
+            "image_digest": self.image_digest,
+            "command": self.command,
+            "timeout_ms": self.timeout_ms,
+            "memory_mb": self.memory_mb,
+            "cpu_limit": self.cpu_limit,
+        }
 
 
 @dataclass(frozen=True, slots=True)

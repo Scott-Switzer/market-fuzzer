@@ -18,6 +18,11 @@ from .evidence_v1 import (
     development_fixture_evidence,
     sealed_primary_evidence,
 )
+from .sealed_campaign_service_v1 import (
+    SealedCampaignServiceError,
+    SealedCampaignServiceV1,
+    default_generator_bundle_v1,
+)
 from .sealed_v1 import (
     AdaptiveDiagnosticResultV1,
     CampaignCommitmentV1,
@@ -73,6 +78,9 @@ __all__ = [
     "SealedV2RunnerError",
     "SealedV2WorldRunnerV1",
     "StrategyDecisionPortV1",
+    "SealedCampaignServiceError",
+    "SealedCampaignServiceV1",
+    "default_generator_bundle_v1",
     "adaptive_diagnostic_evidence",
     "development_fixture_evidence",
     "sealed_primary_evidence",
