@@ -32,11 +32,16 @@ def _metrics(prices: np.ndarray, positions: np.ndarray, fee_bps: float = 2.0) ->
     std = float(np.std(strategy_returns, ddof=1)) if len(strategy_returns) > 1 else 0.0
     sharpe = float(np.mean(strategy_returns) / std * math.sqrt(252)) if std > 0 else 0.0
     trades = int(np.sum(np.diff(positions, prepend=0.0) > 0))
+    entries = np.flatnonzero(np.diff(positions, prepend=0.0) > 0)
+    exits = np.flatnonzero(np.diff(positions, append=0.0) < 0)
+    trade_returns = [prices[exit_] / prices[entry] - 1 for entry, exit_ in zip(entries, exits) if exit_ > entry]
+    win_rate = sum(value > 0 for value in trade_returns) / len(trade_returns) * 100 if trade_returns else 0.0
     return {
         "total_return_pct": round((float(equity[-1]) - 1) * 100, 2),
         "max_drawdown_pct": round(float(np.min(drawdown)) * 100, 2),
         "sharpe": round(sharpe, 2),
         "trades": trades,
+        "win_rate_pct": round(win_rate, 1),
         "turnover": round(float(np.sum(turnover)), 2),
     }
 
@@ -82,6 +87,7 @@ def evaluate_sma_robustness(
             "worst_drawdown_pct": round(float(np.min(drawdowns)), 2),
         })
     weakest = max(regime_results, key=lambda item: float(item["loss_rate_pct"]))
+    suggested_slow = max(slow + 10, round(slow * 1.5))
     return {
         "strategy": {"name": "SMA crossover", "fast_window": fast, "slow_window": slow},
         "historical_backtest": historical,
@@ -91,5 +97,10 @@ def evaluate_sma_robustness(
             f"it lost money in {weakest['loss_rate_pct']}% of {weakest['worlds']} unseen worlds, "
             f"with a worst drawdown of {weakest['worst_drawdown_pct']}%."
         ),
+        "suggested_test": {
+            "fast_window": fast,
+            "slow_window": suggested_slow,
+            "reason": "A slower confirmation window may reduce repeated entries in noisy markets. Test it as a comparison; it is not guaranteed to improve performance.",
+        },
         "limitations": "Synthetic regimes are diagnostic models, not forecasts. Historical results depend on the uploaded data and include a 2 bps turnover cost.",
     }

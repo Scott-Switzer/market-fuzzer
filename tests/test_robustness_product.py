@@ -11,6 +11,8 @@ def test_sma_report_contains_historical_forward_and_failure_evidence() -> None:
     assert report["synthetic_forward_test"]["worlds"] == 20
     assert len(report["synthetic_forward_test"]["regimes"]) == 4
     assert "most vulnerable" in report["failure_summary"]
+    assert "win_rate_pct" in report["historical_backtest"]
+    assert report["suggested_test"]["slow_window"] > 30
 
 
 def test_sma_rejects_too_little_history() -> None:
