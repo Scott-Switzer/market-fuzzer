@@ -12,7 +12,7 @@ M8 — sealed campaign API integration.
 - Current PR: not yet opened
 - Clean-main baseline SHA: `d432a00` (PR #39)
 - Latest substantive Greptile-reviewed SHA: `0fda71eb2c8832b61e30a5a1a3f690be677bd7c1`
-- Latest self-reviewed SHA: `2ef3383`; Greptile is unavailable because trial credits are exhausted.
+- Latest self-reviewed SHA: `814c92e7f08696f2c6b890b738ef5ad6f5848b06`; Greptile is unavailable because trial credits are exhausted.
 
 ## Completed evidence
 
