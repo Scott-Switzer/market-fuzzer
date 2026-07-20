@@ -10,6 +10,11 @@ from app.strategy_protocol import StrategyActionV1
 from app.world import build_demo_world
 
 
+@pytest.fixture(autouse=True)
+def _enable_legacy_http_adapter_for_explicit_legacy_tests(monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_ALLOW_LEGACY_HTTP_ADAPTER", "1")
+
+
 def _contract() -> dict[str, str | int]:
     return ExternalAdapterContract(
         adapter_id="declarative_in_process_v1",
@@ -52,6 +57,30 @@ def test_bounded_adapter_rejects_tampered_contract_provenance() -> None:
     strategy = _strategy()
     strategy["external_adapter"]["timeout_ms"] = 999
     with pytest.raises(ValueError, match="contract hash"):
+        execute_registered_strategy(
+            strategy,
+            build_demo_world(42),
+            source_world_hash="world-hash",
+            scenario_pack_id="scenario-pack-test",
+        )
+
+
+def test_http_adapter_fails_closed_without_explicit_legacy_opt_in(monkeypatch) -> None:
+    monkeypatch.delenv("ARENA_ALLOW_LEGACY_HTTP_ADAPTER")
+    contract = ExternalAdapterContract(
+        adapter_id="http_json_v1",
+        adapter_version="1.0.0",
+        policy_id="guarded_pov",
+        input_observation_schema="market_observation_v1",
+        output_action_schema="execution_action_v1",
+        timeout_ms=250,
+        endpoint_url="http://127.0.0.1:9100/decide",
+    ).model_dump(mode="json")
+    strategy = {**_strategy(), "external_adapter": contract}
+    strategy["adapter_hash"] = hashlib.sha256(
+        json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    with pytest.raises(ValueError, match="disabled"):
         execute_registered_strategy(
             strategy,
             build_demo_world(42),

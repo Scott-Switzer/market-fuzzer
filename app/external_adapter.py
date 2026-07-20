@@ -25,6 +25,11 @@ SUPPORTED_POLICY_IDS = frozenset({"twap", "aggressive_pov", "guarded_pov", "comp
 _MAX_ADAPTER_RESPONSE_BYTES = 64 * 1024
 
 
+def _legacy_http_adapter_enabled() -> bool:
+    """HTTP callbacks are a development bridge, never the default production runtime."""
+    return os.getenv("ARENA_ALLOW_LEGACY_HTTP_ADAPTER", "").strip().lower() in {"1", "true", "yes"}
+
+
 def _contract_hash(contract: dict[str, Any]) -> str:
     encoded = json.dumps(contract, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode()).hexdigest()
@@ -142,10 +147,15 @@ def execute_registered_strategy(
             "error_policy": parsed.error_policy,
         }
         if parsed.adapter_id == "http_json_v1":
+            if not _legacy_http_adapter_enabled():
+                raise ValueError(
+                    "legacy HTTP adapters are disabled; production execution requires an isolated strategy runtime"
+                )
             client, execution_decider, host = _http_decider(parsed)
             runtime.update(
                 {
                     "execution_boundary": "bounded_http_adapter",
+                    "production_eligible": False,
                     "endpoint_host": host,
                     "auth_env_var": parsed.auth_env_var,
                 }
