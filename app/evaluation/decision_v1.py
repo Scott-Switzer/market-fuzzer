@@ -163,7 +163,10 @@ def benjamini_hochberg_adjust(
         raise ValueError("false_discovery_rate must be between zero and one")
     eligible = sorted(
         (item for item in evidence if item.two_sided_sign_p_value is not None),
-        key=lambda item: (item.two_sided_sign_p_value if item.two_sided_sign_p_value is not None else 1.0, item.metric_name),
+        key=lambda item: (
+            item.two_sided_sign_p_value if item.two_sided_sign_p_value is not None else 1.0,
+            item.metric_name,
+        ),
     )
     total = len(eligible)
     adjusted: dict[str, float] = {}
