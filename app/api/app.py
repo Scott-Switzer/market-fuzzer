@@ -342,6 +342,13 @@ class DemoSessionRequest(BaseModel):
 
 @app.get("/")
 def index() -> FileResponse:
+    """Customer product entry point."""
+    return FileResponse(ROOT / "static" / "start.html")
+
+
+@app.get("/arena")
+def legacy_arena() -> FileResponse:
+    """Legacy educational Arena retained as a secondary workflow."""
     return FileResponse(ROOT / "static" / "arena.html")
 
 
