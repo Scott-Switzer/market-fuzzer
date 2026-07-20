@@ -1,7 +1,11 @@
+import pytest
+
 from app.evaluation.decision_v1 import (
+    DecisionMetricPolicyV1,
     PairedOutcomeV1,
     benjamini_hochberg_adjust,
     paired_decision_evidence,
+    sealed_decision_report,
 )
 from app.evaluation.sealed_v1 import (
     PrimaryEvaluationResultV1,
@@ -62,3 +66,29 @@ def test_bh_adjustment_does_not_promote_insufficient_evidence() -> None:
     adjusted = {item.metric_name: item for item in benjamini_hochberg_adjust([strong, weak])}
     assert adjusted["weak"].discovery_supported is False
     assert adjusted["weak"].adjusted_p_value == 1.0
+
+
+def test_policy_bound_report_keeps_metric_vector_and_rejects_uncommitted_policy() -> None:
+    policy = DecisionMetricPolicyV1(("cost",), (("cost", -1.0),))
+    worlds = tuple(PrimaryWorldResultV1(f"{index:064x}", 1, "a" * 64) for index in range(8))
+    candidate = PrimaryEvaluationResultV1(
+        "c" * 64,
+        "a" * 64,
+        worlds,
+        tuple(PrimaryWorldMetricV1(world.world_receipt, "cost", 10.0) for world in worlds),
+        policy.digest,
+    )
+    baseline = PrimaryEvaluationResultV1(
+        "c" * 64,
+        "b" * 64,
+        worlds,
+        tuple(PrimaryWorldMetricV1(world.world_receipt, "cost", 1.0) for world in worlds),
+        policy.digest,
+    )
+    report = sealed_decision_report(policy, candidate, baseline)
+    assert report.scoring_policy_digest == policy.digest
+    assert report.evidence[0].metric_name == "cost"
+    with pytest.raises(ValueError, match="committed metric policy"):
+        sealed_decision_report(DecisionMetricPolicyV1(("cost",), (("cost", 1.0),)), candidate, baseline)
+    with pytest.raises(ValueError, match="non-zero"):
+        DecisionMetricPolicyV1(("cost",), (("cost", 0.0),))

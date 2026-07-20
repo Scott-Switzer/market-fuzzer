@@ -17,6 +17,15 @@ metric decisions must apply a declared multiplicity procedure before any
 customer-facing discovery claim. See [Nelson (1991)](https://doi.org/10.1287/opre.39.4.583)
 and [Benjamini and Hochberg (1995)](https://www.jstor.org/stable/2346101).
 
-This initial contract is a portable evaluator primitive. Campaign-level block
-bootstrap, family holdout summaries, and multiplicity-adjusted report assembly
-remain separate M9 integrations.
+`DecisionMetricPolicyV1` fixes the metric vector, ranking weights, and false
+discovery rate before artifact freeze. Its digest must be the campaign's
+precommitted `scoring_policy_digest`. `sealed_decision_report` then rejects a
+result that was produced under a different policy, retains every metric's
+effect, interval, and adjusted value, and does not manufacture a scalar result
+from the weights. Duplicate receipt/metric cells are invalid evidence, not an
+opportunity for last-value-wins aggregation.
+
+This is a sealed synthetic-campaign evidence report, not a proof of live-market
+profitability. It still needs a production exchange-runner adapter that produces
+customer strategy metrics from the V2 kernel; the current callback path is an
+evaluator integration seam, not that adapter.

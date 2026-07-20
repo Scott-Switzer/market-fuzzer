@@ -7,9 +7,12 @@ selects worlds or changes a primary score.
 
 from __future__ import annotations
 
+import json
+import math
 import random
 import statistics
 from dataclasses import dataclass
+from hashlib import sha256
 
 from .sealed_v1 import PrimaryEvaluationResultV1
 
@@ -44,6 +47,59 @@ class AdjustedDecisionEvidenceV1:
     raw_p_value: float
     adjusted_p_value: float
     discovery_supported: bool
+
+
+def _policy_digest(value: object) -> str:
+    return sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionMetricPolicyV1:
+    """Precommitted metric vector and ranking weights for a sealed campaign."""
+
+    metric_names: tuple[str, ...]
+    ranking_weights: tuple[tuple[str, float], ...]
+    false_discovery_rate: float = 0.05
+    policy_version: str = "decision-metric-policy-v1"
+
+    def __post_init__(self) -> None:
+        if not self.metric_names or len(set(self.metric_names)) != len(self.metric_names):
+            raise ValueError("decision metric policy requires unique metric names")
+        if any(not name for name in self.metric_names):
+            raise ValueError("decision metric names must be non-empty")
+        weights = dict(self.ranking_weights)
+        if len(weights) != len(self.ranking_weights) or set(weights) != set(self.metric_names):
+            raise ValueError("decision metric policy weights must cover each metric exactly once")
+        if any(not math.isfinite(weight) for weight in weights.values()):
+            raise ValueError("decision metric policy weights must be finite")
+        if not any(weight != 0 for weight in weights.values()):
+            raise ValueError("decision metric policy requires at least one non-zero ranking weight")
+        if not 0 < self.false_discovery_rate < 1:
+            raise ValueError("false discovery rate must be between zero and one")
+
+    @property
+    def digest(self) -> str:
+        return _policy_digest(
+            {
+                "policy_version": self.policy_version,
+                "metric_names": list(self.metric_names),
+                "ranking_weights": sorted(self.ranking_weights),
+                "false_discovery_rate": self.false_discovery_rate,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SealedDecisionReportV1:
+    """Metric-vector evidence, intentionally separate from a scalar leaderboard rank."""
+
+    campaign_commitment_digest: str
+    scoring_policy_digest: str
+    candidate_artifact_digest: str
+    baseline_artifact_digest: str
+    evidence: tuple[DecisionEvidenceV1, ...]
+    multiplicity: tuple[AdjustedDecisionEvidenceV1, ...]
+    limitations: tuple[str, ...]
 
 
 def _quantile(sorted_values: list[float], probability: float) -> float:
@@ -184,4 +240,37 @@ def benjamini_hochberg_adjust(
             and adjusted.get(item.metric_name, 1.0) <= false_discovery_rate,
         )
         for item in sorted(evidence, key=lambda item: item.metric_name)
+    )
+
+
+def sealed_decision_report(
+    policy: DecisionMetricPolicyV1,
+    candidate: PrimaryEvaluationResultV1,
+    baseline: PrimaryEvaluationResultV1,
+) -> SealedDecisionReportV1:
+    """Build a policy-bound metric report without deriving a post-hoc primary score."""
+    if candidate.scoring_policy_digest != policy.digest or baseline.scoring_policy_digest != policy.digest:
+        raise ValueError("sealed decision report requires the campaign's committed metric policy")
+    evidence = tuple(
+        sealed_metric_decision_evidence(
+            metric_name,
+            candidate,
+            baseline,
+            bootstrap_seed=int.from_bytes(
+                sha256(f"{policy.digest}:{metric_name}".encode()).digest()[:8], "big"
+            ),
+        )
+        for metric_name in policy.metric_names
+    )
+    return SealedDecisionReportV1(
+        candidate.campaign_commitment_digest,
+        policy.digest,
+        candidate.strategy_artifact_digest,
+        baseline.strategy_artifact_digest,
+        evidence,
+        benjamini_hochberg_adjust(list(evidence), false_discovery_rate=policy.false_discovery_rate),
+        (
+            "Ranking weights were precommitted but are not used to turn this evidence vector into a scalar claim.",
+            "Supported differences apply only to this sealed synthetic campaign, not live profitability.",
+        ),
     )

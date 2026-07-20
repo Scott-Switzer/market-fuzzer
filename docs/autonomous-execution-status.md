@@ -8,11 +8,11 @@ Build a sealed, procedurally generated market-evaluation platform that measures 
 
 M9 — decision evidence.
 
-- Current branch: `codex/m9-evidence-contract`
+- Current branch: `codex/m9-sealed-strategy-metrics`
 - Current PR: not yet opened
-- Clean-main baseline SHA: `ddae6b7` (PR #29)
+- Clean-main baseline SHA: `711d99c` (PR #33)
 - Latest substantive Greptile-reviewed SHA: `0fda71eb2c8832b61e30a5a1a3f690be677bd7c1`
-- Latest self-reviewed SHA: `3386d67`; Greptile is unavailable because trial credits are exhausted.
+- Latest self-reviewed SHA: `711d99c`; Greptile is unavailable because trial credits are exhausted.
 
 ## Completed evidence
 
@@ -39,11 +39,14 @@ M9 — decision evidence.
 - M8 durable response journaling merged as PR #27 at `80a695b`; full latest-head GitHub verification and Docker checks passed with zero unresolved GitHub review threads.
 - M8 deterministic crash recovery merged as PR #28 at `3386d67`; full latest-head GitHub verification and Docker checks passed with zero unresolved GitHub review threads.
 - M8 registry allowlisting merged as PR #29 at `ddae6b7`; full latest-head GitHub verification and Docker checks passed with zero unresolved GitHub review threads.
+- M9 paired decision evidence merged as PR #30 at `cdccc4e`; it reports common-random-number effects, deterministic bootstrap intervals, sign evidence, family sensitivity, and insufficient-evidence outcomes.
+- M9 sealed metric binding merged as PR #31 at `d0ed609`, and sealed metric comparison merged as PR #32 at `10113ec`.
+- M9 Benjamini-Hochberg multiplicity control merged as PR #33 at `711d99c`; two latest-head GitHub verification runs passed (6m45s and 6m52s), two Docker smokes passed (38s and 45s), and no GitHub review threads remained.
 
 ## Current work and next executable action
 
-- Add deterministic paired decision evidence with uncertainty and insufficient-evidence outcomes.
-- Next executable action: run full verification, self-review the M9 evidence contract, open a focused PR, and merge only after latest-head checks pass.
+- Bind the precommitted metric vector and weights to the sealed campaign result, reject ambiguous duplicate metric cells, and publish a vector decision report without manufacturing a post-hoc scalar claim.
+- Next executable action: complete full verification, self-review the focused M9 decision-policy report, open a PR, and merge only after latest-head checks pass.
 
 ## Unresolved findings and blockers
 
@@ -64,8 +67,9 @@ M9 — decision evidence.
 | M5 — sealed evaluation protocol | merged and clean-main verified |
 | M6 — shared evaluation evidence integration | merged and clean-main verified |
 | M7 — historical calibration boundary | merged and clean-main verified |
-| M8 — strategy runtime isolation | in progress |
-| M9–M10 | pending |
+| M8 — strategy runtime isolation | initial isolated no-egress runtime and durable journal merged; appliance hardening remains M10 |
+| M9 — decision evidence | in progress |
+| M10 — product appliance | pending |
 
 ## Claims currently permitted
 
@@ -74,6 +78,7 @@ M9 — decision evidence.
 - M0A decision evidence is a deterministic demo fixture, not commercial validation.
 - M4 generator paths are interpretable synthetic event streams with explicit assumptions, not copied historical data or order-level calibration evidence.
 - M7 calibration manifests declare source-resolution limits and generated-world similarity diagnostics as evidence against copying, not a novelty guarantee.
+- M9 paired and multiplicity-adjusted findings are sealed synthetic-campaign evidence only; a missing or insufficient metric is not a supported discovery.
 
 ## Claims currently prohibited
 
@@ -82,3 +87,4 @@ M9 — decision evidence.
 - Order-level calibration, queue-position realism, cancellation behavior, or fill probability inferred solely from OHLCV data.
 - Overall production readiness, including general multi-machine orchestration, operational incident response, and all M9–M10 evidence and appliance gates.
 - The existing Arena benchmark matrix uses declared fixed seeds and variants; it is development-fixture evidence, not sealed primary evaluation.
+- A precommitted scoring-policy digest and vector report do not yet connect customer strategy execution metrics to the V2 exchange kernel.
