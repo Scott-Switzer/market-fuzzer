@@ -22,3 +22,11 @@ def test_sma_rejects_too_little_history() -> None:
         assert "at least 80" in str(error)
     else:
         raise AssertionError("short history was accepted")
+
+
+def test_distinct_builtin_strategies_run_unchanged_across_worlds() -> None:
+    prices = (100 * np.exp(np.cumsum(np.random.default_rng(9).normal(0, 0.01, 180)))).tolist()
+    for kind in ("breakout", "rsi_reversion"):
+        report = evaluate_sma_robustness(prices, fast=10, slow=30, worlds_per_regime=5, strategy_type=kind)
+        assert report["strategy"]["type"] == kind
+        assert report["synthetic_forward_test"]["worlds"] == 20

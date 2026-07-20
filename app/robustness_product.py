@@ -21,6 +21,33 @@ class SmaStrategy:
         return np.concatenate((np.zeros(self.slow - 1), signal))
 
 
+def _strategy_positions(kind: str, prices: np.ndarray, fast: int, slow: int) -> tuple[str, np.ndarray]:
+    if kind == "sma_crossover":
+        return "SMA crossover", SmaStrategy(fast=fast, slow=slow).positions(prices)
+    if kind == "breakout":
+        if slow < 3 or len(prices) <= slow:
+            raise ValueError("Breakout lookback must be at least 3 and shorter than the price history")
+        positions = np.zeros(len(prices))
+        for index in range(slow, len(prices)):
+            positions[index] = 1.0 if prices[index] > np.max(prices[index - slow : index]) else positions[index - 1]
+            if prices[index] < np.min(prices[index - fast : index]):
+                positions[index] = 0.0
+        return "Breakout momentum", positions
+    if kind == "rsi_reversion":
+        if fast < 2 or len(prices) <= fast:
+            raise ValueError("RSI period must be at least 2 and shorter than the price history")
+        changes = np.diff(prices, prepend=prices[0])
+        positions = np.zeros(len(prices))
+        for index in range(fast, len(prices)):
+            window = changes[index - fast + 1 : index + 1]
+            gains = np.mean(np.clip(window, 0, None))
+            losses = np.mean(np.clip(-window, 0, None))
+            rsi = 100.0 if losses == 0 else 100 - 100 / (1 + gains / losses)
+            positions[index] = 1.0 if rsi < 30 else (0.0 if rsi > 70 else positions[index - 1])
+        return "RSI mean reversion", positions
+    raise ValueError("Unsupported strategy type")
+
+
 def _metrics(prices: np.ndarray, positions: np.ndarray, fee_bps: float = 2.0) -> dict[str, float | int]:
     returns = np.diff(prices) / prices[:-1]
     held = positions[:-1]
@@ -47,13 +74,14 @@ def _metrics(prices: np.ndarray, positions: np.ndarray, fee_bps: float = 2.0) ->
 
 
 def evaluate_sma_robustness(
-    closes: list[float], *, fast: int = 20, slow: int = 50, worlds_per_regime: int = 30
+    closes: list[float], *, fast: int = 20, slow: int = 50, worlds_per_regime: int = 30,
+    strategy_type: str = "sma_crossover",
 ) -> dict[str, object]:
     prices = np.asarray(closes, dtype=float)
     if len(prices) < max(80, slow + 2) or not np.all(np.isfinite(prices)) or np.any(prices <= 0):
         raise ValueError("Provide at least 80 finite, positive closing prices")
-    strategy = SmaStrategy(fast=fast, slow=slow)
-    historical = _metrics(prices, strategy.positions(prices))
+    strategy_name, historical_positions = _strategy_positions(strategy_type, prices, fast, slow)
+    historical = _metrics(prices, historical_positions)
     base_returns = np.diff(np.log(prices))
     base_vol = max(float(np.std(base_returns)), 0.0001)
     regimes = {
@@ -74,7 +102,8 @@ def evaluate_sma_robustness(
                 for index in range(1, len(shocks)):
                     shocks[index] += reversal * -shocks[index - 1]
             synthetic = prices[0] * np.exp(np.concatenate(([0.0], np.cumsum(shocks))))
-            result = _metrics(synthetic, strategy.positions(synthetic))
+            _, synthetic_positions = _strategy_positions(strategy_type, synthetic, fast, slow)
+            result = _metrics(synthetic, synthetic_positions)
             value = float(result["total_return_pct"])
             returns.append(value)
             drawdowns.append(float(result["max_drawdown_pct"]))
@@ -89,7 +118,7 @@ def evaluate_sma_robustness(
     weakest = max(regime_results, key=lambda item: float(item["loss_rate_pct"]))
     suggested_slow = max(slow + 10, round(slow * 1.5))
     return {
-        "strategy": {"name": "SMA crossover", "fast_window": fast, "slow_window": slow},
+        "strategy": {"name": strategy_name, "type": strategy_type, "fast_window": fast, "slow_window": slow},
         "historical_backtest": historical,
         "synthetic_forward_test": {"worlds": worlds_per_regime * len(regimes), "regimes": regime_results},
         "failure_summary": (

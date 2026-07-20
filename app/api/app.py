@@ -418,6 +418,7 @@ def guided_start_ui() -> FileResponse:
 
 class SmaRobustnessRequest(BaseModel):
     closes: list[float] = Field(min_length=80, max_length=50_000)
+    strategy_type: Literal["sma_crossover", "breakout", "rsi_reversion"] = "sma_crossover"
     fast_window: int = Field(default=20, ge=2, le=500)
     slow_window: int = Field(default=50, ge=3, le=1_000)
     worlds_per_regime: int = Field(default=30, ge=5, le=250)
@@ -431,6 +432,7 @@ def sma_robustness(payload: SmaRobustnessRequest) -> dict[str, object]:
             fast=payload.fast_window,
             slow=payload.slow_window,
             worlds_per_regime=payload.worlds_per_regime,
+            strategy_type=payload.strategy_type,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
