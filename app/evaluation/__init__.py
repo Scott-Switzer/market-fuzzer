@@ -1,6 +1,11 @@
 """Sealed primary-evaluation protocol primitives."""
 
-from .decision_v1 import DecisionEvidenceV1, PairedOutcomeV1, paired_decision_evidence
+from .decision_v1 import (
+    DecisionEvidenceV1,
+    PairedOutcomeV1,
+    paired_decision_evidence,
+    sealed_metric_decision_evidence,
+)
 from .evidence_v1 import (
     EvaluationEvidenceV1,
     EvidenceScopeV1,
@@ -31,6 +36,7 @@ __all__ = [
     "DecisionEvidenceV1",
     "PairedOutcomeV1",
     "paired_decision_evidence",
+    "sealed_metric_decision_evidence",
     "CampaignCommitmentV1",
     "CampaignPolicyV1",
     "CampaignRevealV1",

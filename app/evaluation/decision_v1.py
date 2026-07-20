@@ -11,6 +11,8 @@ import random
 import statistics
 from dataclasses import dataclass
 
+from .sealed_v1 import PrimaryEvaluationResultV1
+
 
 @dataclass(frozen=True, slots=True)
 class PairedOutcomeV1:
@@ -103,4 +105,43 @@ def paired_decision_evidence(
         (
             "Paired blocks use common random numbers; finite generator coverage does not establish live-market performance.",
         ),
+    )
+
+
+def sealed_metric_decision_evidence(
+    metric_name: str,
+    candidate: PrimaryEvaluationResultV1,
+    baseline: PrimaryEvaluationResultV1,
+    *,
+    bootstrap_draws: int = 2_000,
+    bootstrap_seed: int = 991,
+) -> DecisionEvidenceV1:
+    """Compare two frozen artifacts only on the same sealed campaign receipts."""
+    if candidate.campaign_commitment_digest != baseline.campaign_commitment_digest:
+        raise ValueError("sealed metric comparison requires the same campaign commitment")
+    if candidate.strategy_artifact_digest == baseline.strategy_artifact_digest:
+        raise ValueError("sealed metric comparison requires distinct frozen artifacts")
+    candidate_values = {
+        metric.world_receipt: metric.value
+        for metric in candidate.metrics
+        if metric.metric_name == metric_name
+    }
+    baseline_values = {
+        metric.world_receipt: metric.value for metric in baseline.metrics if metric.metric_name == metric_name
+    }
+    receipts = {world.world_receipt for world in candidate.worlds}
+    if (
+        receipts != {world.world_receipt for world in baseline.worlds}
+        or set(candidate_values) != receipts
+        or set(baseline_values) != receipts
+    ):
+        raise ValueError("sealed metric coverage must match every opaque primary receipt")
+    return paired_decision_evidence(
+        metric_name,
+        [
+            PairedOutcomeV1(receipt, "sealed_primary", candidate_values[receipt], baseline_values[receipt])
+            for receipt in sorted(receipts)
+        ],
+        bootstrap_draws=bootstrap_draws,
+        bootstrap_seed=bootstrap_seed,
     )
