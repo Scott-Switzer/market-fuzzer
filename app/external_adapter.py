@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlparse
 
@@ -20,7 +21,11 @@ from app.execution_arena import run_policy_on_compiled_world
 from app.schemas import WorldSpec
 from app.strategy_lab import ExternalAdapterContract
 from app.strategy_protocol import StrategyActionV1, StrategyObservationV1
-from app.strategy_runtime import ContainerStrategyArtifactV1, ContainerStrategySessionV1
+from app.strategy_runtime import (
+    ContainerStrategyArtifactV1,
+    ContainerStrategySessionV1,
+    StrategyResponseRecordV1,
+)
 
 SUPPORTED_POLICY_IDS = frozenset({"twap", "aggressive_pov", "guarded_pov", "completion_first"})
 _MAX_ADAPTER_RESPONSE_BYTES = 64 * 1024
@@ -121,6 +126,7 @@ def execute_registered_strategy(
     *,
     source_world_hash: str,
     scenario_pack_id: str,
+    response_recorder: Callable[[StrategyResponseRecordV1], object] | None = None,
 ) -> dict[str, Any]:
     """Execute one registered strategy through the bounded runtime contract."""
 
@@ -163,12 +169,14 @@ def execute_registered_strategy(
             )
             reported_policy_id = str(strategy.get("strategy_id") or policy_id)
         elif parsed.adapter_id == "container_jsonl_v1":
+            if response_recorder is None:
+                raise ValueError("container strategies require durable response recording before execution")
             artifact = ContainerStrategyArtifactV1(
                 image_digest=str(parsed.image_digest),
                 command=tuple(parsed.command or ()),
                 timeout_ms=parsed.timeout_ms,
             )
-            session = ContainerStrategySessionV1(artifact)
+            session = ContainerStrategySessionV1(artifact, response_recorder=response_recorder)
 
             def execution_decider(observation: dict[str, Any]) -> dict[str, Any]:
                 return session.decide(_observation_payload(observation)).action
@@ -179,9 +187,7 @@ def execute_registered_strategy(
                     "network_access": False,
                     "user_code_execution": True,
                     "production_eligible": False,
-                    "production_blockers": (
-                        "durable response recording before order admission is not implemented",
-                    ),
+                    "production_blockers": ("deterministic strategy crash recovery is not implemented",),
                     "strategy_artifact_digest": artifact.artifact_digest,
                 }
             )

@@ -17,6 +17,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.strategy_runtime import StrategyResponseRecordV1
+
 PHASES = (
     "draft",
     "public_practice",
@@ -198,6 +200,11 @@ class ArenaStore:
                     adapter_hash TEXT NOT NULL, created_at TEXT NOT NULL,
                     FOREIGN KEY(strategy_id) REFERENCES strategies(strategy_id)
                 );
+                CREATE TABLE IF NOT EXISTS strategy_response_records (
+                    idempotency_key TEXT PRIMARY KEY, artifact_digest TEXT NOT NULL,
+                    request_digest TEXT NOT NULL, response_digest TEXT NOT NULL,
+                    action_json TEXT NOT NULL, created_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS stress_experiments (
                     experiment_id TEXT PRIMARY KEY, name TEXT NOT NULL, scenario_pack_id TEXT NOT NULL,
                     strategy_ids_json TEXT NOT NULL, seeds_json TEXT NOT NULL, status TEXT NOT NULL,
@@ -330,6 +337,69 @@ class ArenaStore:
     def audit(self, challenge_id: str | None, actor: str, action: str, details: dict[str, Any]) -> None:
         with self.connection() as connection:
             self._audit_in_transaction(connection, challenge_id, actor, action, details)
+
+    def record_strategy_response(self, response: StrategyResponseRecordV1) -> dict[str, Any]:
+        """Persist an isolated strategy response idempotently before it reaches matching."""
+
+        value = {
+            "idempotency_key": str(response.idempotency_key),
+            "artifact_digest": str(response.artifact_digest),
+            "request_digest": str(response.request_digest),
+            "response_digest": str(response.response_digest),
+            "action": response.action,
+        }
+        encoded_action = json.dumps(value["action"], sort_keys=True, separators=(",", ":"))
+        with self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT * FROM strategy_response_records WHERE idempotency_key = ?",
+                (value["idempotency_key"],),
+            ).fetchone()
+            if existing is None:
+                created_at = utc_now()
+                connection.execute(
+                    """
+                    INSERT INTO strategy_response_records
+                    (idempotency_key, artifact_digest, request_digest, response_digest, action_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        value["idempotency_key"],
+                        value["artifact_digest"],
+                        value["request_digest"],
+                        value["response_digest"],
+                        encoded_action,
+                        created_at,
+                    ),
+                )
+                return {**value, "created_at": created_at, "replayed": False}
+            persisted = {
+                "idempotency_key": existing["idempotency_key"],
+                "artifact_digest": existing["artifact_digest"],
+                "request_digest": existing["request_digest"],
+                "response_digest": existing["response_digest"],
+                "action": json.loads(existing["action_json"]),
+                "created_at": existing["created_at"],
+            }
+            if persisted != {**value, "created_at": persisted["created_at"]}:
+                raise ValueError("strategy response idempotency key conflicts with persisted response")
+            return {**persisted, "replayed": True}
+
+    def strategy_response_record(self, idempotency_key: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM strategy_response_records WHERE idempotency_key = ?", (idempotency_key,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(idempotency_key)
+        return {
+            "idempotency_key": row["idempotency_key"],
+            "artifact_digest": row["artifact_digest"],
+            "request_digest": row["request_digest"],
+            "response_digest": row["response_digest"],
+            "action": json.loads(row["action_json"]),
+            "created_at": row["created_at"],
+        }
 
     @staticmethod
     def _audit_in_transaction(

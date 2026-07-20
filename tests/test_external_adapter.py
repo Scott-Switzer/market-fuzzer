@@ -281,10 +281,13 @@ def test_container_adapter_uses_isolated_runtime_without_premature_production_cl
     }
     seen: dict = {}
 
-    def fake_decide(_, observation: dict) -> StrategyResponseRecordV1:
+    def fake_decide(session, observation: dict) -> StrategyResponseRecordV1:
         seen["observation"] = observation
         action = StrategyActionV1(action_type="hold").model_dump(mode="json")
-        return StrategyResponseRecordV1("key", "request", "response", action)
+        response = StrategyResponseRecordV1("key", "artifact", "request", "response", action)
+        assert session.response_recorder is not None
+        session.response_recorder(response)
+        return response
 
     def fake_run(policy_id, world, **kwargs):
         seen["action"] = kwargs["execution_decider"](
@@ -308,11 +311,13 @@ def test_container_adapter_uses_isolated_runtime_without_premature_production_cl
 
     monkeypatch.setattr("app.external_adapter.ContainerStrategySessionV1.decide", fake_decide)
     monkeypatch.setattr("app.external_adapter.run_policy_on_compiled_world", fake_run)
+    recorded: list[StrategyResponseRecordV1] = []
     row = execute_registered_strategy(
         strategy,
         build_demo_world(42),
         source_world_hash="world-hash",
         scenario_pack_id="scenario-pack-test",
+        response_recorder=recorded.append,
     )
     assert seen["observation"]["schema_version"] == "1.0"
     assert seen["action"]["action_type"] == "hold"
@@ -320,7 +325,8 @@ def test_container_adapter_uses_isolated_runtime_without_premature_production_cl
     assert row["adapter_runtime"]["execution_boundary"] == "isolated_container_jsonl"
     assert row["adapter_runtime"]["network_access"] is False
     assert row["adapter_runtime"]["production_eligible"] is False
-    assert "durable response recording" in row["adapter_runtime"]["production_blockers"][0]
+    assert "crash recovery" in row["adapter_runtime"]["production_blockers"][0]
+    assert recorded[0].action["action_type"] == "hold"
 
 
 def test_http_adapter_reject_action_policy_holds_on_protocol_error(monkeypatch) -> None:

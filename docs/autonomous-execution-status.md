@@ -6,13 +6,13 @@ Build a sealed, procedurally generated market-evaluation platform that measures 
 
 ## Current milestone
 
-M7 — historical calibration boundary.
+M8 — isolated strategy runtime hardening.
 
-- Current branch: `codex/m7-calibration-boundary`
+- Current branch: `codex/m8-durable-transcript`
 - Current PR: not yet opened
-- Clean-main baseline SHA: `3f1bb0d`
+- Clean-main baseline SHA: `a429def` (PR #26)
 - Latest substantive Greptile-reviewed SHA: `0fda71eb2c8832b61e30a5a1a3f690be677bd7c1`
-- Latest self-reviewed SHA: `3f1bb0d` (M6 merge; M7 work is uncommitted)
+- Latest self-reviewed SHA: `a429def`; Greptile is unavailable because trial credits are exhausted.
 
 ## Completed evidence
 
@@ -33,12 +33,14 @@ M7 — historical calibration boundary.
 - M6 implementation has local evidence: canonical development, sealed-primary, and adaptive-diagnostic envelopes; Arena and Stress Lab legacy outputs label themselves as development fixtures; Market Fuzzer labels strategy-aware failure searches as adaptive diagnostics; governed report exports retain the evaluation scope and evidence digest.
 - M6 local validation passed: focused evidence/Arena/Product/registry tests, full `make verify`, clean browser E2E, static analysis, and `DOCKER_DEFAULT_PLATFORM=linux/amd64 make docker-smoke`.
 - M6 merged as PR #22 at `3f1bb0d`; two latest-head GitHub verification runs passed (7m17s and 7m36s), two Docker smokes passed (36s and 41s), and no inline review threads remained.
+- M7 merged as PR #23 at `78f66ee`; typed calibration manifests, source-resolution claim boundaries, temporal partitions, and generated-world similarity diagnostics are on `main`. No raw Portfolio Engine data, `.env`, or credentials were read.
+- M8 HTTP fail-closed enforcement merged as PR #24 at `cf5d189`; legacy callbacks require explicit local opt-in.
+- M8 digest-pinned no-egress container session merged as PR #25 at `babf674` and registered-strategy integration merged as PR #26 at `a429def`; both latest-head GitHub verification and Docker checks passed with zero unresolved GitHub review threads.
 
 ## Current work and next executable action
 
-- Add typed source-resolution manifests, explicit calibration claims, and non-overlapping holdout evidence without reading raw Portfolio Engine data.
-- Generated-world similarity remains a transient diagnostic against copying, not a novelty guarantee or hidden-evaluation source.
-- Next executable action: self-review the M7 manifest and similarity implementation, run full verification, and open a focused PR.
+- Add a durable, idempotent SQLite response journal before container actions reach matching; fail closed if it is unavailable or conflicts.
+- Next executable action: run full verification, self-review the durable-transcript diff, open a focused PR, and merge only after latest-head checks pass.
 
 ## Unresolved findings and blockers
 
@@ -58,8 +60,9 @@ M7 — historical calibration boundary.
 | M4 — generator ensemble | merged and clean-main verified |
 | M5 — sealed evaluation protocol | merged and clean-main verified |
 | M6 — shared evaluation evidence integration | merged and clean-main verified |
-| M7 — historical calibration boundary | in progress |
-| M8–M10 | pending |
+| M7 — historical calibration boundary | merged and clean-main verified |
+| M8 — strategy runtime isolation | in progress |
+| M9–M10 | pending |
 
 ## Claims currently permitted
 
@@ -67,11 +70,12 @@ M7 — historical calibration boundary.
 - Bounded strategy-stress workflows, role-scoped release views, and documented simulator mechanics where covered by tests.
 - M0A decision evidence is a deterministic demo fixture, not commercial validation.
 - M4 generator paths are interpretable synthetic event streams with explicit assumptions, not copied historical data or order-level calibration evidence.
+- M7 calibration manifests declare source-resolution limits and generated-world similarity diagnostics as evidence against copying, not a novelty guarantee.
 
 ## Claims currently prohibited
 
 - Unbiased or impossible-to-memorize evaluation.
 - Live profitability, universal market realism, best execution, production readiness, or all-asset-class coverage.
 - Order-level calibration, queue-position realism, cancellation behavior, or fill probability inferred solely from OHLCV data.
-- A customer-supplied strategy has not yet been executed in an isolated no-network runner; M5 only establishes the sealed campaign and observation boundary. M8 must enforce production runtime isolation.
+- Production readiness for customer-supplied strategies. The isolated container session remains ineligible until deterministic crash recovery is implemented and tested.
 - The existing Arena benchmark matrix uses declared fixed seeds and variants; it is development-fixture evidence, not sealed primary evaluation.

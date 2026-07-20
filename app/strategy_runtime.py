@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -39,6 +40,7 @@ class ContainerStrategyArtifactV1:
 @dataclass(frozen=True, slots=True)
 class StrategyResponseRecordV1:
     idempotency_key: str
+    artifact_digest: str
     request_digest: str
     response_digest: str
     action: dict[str, Any]
@@ -47,8 +49,14 @@ class StrategyResponseRecordV1:
 class ContainerStrategySessionV1:
     """Execute one bounded decision without importing or networking customer code."""
 
-    def __init__(self, artifact: ContainerStrategyArtifactV1) -> None:
+    def __init__(
+        self,
+        artifact: ContainerStrategyArtifactV1,
+        *,
+        response_recorder: Callable[[StrategyResponseRecordV1], object] | None = None,
+    ) -> None:
         self.artifact = artifact
+        self.response_recorder = response_recorder
 
     def decide(self, observation: dict[str, Any]) -> StrategyResponseRecordV1:
         public = StrategyObservationV1.model_validate(observation).model_dump(mode="json")
@@ -98,9 +106,14 @@ class ContainerStrategySessionV1:
             action = StrategyActionV1.model_validate(json.loads(lines[0])).model_dump(mode="json")
         except (json.JSONDecodeError, ValueError) as error:
             raise RuntimeError("isolated strategy emitted an invalid action") from error
-        return StrategyResponseRecordV1(
+        record = StrategyResponseRecordV1(
             idempotency_key=_digest({"artifact": self.artifact.artifact_digest, "request": request_digest}),
+            artifact_digest=self.artifact.artifact_digest,
             request_digest=request_digest,
             response_digest=_digest(action),
             action=action,
         )
+        if self.response_recorder is None:
+            raise RuntimeError("isolated strategy response recorder is required before order admission")
+        self.response_recorder(record)
+        return record
