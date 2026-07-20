@@ -1,4 +1,5 @@
 from app.evaluation.decision_v1 import PairedOutcomeV1, paired_decision_evidence
+from app.evaluation.sealed_v1 import PrimaryEvaluationResultV1, PrimaryWorldMetricV1, PrimaryWorldResultV1
 
 
 def _outcomes() -> list[PairedOutcomeV1]:
@@ -26,3 +27,22 @@ def test_paired_evidence_refuses_small_samples_and_duplicate_blocks() -> None:
         assert "unique block" in str(error)
     else:
         raise AssertionError("duplicate paired blocks must fail")
+
+
+def test_sealed_metric_comparison_pairs_only_matching_opaque_receipts() -> None:
+    worlds = tuple(PrimaryWorldResultV1(f"{index:064x}", 1, "a" * 64) for index in range(8))
+    candidate = PrimaryEvaluationResultV1(
+        "c" * 64,
+        "a" * 64,
+        worlds,
+        tuple(PrimaryWorldMetricV1(world.world_receipt, "cost", 10.0) for world in worlds),
+    )
+    baseline = PrimaryEvaluationResultV1(
+        "c" * 64,
+        "b" * 64,
+        worlds,
+        tuple(PrimaryWorldMetricV1(world.world_receipt, "cost", 1.0) for world in worlds),
+    )
+    from app.evaluation.decision_v1 import sealed_metric_decision_evidence
+
+    assert sealed_metric_decision_evidence("cost", candidate, baseline, bootstrap_draws=100).sample_size == 8
