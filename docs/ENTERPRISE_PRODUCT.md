@@ -45,6 +45,15 @@ synchronous API operation; durable asynchronous job orchestration and recovery
 remain product-appliance work, so this endpoint is not an operational scale
 claim.
 
+To queue a frozen campaign, call
+`POST /api/enterprise/sealed-campaigns/{campaign_id}/jobs`. The appliance worker
+then runs `python scripts/run_sealed_campaign_worker.py {job_id}` in a separate
+process. Claims are atomic and time-leased; a worker crash leaves only durable
+queued/running/failed state, and an expired lease may be reclaimed. The worker
+does not disclose campaign-private seed material or policy values in its status.
+The SQLite appliance uses WAL with full synchronous commits and must reside on a
+local filesystem; network filesystems are not a supported deployment target.
+
 ## Product roadmap
 
 1. World Registry: worlds, versions, calibration references, and provenance.

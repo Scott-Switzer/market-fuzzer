@@ -62,6 +62,11 @@ class ArenaStore:
         connection = sqlite3.connect(self.path, timeout=30)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        # The appliance supports concurrent API reads and one durable worker on
+        # a local filesystem. WAL must not be placed on a network filesystem.
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("PRAGMA synchronous = FULL")
+        connection.execute("PRAGMA busy_timeout = 30000")
         try:
             yield connection
             connection.commit()
@@ -217,6 +222,15 @@ class ArenaStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_sealed_campaigns_strategy
                     ON sealed_campaigns(strategy_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS sealed_campaign_jobs (
+                    job_id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL, attempt INTEGER NOT NULL,
+                    lease_expires_at TEXT, error TEXT, created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    FOREIGN KEY(campaign_id) REFERENCES sealed_campaigns(campaign_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_sealed_campaign_jobs_claim
+                    ON sealed_campaign_jobs(status, lease_expires_at, created_at);
                 CREATE TABLE IF NOT EXISTS stress_experiments (
                     experiment_id TEXT PRIMARY KEY, name TEXT NOT NULL, scenario_pack_id TEXT NOT NULL,
                     strategy_ids_json TEXT NOT NULL, seeds_json TEXT NOT NULL, status TEXT NOT NULL,
@@ -1553,6 +1567,89 @@ class ArenaStore:
                 occurred_at=now,
             )
         return self.sealed_campaign(campaign_id)
+
+    def create_sealed_campaign_job(self, job_id: str, campaign_id: str, actor: str) -> dict[str, Any]:
+        now = utc_now()
+        with self.connection() as connection:
+            if (
+                connection.execute(
+                    "SELECT 1 FROM sealed_campaigns WHERE campaign_id = ?", (campaign_id,)
+                ).fetchone()
+                is None
+            ):
+                raise KeyError(campaign_id)
+            connection.execute(
+                """INSERT INTO sealed_campaign_jobs
+                VALUES (?, ?, 'queued', 0, NULL, NULL, ?, ?, ?)""",
+                (job_id, campaign_id, actor, now, now),
+            )
+            self._audit_in_transaction(
+                connection,
+                None,
+                actor,
+                "sealed_campaign_job_queued",
+                {"job_id": job_id, "campaign_id": campaign_id},
+                occurred_at=now,
+            )
+        return self.sealed_campaign_job(job_id)
+
+    def _sealed_campaign_job_value(self, row: sqlite3.Row) -> dict[str, Any]:
+        return dict(row)
+
+    def sealed_campaign_job(self, job_id: str) -> dict[str, Any]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM sealed_campaign_jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(job_id)
+        return self._sealed_campaign_job_value(row)
+
+    def sealed_campaign_jobs(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM sealed_campaign_jobs ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [self._sealed_campaign_job_value(row) for row in rows]
+
+    def claim_sealed_campaign_job(self, job_id: str, *, lease_expires_at: str) -> dict[str, Any] | None:
+        """Atomically claim queued, failed, or expired work without holding a DB lock during evaluation."""
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            changed = connection.execute(
+                """UPDATE sealed_campaign_jobs
+                SET status = 'running', attempt = attempt + 1, lease_expires_at = ?, error = NULL, updated_at = ?
+                WHERE job_id = ? AND (status IN ('queued', 'failed') OR (status = 'running' AND lease_expires_at <= ?))""",
+                (lease_expires_at, now, job_id, now),
+            ).rowcount
+            if changed:
+                row = connection.execute(
+                    "SELECT * FROM sealed_campaign_jobs WHERE job_id = ?", (job_id,)
+                ).fetchone()
+                assert row is not None
+                return self._sealed_campaign_job_value(row)
+            exists = connection.execute(
+                "SELECT 1 FROM sealed_campaign_jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+        if exists is None:
+            raise KeyError(job_id)
+        return None
+
+    def finish_sealed_campaign_job(
+        self, job_id: str, *, status: str, error: str | None = None
+    ) -> dict[str, Any]:
+        if status not in {"completed", "failed"}:
+            raise ValueError("sealed campaign job must finish as completed or failed")
+        with self.connection() as connection:
+            changed = connection.execute(
+                """UPDATE sealed_campaign_jobs SET status = ?, lease_expires_at = NULL, error = ?, updated_at = ?
+                WHERE job_id = ? AND status = 'running'""",
+                (status, error, utc_now(), job_id),
+            ).rowcount
+        if changed != 1:
+            raise ValueError("sealed campaign job is not running")
+        return self.sealed_campaign_job(job_id)
 
     def save_stress_experiment(
         self, experiment_id: str, payload: dict[str, Any], actor: str, result: dict[str, Any]

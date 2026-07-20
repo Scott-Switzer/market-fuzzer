@@ -6,11 +6,11 @@ Build a sealed, procedurally generated market-evaluation platform that measures 
 
 ## Current milestone
 
-M8 — sealed campaign API integration.
+M10 — durable sealed campaign worker.
 
-- Current branch: `codex/m6-sealed-campaign-api`
+- Current branch: `codex/m10-sealed-campaign-jobs`
 - Current PR: not yet opened
-- Clean-main baseline SHA: `d432a00` (PR #39)
+- Clean-main baseline SHA: `2c05eda` (PR #40)
 - Latest substantive Greptile-reviewed SHA: `0fda71eb2c8832b61e30a5a1a3f690be677bd7c1`
 - Latest self-reviewed SHA: `814c92e7f08696f2c6b890b738ef5ad6f5848b06`; Greptile is unavailable because trial credits are exhausted.
 
@@ -51,8 +51,9 @@ M8 — sealed campaign API integration.
 
 ## Current work and next executable action
 
-- Sealed campaign lifecycle endpoints are implemented locally: prepare, public read, freeze, finalization, and post-finalization reveal delegate only to the evaluator-owned service. Focused API tests prove public reads redact hidden ranges and seed material and that reveal fails before finalization. `make verify` (including browser E2E), static analysis, and the emulated Docker smoke passed locally.
-- Next executable action: complete self-review, open the sealed-campaign API PR, and merge only after latest-head checks pass.
+- PR #40 merged at `2c05eda`; latest-head GitHub tests and Docker checks passed, followed by clean-main `make verify`.
+- Durable sealed-campaign jobs now have an evaluator-owned external worker, atomic SQLite lease claims, expired-lease recovery, and public-safe queue APIs. Focused worker, registry, and persistence tests pass.
+- Next executable action: complete full verification and Docker smoke, self-review, publish the worker milestone, and merge only after latest-head checks pass.
 
 ## Unresolved findings and blockers
 

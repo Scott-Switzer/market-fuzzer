@@ -812,6 +812,35 @@ def enterprise_reveal_sealed_campaign(campaign_id: str) -> dict[str, Any]:
         raise HTTPException(409, str(exc)) from exc
 
 
+@app.post("/api/enterprise/sealed-campaigns/{campaign_id}/jobs")
+def enterprise_enqueue_sealed_campaign(campaign_id: str, request: Request) -> dict[str, Any]:
+    store = _execution_store()
+    try:
+        campaign = store.sealed_campaign(campaign_id)
+        if campaign["state"] != "frozen":
+            raise HTTPException(409, "sealed campaign must be frozen before it can be queued")
+        return store.create_sealed_campaign_job(
+            new_registry_id("sealed-job"), campaign_id, _enterprise_actor(request)
+        )
+    except KeyError as exc:
+        raise HTTPException(404, "sealed campaign not found") from exc
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(409, "sealed campaign already has a durable evaluation job") from exc
+
+
+@app.get("/api/enterprise/sealed-campaign-jobs/{job_id}")
+def enterprise_sealed_campaign_job(job_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().sealed_campaign_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(404, "sealed campaign job not found") from exc
+
+
+@app.get("/api/enterprise/sealed-campaign-jobs")
+def enterprise_sealed_campaign_jobs(limit: int = Query(50, ge=1, le=200)) -> dict[str, Any]:
+    return {"jobs": _execution_store().sealed_campaign_jobs(limit=limit), "limit": limit}
+
+
 @app.post("/api/enterprise/experiments")
 def enterprise_run_experiment(payload: StressExperimentCreate, request: Request) -> dict[str, Any]:
     actor = _enterprise_actor(request)
