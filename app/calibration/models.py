@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -8,6 +9,109 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class CalibrationModel(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+
+class DataResolutionV1(StrEnum):
+    """Maximum source resolution; claims may only use this or lower-resolution evidence."""
+
+    OHLCV = "ohlcv"
+    TRADES = "trades"
+    BBO = "bbo"
+    MBP = "mbp"
+    MBO = "mbo"
+    FUNDAMENTALS = "fundamentals"
+    MACRO = "macro"
+    NEWS_EVENTS = "news_events"
+
+
+_SUPPORTED_CALIBRATION_PROPERTIES: dict[DataResolutionV1, tuple[str, ...]] = {
+    DataResolutionV1.OHLCV: (
+        "return_distribution",
+        "volatility_regimes",
+        "volume_scale",
+        "intraday_seasonality",
+    ),
+    DataResolutionV1.TRADES: (
+        "return_distribution",
+        "volatility_regimes",
+        "trade_arrival_rate",
+        "trade_size_distribution",
+        "short_horizon_price_response",
+    ),
+    DataResolutionV1.BBO: (
+        "return_distribution",
+        "volatility_regimes",
+        "quoted_spread",
+        "top_of_book_depth",
+        "short_horizon_price_response",
+    ),
+    DataResolutionV1.MBP: (
+        "quoted_spread",
+        "displayed_depth",
+        "book_imbalance",
+        "depth_dynamics",
+        "short_horizon_price_response",
+    ),
+    DataResolutionV1.MBO: (
+        "quoted_spread",
+        "displayed_depth",
+        "order_arrival_rate",
+        "cancellation_behavior",
+        "queue_dynamics",
+        "short_horizon_price_response",
+    ),
+    DataResolutionV1.FUNDAMENTALS: ("cross_sectional_characteristics", "event_regimes"),
+    DataResolutionV1.MACRO: ("macro_regimes", "cross_asset_regimes"),
+    DataResolutionV1.NEWS_EVENTS: ("event_regimes", "event_time_shocks"),
+}
+
+_PROHIBITED_MICROSTRUCTURE_CLAIMS = (
+    "queue_position",
+    "fill_probability",
+    "cancellation_behavior",
+)
+
+
+class CalibrationDataManifestV1(CalibrationModel):
+    """Rights and resolution boundary for a transient historical calibration input."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    source_id: str = Field(min_length=3, max_length=160)
+    resolution: DataResolutionV1
+    source_checksum: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    rights_basis: str = Field(min_length=3, max_length=500)
+    source_row_count: int = Field(ge=0)
+    calibration_start: datetime
+    calibration_end: datetime
+    heldout_start: datetime | None = None
+    heldout_end: datetime | None = None
+    raw_rows_persisted: Literal[False] = False
+    supported_properties: tuple[str, ...] = ()
+    prohibited_claims: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def resolution_and_time_boundaries(self) -> CalibrationDataManifestV1:
+        if self.calibration_end < self.calibration_start:
+            raise ValueError("calibration interval must be chronological")
+        if (self.heldout_start is None) != (self.heldout_end is None):
+            raise ValueError("heldout interval requires both start and end")
+        if self.heldout_start is not None and self.heldout_end is not None:
+            if self.heldout_end < self.heldout_start:
+                raise ValueError("heldout interval must be chronological")
+            if self.calibration_end >= self.heldout_start:
+                raise ValueError("calibration and heldout intervals must not overlap")
+        allowed = set(_SUPPORTED_CALIBRATION_PROPERTIES[self.resolution])
+        if not self.supported_properties or not set(self.supported_properties).issubset(allowed):
+            raise ValueError("supported calibration properties exceed source resolution")
+        if self.resolution in {DataResolutionV1.OHLCV, DataResolutionV1.TRADES, DataResolutionV1.BBO}:
+            if not set(_PROHIBITED_MICROSTRUCTURE_CLAIMS).issubset(self.prohibited_claims):
+                raise ValueError("sub-order-level data must prohibit queue, fill, and cancellation claims")
+        return self
+
+
+def supported_properties_for_resolution(resolution: DataResolutionV1) -> tuple[str, ...]:
+    """Expose the conservative capability matrix without allowing callers to mutate it."""
+    return _SUPPORTED_CALIBRATION_PROPERTIES[resolution]
 
 
 class MetricEstimate(CalibrationModel):
@@ -63,6 +167,7 @@ class CalibrationPackV1(CalibrationModel):
     session: str = Field(min_length=1, max_length=80)
     canonical_columns: tuple[str, ...]
     raw_rows_retained: Literal[False] = False
+    data_manifest: CalibrationDataManifestV1 | None = None
     split_fractions: tuple[float, float, float] = (0.6, 0.2, 0.2)
     windows: tuple[AggregateWindow, AggregateWindow, AggregateWindow]
     objectives: tuple[CalibrationObjective, ...]

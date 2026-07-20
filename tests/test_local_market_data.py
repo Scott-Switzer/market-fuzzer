@@ -25,4 +25,11 @@ def test_local_ohlcv_adapter_builds_explicit_proxy_pack(tmp_path: Path) -> None:
     pack = compile_local_ohlcv_parquet(source, security_id=7, pack_id="local-test-v1")
     assert pack.source_kind == "local_ohlcv_proxy"
     assert pack.window("train").row_count == 21
+    assert pack.data_manifest is not None
+    assert pack.data_manifest.resolution == "ohlcv"
+    assert set(pack.data_manifest.prohibited_claims) >= {
+        "queue_position",
+        "fill_probability",
+        "cancellation_behavior",
+    }
     assert any("OHLCV-derived proxies" in note for note in pack.notes)
