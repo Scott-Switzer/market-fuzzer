@@ -1,3 +1,4 @@
+import importlib
 import json
 
 import pytest
@@ -7,6 +8,135 @@ from app.api.app import app
 from app.calibration import build_demo_calibration_pack
 from app.execution_store import ArenaStore
 from app.governance import build_enterprise_validation_report
+
+app_module = importlib.import_module("app.api.app")
+
+
+def test_sealed_campaign_api_redacts_private_material_until_post_finalization(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("ARENA_TEST_AUTH", "1")
+    calls: list[tuple[str, str]] = []
+
+    class FakeService:
+        def prepare(self, **kwargs):
+            calls.append(("prepare", kwargs["strategy_id"]))
+            return {
+                "campaign_id": kwargs["campaign_id"],
+                "state": "prepared",
+                "public_document": {"secret_seed_commitment": "a" * 64},
+            }
+
+        def freeze(self, campaign_id, *, actor):
+            calls.append(("freeze", campaign_id))
+            return {"campaign_id": campaign_id, "state": "frozen"}
+
+        def finalize(self, campaign_id, *, actor):
+            calls.append(("finalize", campaign_id))
+            return {
+                "campaign_id": campaign_id,
+                "state": "finalized",
+                "result": {"result_namespace": "sealed_primary_v1"},
+            }
+
+        def reveal(self, campaign_id):
+            calls.append(("reveal", campaign_id))
+            return {
+                "secret_seed_material_hex": "beef",
+                "policy_preimage": {"same_family_ids": ["heterogeneous_agent_v1"]},
+            }
+
+    monkeypatch.setattr(app_module, "_sealed_campaign_service", lambda: FakeService())
+    client = TestClient(app)
+    created = client.post(
+        "/api/enterprise/sealed-campaigns",
+        json={
+            "strategy_id": "strategy-v2",
+            "same_family_ids": ["heterogeneous_agent_v1"],
+            "holdout_family_ids": ["regime_switching_point_process_v1"],
+            "worlds_per_family": 1,
+            "hidden_parameter_ranges": [
+                {
+                    "family_id": "heterogeneous_agent_v1",
+                    "parameter_name": "shock_move",
+                    "lower_bound": -9,
+                    "upper_bound": -2,
+                }
+            ],
+            "scoring_policy_digest": "a" * 64,
+            "instruments": ["NOVA"],
+            "steps": 8,
+        },
+    )
+    assert created.status_code == 200
+    assert "secret_seed_material_hex" not in created.text
+    campaign_id = created.json()["campaign_id"]
+    frozen = client.post(f"/api/enterprise/sealed-campaigns/{campaign_id}/freeze")
+    finalized = client.post(f"/api/enterprise/sealed-campaigns/{campaign_id}/finalize")
+    assert frozen.json()["state"] == "frozen"
+    assert finalized.json()["state"] == "finalized"
+    assert "secret_seed_material_hex" not in finalized.text
+    revealed = client.get(f"/api/enterprise/sealed-campaigns/{campaign_id}/reveal")
+    assert revealed.status_code == 200
+    assert revealed.json()["secret_seed_material_hex"] == "beef"
+    assert [kind for kind, _ in calls] == ["prepare", "freeze", "finalize", "reveal"]
+
+
+def test_sealed_campaign_prepare_api_persists_only_a_public_commitment(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("ARENA_TEST_AUTH", "1")
+    client = TestClient(app)
+    strategy = client.post(
+        "/api/enterprise/strategies",
+        json={
+            "name": "Pinned sealed strategy",
+            "description": "A digest-pinned container artifact for sealed campaign evaluation.",
+            "strategy_type": "external_adapter",
+            "external_adapter": {
+                "adapter_id": "container_jsonl_v1",
+                "adapter_version": "1.0.0",
+                "policy_id": "twap",
+                "input_observation_schema": "market_observation_v2",
+                "output_action_schema": "execution_action_v2",
+                "timeout_ms": 100,
+                "image_digest": "registry.example/strategy@sha256:" + "d" * 64,
+                "command": ["strategy"],
+            },
+        },
+    )
+    assert strategy.status_code == 200
+    response = client.post(
+        "/api/enterprise/sealed-campaigns",
+        json={
+            "strategy_id": strategy.json()["strategy_id"],
+            "same_family_ids": ["heterogeneous_agent_v1"],
+            "holdout_family_ids": ["regime_switching_point_process_v1"],
+            "worlds_per_family": 1,
+            "hidden_parameter_ranges": [
+                {
+                    "family_id": "heterogeneous_agent_v1",
+                    "parameter_name": "shock_move",
+                    "lower_bound": -9,
+                    "upper_bound": -2,
+                }
+            ],
+            "scoring_policy_digest": "b" * 64,
+            "instruments": ["NOVA"],
+            "steps": 8,
+        },
+    )
+    assert response.status_code == 200
+    campaign = response.json()
+    public = client.get(f"/api/enterprise/sealed-campaigns/{campaign['campaign_id']}")
+    assert public.status_code == 200
+    assert public.json()["state"] == "prepared"
+    assert public.json()["public_document"]["family_allocation"] == {
+        "same_family_world_count": 1,
+        "family_holdout_world_count": 1,
+    }
+    assert "heterogeneous_agent_v1" not in public.text
+    assert "shock_move" not in public.text
+    assert "secret_seed_material_hex" not in public.text
+    assert client.get(f"/api/enterprise/sealed-campaigns/{campaign['campaign_id']}/reveal").status_code == 409
 
 
 def test_enterprise_world_registry_persists_versioned_manifest(tmp_path, monkeypatch) -> None:
