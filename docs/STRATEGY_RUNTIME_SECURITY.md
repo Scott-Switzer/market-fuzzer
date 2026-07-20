@@ -9,5 +9,8 @@ bridge with a digest-pinned isolated session that has no default egress,
 bounded messages and resources, durable response recording before order
 admission, idempotency keys, and deterministic timeout outcomes. The response
 journal is SQLite-backed and records before the matcher receives an action.
-The runner remains ineligible for production claims until deterministic strategy
-crash recovery is implemented and tested.
+Before each decision the journal is checked by idempotency key; a persisted
+response is replayed without re-running customer code. A timeout or runner
+crash is persisted as a deterministic no-action response, so a retry cannot
+issue a different order. This runtime boundary does not make the overall
+product production-ready.

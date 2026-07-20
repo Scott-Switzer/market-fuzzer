@@ -127,6 +127,7 @@ def execute_registered_strategy(
     source_world_hash: str,
     scenario_pack_id: str,
     response_recorder: Callable[[StrategyResponseRecordV1], object] | None = None,
+    response_lookup: Callable[[str], StrategyResponseRecordV1 | None] | None = None,
 ) -> dict[str, Any]:
     """Execute one registered strategy through the bounded runtime contract."""
 
@@ -169,14 +170,16 @@ def execute_registered_strategy(
             )
             reported_policy_id = str(strategy.get("strategy_id") or policy_id)
         elif parsed.adapter_id == "container_jsonl_v1":
-            if response_recorder is None:
-                raise ValueError("container strategies require durable response recording before execution")
+            if response_recorder is None or response_lookup is None:
+                raise ValueError("container strategies require a durable response journal before execution")
             artifact = ContainerStrategyArtifactV1(
                 image_digest=str(parsed.image_digest),
                 command=tuple(parsed.command or ()),
                 timeout_ms=parsed.timeout_ms,
             )
-            session = ContainerStrategySessionV1(artifact, response_recorder=response_recorder)
+            session = ContainerStrategySessionV1(
+                artifact, response_recorder=response_recorder, response_lookup=response_lookup
+            )
 
             def execution_decider(observation: dict[str, Any]) -> dict[str, Any]:
                 return session.decide(_observation_payload(observation)).action
@@ -186,8 +189,8 @@ def execute_registered_strategy(
                     "execution_boundary": "isolated_container_jsonl",
                     "network_access": False,
                     "user_code_execution": True,
-                    "production_eligible": False,
-                    "production_blockers": ("deterministic strategy crash recovery is not implemented",),
+                    "production_eligible": True,
+                    "production_blockers": (),
                     "strategy_artifact_digest": artifact.artifact_digest,
                 }
             )

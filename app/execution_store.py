@@ -401,6 +401,15 @@ class ArenaStore:
             "created_at": row["created_at"],
         }
 
+    def find_strategy_response(self, idempotency_key: str) -> StrategyResponseRecordV1 | None:
+        try:
+            value = self.strategy_response_record(idempotency_key)
+        except KeyError:
+            return None
+        return StrategyResponseRecordV1(
+            **{key: value[key] for key in StrategyResponseRecordV1.__dataclass_fields__}
+        )
+
     @staticmethod
     def _audit_in_transaction(
         connection: sqlite3.Connection,

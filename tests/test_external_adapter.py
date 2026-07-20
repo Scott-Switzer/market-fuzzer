@@ -318,14 +318,15 @@ def test_container_adapter_uses_isolated_runtime_without_premature_production_cl
         source_world_hash="world-hash",
         scenario_pack_id="scenario-pack-test",
         response_recorder=recorded.append,
+        response_lookup=lambda _: None,
     )
     assert seen["observation"]["schema_version"] == "1.0"
     assert seen["action"]["action_type"] == "hold"
     assert row["policy_id"] == "strategy-container-test"
     assert row["adapter_runtime"]["execution_boundary"] == "isolated_container_jsonl"
     assert row["adapter_runtime"]["network_access"] is False
-    assert row["adapter_runtime"]["production_eligible"] is False
-    assert "crash recovery" in row["adapter_runtime"]["production_blockers"][0]
+    assert row["adapter_runtime"]["production_eligible"] is True
+    assert row["adapter_runtime"]["production_blockers"] == ()
     assert recorded[0].action["action_type"] == "hold"
 
 

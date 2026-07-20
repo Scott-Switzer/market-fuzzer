@@ -791,6 +791,7 @@ def enterprise_run_experiment(payload: StressExperimentCreate, request: Request)
                     source_world_hash=str(protected["world_hash"]),
                     scenario_pack_id=payload.scenario_pack_id,
                     response_recorder=store.record_strategy_response,
+                    response_lookup=store.find_strategy_response,
                 )
                 selected.append(
                     {
@@ -962,6 +963,7 @@ def enterprise_resume_experiment_job(job_id: str, request: Request) -> dict[str,
                             source_world_hash=world_hash,
                             scenario_pack_id=payload.scenario_pack_id,
                             response_recorder=store.record_strategy_response,
+                            response_lookup=store.find_strategy_response,
                         )
                         store.upsert_experiment_cell(
                             new_registry_id("cell"),
