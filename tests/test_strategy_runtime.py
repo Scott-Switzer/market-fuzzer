@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 
@@ -55,6 +56,11 @@ def test_container_session_records_response_before_returning_action(monkeypatch,
     persisted = store.strategy_response_record(response.idempotency_key)
     assert persisted["response_digest"] == response.response_digest
     assert store.record_strategy_response(response)["replayed"] is True
+
+
+def test_container_artifact_canonical_bytes_match_its_sealed_digest() -> None:
+    artifact = _artifact()
+    assert hashlib.sha256(artifact.canonical_bytes).hexdigest() == artifact.artifact_digest
 
 
 def test_container_session_fails_closed_without_a_durable_response_journal(monkeypatch) -> None:

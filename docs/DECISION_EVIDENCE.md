@@ -25,7 +25,8 @@ effect, interval, and adjusted value, and does not manufacture a scalar result
 from the weights. Duplicate receipt/metric cells are invalid evidence, not an
 opportunity for last-value-wins aggregation.
 
-This is a sealed synthetic-campaign evidence report, not a proof of live-market
-profitability. It still needs a production exchange-runner adapter that produces
-customer strategy metrics from the V2 kernel; the current callback path is an
-evaluator integration seam, not that adapter.
+This is sealed synthetic-campaign evidence, not proof of live-market
+profitability. `SealedV2WorldRunnerV1` now supplies a V2 exchange-backed metric
+path; the older callback remains a compatibility seam and cannot support an
+exchange-execution claim. Arena lifecycle integration, richer strategy commands,
+and live-market fidelity evidence remain separate work.
