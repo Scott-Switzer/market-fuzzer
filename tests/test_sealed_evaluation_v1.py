@@ -126,6 +126,27 @@ def test_hidden_parameters_change_real_generator_inputs_without_entering_primary
     assert "informed_probability" not in json.dumps(asdict(campaign.finalized_primary_result))
 
 
+def test_primary_metrics_bind_to_opaque_receipts_without_hidden_provenance() -> None:
+    evaluator = SealedCampaignEvaluatorV1()
+    campaign = evaluator.prepare_campaign(
+        policy=policy(), generator_bundle=bundle(), seed_material=SEED_MATERIAL
+    )
+    campaign = evaluator.freeze_strategy_artifact(campaign, b"strategy-v1")
+    campaign = evaluator.finalize_primary(
+        campaign,
+        instruments=("NOVA", "ORBIT"),
+        steps=4,
+        metric_evaluator=lambda observations: {"observation_count": float(len(observations))},
+    )
+    assert campaign.finalized_primary_result is not None
+    result = campaign.finalized_primary_result
+    assert len(result.metrics) == len(result.worlds)
+    assert {metric.world_receipt for metric in result.metrics} == {
+        world.world_receipt for world in result.worlds
+    }
+    assert "family_id" not in json.dumps([asdict(metric) for metric in result.metrics])
+
+
 def test_observation_projection_has_no_hidden_provenance_or_future_payload() -> None:
     evaluator, _, campaign = finalized()
     plan = evaluator._primary_world_plans(campaign)[0]

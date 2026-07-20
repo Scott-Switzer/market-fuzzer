@@ -15,6 +15,7 @@ import json
 import math
 import secrets
 import string
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from typing import Any
 
@@ -193,12 +194,26 @@ class PrimaryWorldResultV1:
 
 
 @dataclass(frozen=True, slots=True)
+class PrimaryWorldMetricV1:
+    """Post-run metric bound to an opaque receipt, never hidden world provenance."""
+
+    world_receipt: str
+    metric_name: str
+    value: float
+
+    def __post_init__(self) -> None:
+        if not _is_digest(self.world_receipt) or not self.metric_name or not math.isfinite(self.value):
+            raise SealedEvaluationError("primary metric requires opaque receipt, name, and finite value")
+
+
+@dataclass(frozen=True, slots=True)
 class PrimaryEvaluationResultV1:
     """Finalized primary-run evidence, kept distinct from adaptive diagnostics."""
 
     campaign_commitment_digest: str
     strategy_artifact_digest: str
     worlds: tuple[PrimaryWorldResultV1, ...]
+    metrics: tuple[PrimaryWorldMetricV1, ...] = ()
     result_namespace: str = "sealed_primary_v1"
 
     def __post_init__(self) -> None:
@@ -209,6 +224,9 @@ class PrimaryEvaluationResultV1:
             or not _is_digest(self.strategy_artifact_digest)
         ):
             raise SealedEvaluationError("primary results require sealed-primary evidence")
+        receipts = {world.world_receipt for world in self.worlds}
+        if any(metric.world_receipt not in receipts for metric in self.metrics):
+            raise SealedEvaluationError("primary metric references an unknown world receipt")
 
     @property
     def result_digest(self) -> str:
@@ -296,13 +314,19 @@ class SealedCampaignEvaluatorV1:
         return replace(campaign, artifact=artifact)
 
     def finalize_primary(
-        self, campaign: PreparedCampaignV1, *, instruments: tuple[str, ...], steps: int
+        self,
+        campaign: PreparedCampaignV1,
+        *,
+        instruments: tuple[str, ...],
+        steps: int,
+        metric_evaluator: Callable[[tuple[SealedObservationV1, ...]], dict[str, float]] | None = None,
     ) -> PreparedCampaignV1:
         if campaign.artifact is None:
             raise SealedEvaluationError("strategy artifact must freeze before hidden worlds are generated")
         if campaign.finalized_primary_result is not None:
             raise SealedEvaluationError("primary evaluation is already finalized")
         results: list[PrimaryWorldResultV1] = []
+        metrics: list[PrimaryWorldMetricV1] = []
         for plan in self._primary_world_plans(campaign):
             world = campaign.generator_bundle.generator_for(plan.family_id).generate(
                 seed=plan.seed,
@@ -318,8 +342,11 @@ class SealedCampaignEvaluatorV1:
                 hashlib.sha256,
             ).hexdigest()
             results.append(PrimaryWorldResultV1(receipt, len(observations), observation_digest))
+            if metric_evaluator is not None:
+                for name, value in sorted(metric_evaluator(observations).items()):
+                    metrics.append(PrimaryWorldMetricV1(receipt, name, float(value)))
         result = PrimaryEvaluationResultV1(
-            campaign.commitment.commitment_digest, campaign.artifact.digest, tuple(results)
+            campaign.commitment.commitment_digest, campaign.artifact.digest, tuple(results), tuple(metrics)
         )
         return replace(campaign, finalized_primary_result=result)
 
