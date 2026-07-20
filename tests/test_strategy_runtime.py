@@ -66,15 +66,18 @@ def test_container_session_fails_closed_without_a_durable_response_journal(monke
         ContainerStrategySessionV1(_artifact()).decide(_observation())
 
 
-def test_container_session_fails_closed_on_bad_output(monkeypatch) -> None:
+def test_container_session_journals_bad_output_as_deterministic_hold(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         "app.strategy_runtime.subprocess.run",
         lambda command, **kwargs: subprocess.CompletedProcess(command, 0, "not-json\n", ""),
     )
-    with pytest.raises(RuntimeError, match="invalid action"):
-        ContainerStrategySessionV1(
-            _artifact(), response_recorder=lambda _: None, response_lookup=lambda _: None
-        ).decide(_observation())
+    store = ArenaStore(tmp_path / "bad-output.sqlite3")
+    response = ContainerStrategySessionV1(
+        _artifact(),
+        response_recorder=store.record_strategy_response,
+        response_lookup=store.find_strategy_response,
+    ).decide(_observation())
+    assert response.action["rationale_code"] == "isolated_runner_failure"
 
 
 def test_container_session_records_failure_and_replays_without_rerunning(monkeypatch, tmp_path) -> None:

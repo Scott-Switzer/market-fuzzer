@@ -115,15 +115,17 @@ class ContainerStrategySessionV1:
                 action_type="hold", rationale_code="isolated_runner_failure"
             ).model_dump(mode="json")
             return self._record(idempotency_key, request_digest, action)
-        if len(completed.stdout.encode()) > _MAX_MESSAGE_BYTES:
-            raise RuntimeError("isolated strategy response exceeds message budget")
-        lines = [line for line in completed.stdout.splitlines() if line.strip()]
-        if len(lines) != 1:
-            raise RuntimeError("isolated strategy must emit exactly one JSONL response")
         try:
+            if len(completed.stdout.encode()) > _MAX_MESSAGE_BYTES:
+                raise ValueError("isolated strategy response exceeds message budget")
+            lines = [line for line in completed.stdout.splitlines() if line.strip()]
+            if len(lines) != 1:
+                raise ValueError("isolated strategy must emit exactly one JSONL response")
             action = StrategyActionV1.model_validate(json.loads(lines[0])).model_dump(mode="json")
-        except (json.JSONDecodeError, ValueError) as error:
-            raise RuntimeError("isolated strategy emitted an invalid action") from error
+        except (json.JSONDecodeError, ValueError):
+            action = StrategyActionV1(
+                action_type="hold", rationale_code="isolated_runner_failure"
+            ).model_dump(mode="json")
         return self._record(idempotency_key, request_digest, action)
 
     def _record(
