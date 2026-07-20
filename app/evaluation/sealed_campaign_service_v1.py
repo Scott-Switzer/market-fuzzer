@@ -16,7 +16,7 @@ from app.generators.v1 import (
     RegimeSwitchingPointProcessGeneratorV1,
 )
 from app.strategy_lab import ExternalAdapterContract
-from app.strategy_runtime import ContainerStrategyArtifactV1, ContainerStrategySessionV1
+from app.strategy_runtime import ContainerStrategyArtifactV1, ContainerStreamingStrategySessionV1
 
 from .sealed_v1 import (
     CampaignPolicyV1,
@@ -26,7 +26,7 @@ from .sealed_v1 import (
     SealedCampaignEvaluatorV1,
     SealedEvaluationError,
 )
-from .v2_runner import SealedV2WorldRunnerV1, StrategyDecisionPortV1
+from .v2_runner import IsolatedSealedV2WorldRunnerV1, StrategyDecisionPortV1
 
 
 class SealedCampaignServiceError(ValueError):
@@ -116,9 +116,12 @@ class SealedCampaignServiceV1:
         artifact = self._artifact_for_strategy(str(row["strategy_id"]))
         if artifact.artifact_digest != campaign.artifact.digest:
             raise SealedCampaignServiceError("registered strategy artifact changed after campaign freeze")
-        runner = SealedV2WorldRunnerV1(self.session_factory(artifact))
+        runner = IsolatedSealedV2WorldRunnerV1(lambda: self.session_factory(artifact))
         final = self.evaluator.finalize_primary(
-            campaign, instruments=tuple(row["instruments"]), steps=int(row["steps"]), world_runner=runner
+            campaign,
+            instruments=tuple(row["instruments"]),
+            steps=int(row["steps"]),
+            world_runner=runner,
         )
         assert final.finalized_primary_result is not None
         return self.store.finalize_sealed_campaign(
@@ -163,8 +166,10 @@ class SealedCampaignServiceV1:
                 raise SealedCampaignServiceError("persisted frozen artifact digest does not verify")
         return campaign
 
-    def _container_session(self, artifact: ContainerStrategyArtifactV1) -> ContainerStrategySessionV1:
-        return ContainerStrategySessionV1(
+    def _container_session(
+        self, artifact: ContainerStrategyArtifactV1
+    ) -> ContainerStreamingStrategySessionV1:
+        return ContainerStreamingStrategySessionV1(
             artifact,
             response_recorder=self.store.record_strategy_response,
             response_lookup=self.store.find_strategy_response,

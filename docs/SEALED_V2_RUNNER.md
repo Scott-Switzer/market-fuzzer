@@ -17,8 +17,10 @@ parameters, generator versions, and raw ledger data are not strategy-facing.
 
 To bind a container strategy, freeze
 `ContainerStrategyArtifactV1.canonical_bytes`; its SHA-256 is exactly the
-runtime artifact digest recorded by `ContainerStrategySessionV1`. The session
-must retain its durable response journal. A mismatched or malformed response is
+runtime artifact digest recorded by the isolated strategy session. The sealed
+campaign service uses one streaming no-egress JSONL container per hidden world
+and closes it after each world, including evaluator failures. The session must
+retain its durable response journal. A mismatched or malformed response is
 fail-closed and no order is admitted.
 
 ## Current scope and limits

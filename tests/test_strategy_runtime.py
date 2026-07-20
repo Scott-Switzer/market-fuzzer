@@ -1,11 +1,16 @@
 import hashlib
+import io
 import json
 import subprocess
 
 import pytest
 
 from app.execution_store import ArenaStore
-from app.strategy_runtime import ContainerStrategyArtifactV1, ContainerStrategySessionV1
+from app.strategy_runtime import (
+    ContainerStrategyArtifactV1,
+    ContainerStrategySessionV1,
+    ContainerStreamingStrategySessionV1,
+)
 
 
 def _artifact() -> ContainerStrategyArtifactV1:
@@ -174,3 +179,68 @@ def test_container_session_records_failure_and_replays_without_rerunning(monkeyp
     assert first.action["rationale_code"] == "isolated_runner_failure"
     assert second == first
     assert calls == 1
+
+
+class _StreamingProcess:
+    def __init__(self, output: str) -> None:
+        self.stdin = io.StringIO()
+        self.stdout = io.StringIO(output)
+        self.terminated = 0
+        self.killed = 0
+        self.closed_stdin = False
+
+    def poll(self):
+        return None
+
+    def terminate(self) -> None:
+        self.terminated += 1
+
+    def kill(self) -> None:
+        self.killed += 1
+
+    def wait(self, *, timeout: float) -> int:
+        return 0
+
+
+def test_streaming_session_reuses_one_no_egress_process_and_journals_each_response(
+    monkeypatch, tmp_path
+) -> None:
+    process = _StreamingProcess('{"action_type":"hold"}\n{"action_type":"hold"}\n')
+    seen: dict = {}
+    monkeypatch.setattr(
+        "app.strategy_runtime.subprocess.Popen",
+        lambda command, **kwargs: seen.update(command=command, kwargs=kwargs) or process,
+    )
+    monkeypatch.setattr("app.strategy_runtime.select.select", lambda streams, *_: (streams, [], []))
+    store = ArenaStore(tmp_path / "streaming.sqlite3")
+    session = ContainerStreamingStrategySessionV1(
+        _artifact(),
+        response_recorder=store.record_strategy_response,
+        response_lookup=store.find_strategy_response,
+    )
+    first = session.decide(_observation())
+    second = session.decide({**_observation(), "step": 2})
+    assert first.action["action_type"] == second.action["action_type"] == "hold"
+    assert "--interactive" in seen["command"]
+    assert "--pull" in seen["command"] and "never" in seen["command"]
+    assert "--network" in seen["command"] and "none" in seen["command"]
+    assert "--memory-swap" in seen["command"] and "256m" in seen["command"]
+    assert seen["kwargs"]["stderr"] is subprocess.DEVNULL
+    assert len(process.stdin.getvalue().splitlines()) == 2
+    session.close()
+    assert process.terminated == 1
+
+
+def test_streaming_session_times_out_fail_closed_and_terminates_process(monkeypatch, tmp_path) -> None:
+    process = _StreamingProcess("")
+    monkeypatch.setattr("app.strategy_runtime.subprocess.Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr("app.strategy_runtime.select.select", lambda *_: ([], [], []))
+    store = ArenaStore(tmp_path / "streaming-timeout.sqlite3")
+    response = ContainerStreamingStrategySessionV1(
+        _artifact(),
+        response_recorder=store.record_strategy_response,
+        response_lookup=store.find_strategy_response,
+    ).decide(_observation_v2())
+    assert response.action["schema_version"] == "2.0"
+    assert response.action["rationale_code"] == "isolated_runner_failure"
+    assert process.terminated == 1

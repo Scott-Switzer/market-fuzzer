@@ -41,6 +41,7 @@ from .sealed_v1 import (
     SealedObservationV1,
 )
 from .v2_runner import (
+    IsolatedSealedV2WorldRunnerV1,
     SealedV2RunnerConfigV1,
     SealedV2RunnerError,
     SealedV2WorldRunnerV1,
@@ -75,6 +76,7 @@ __all__ = [
     "SealedEvaluationError",
     "SealedObservationV1",
     "SealedV2RunnerConfigV1",
+    "IsolatedSealedV2WorldRunnerV1",
     "SealedV2RunnerError",
     "SealedV2WorldRunnerV1",
     "StrategyDecisionPortV1",
