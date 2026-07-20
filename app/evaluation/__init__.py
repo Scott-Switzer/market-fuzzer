@@ -3,9 +3,12 @@
 from .decision_v1 import (
     AdjustedDecisionEvidenceV1,
     DecisionEvidenceV1,
+    DecisionMetricPolicyV1,
     PairedOutcomeV1,
+    SealedDecisionReportV1,
     benjamini_hochberg_adjust,
     paired_decision_evidence,
+    sealed_decision_report,
     sealed_metric_decision_evidence,
 )
 from .evidence_v1 import (
@@ -36,11 +39,14 @@ __all__ = [
     "EvidenceScopeV1",
     "EvaluationEvidenceV1",
     "DecisionEvidenceV1",
+    "DecisionMetricPolicyV1",
     "AdjustedDecisionEvidenceV1",
     "PairedOutcomeV1",
     "paired_decision_evidence",
     "benjamini_hochberg_adjust",
     "sealed_metric_decision_evidence",
+    "sealed_decision_report",
+    "SealedDecisionReportV1",
     "CampaignCommitmentV1",
     "CampaignPolicyV1",
     "CampaignRevealV1",

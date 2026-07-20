@@ -214,6 +214,7 @@ class PrimaryEvaluationResultV1:
     strategy_artifact_digest: str
     worlds: tuple[PrimaryWorldResultV1, ...]
     metrics: tuple[PrimaryWorldMetricV1, ...] = ()
+    scoring_policy_digest: str | None = None
     result_namespace: str = "sealed_primary_v1"
 
     def __post_init__(self) -> None:
@@ -225,8 +226,15 @@ class PrimaryEvaluationResultV1:
         ):
             raise SealedEvaluationError("primary results require sealed-primary evidence")
         receipts = {world.world_receipt for world in self.worlds}
+        if len(receipts) != len(self.worlds):
+            raise SealedEvaluationError("primary results require unique opaque world receipts")
         if any(metric.world_receipt not in receipts for metric in self.metrics):
             raise SealedEvaluationError("primary metric references an unknown world receipt")
+        metric_keys = {(metric.world_receipt, metric.metric_name) for metric in self.metrics}
+        if len(metric_keys) != len(self.metrics):
+            raise SealedEvaluationError("primary results require one value per receipt and metric")
+        if self.scoring_policy_digest is not None and not _is_digest(self.scoring_policy_digest):
+            raise SealedEvaluationError("primary result scoring policy digest is invalid")
 
     @property
     def result_digest(self) -> str:
@@ -346,7 +354,11 @@ class SealedCampaignEvaluatorV1:
                 for name, value in sorted(metric_evaluator(observations).items()):
                     metrics.append(PrimaryWorldMetricV1(receipt, name, float(value)))
         result = PrimaryEvaluationResultV1(
-            campaign.commitment.commitment_digest, campaign.artifact.digest, tuple(results), tuple(metrics)
+            campaign.commitment.commitment_digest,
+            campaign.artifact.digest,
+            tuple(results),
+            tuple(metrics),
+            campaign.policy.scoring_policy_digest,
         )
         return replace(campaign, finalized_primary_result=result)
 

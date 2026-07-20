@@ -14,6 +14,8 @@ from app.evaluation.sealed_v1 import (
     GeneratorBundleV1,
     HiddenParameterRangeV1,
     PrimaryEvaluationResultV1,
+    PrimaryWorldMetricV1,
+    PrimaryWorldResultV1,
     SealedCampaignEvaluatorV1,
     SealedEvaluationError,
 )
@@ -145,6 +147,16 @@ def test_primary_metrics_bind_to_opaque_receipts_without_hidden_provenance() -> 
         world.world_receipt for world in result.worlds
     }
     assert "family_id" not in json.dumps([asdict(metric) for metric in result.metrics])
+    assert result.scoring_policy_digest == policy().scoring_policy_digest
+
+
+def test_primary_results_reject_duplicate_receipts_or_metric_cells() -> None:
+    world = PrimaryWorldResultV1("a" * 64, 1, "b" * 64)
+    with pytest.raises(SealedEvaluationError, match="unique opaque"):
+        PrimaryEvaluationResultV1("c" * 64, "d" * 64, (world, world))
+    metric = PrimaryWorldMetricV1(world.world_receipt, "cost", 1.0)
+    with pytest.raises(SealedEvaluationError, match="one value"):
+        PrimaryEvaluationResultV1("c" * 64, "d" * 64, (world,), (metric, metric))
 
 
 def test_observation_projection_has_no_hidden_provenance_or_future_payload() -> None:

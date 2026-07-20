@@ -35,4 +35,6 @@ kernel adapter and hidden campaign execution pass parity and leakage tests.
 
 ## Current gaps to close
 
-The current product has deterministic replay, price-time-priority evidence, protected matrices, role-scoped release, and bounded calibration. It does not yet provide a typed immutable V2 ledger, post-freeze secret campaign generation, family holdouts, isolated customer-code execution, or a multi-family sealed evaluator. Those gaps define M2 through M9; none are represented as completed capability.
+The current product has deterministic replay, price-time-priority evidence, protected matrices, role-scoped release, bounded calibration, V2 exchange primitives, post-freeze secret campaign generation, family holdouts, an initial isolated customer-code runtime, and a multi-family sealed evaluator. M9 also provides sealed paired metric evidence and policy-bound vector reporting.
+
+The remaining migration boundary is material: the V2 kernel has not yet become the execution adapter that turns isolated customer strategy responses into sealed-campaign metrics. Until that adapter passes parity and leakage tests, existing Arena matrices remain development fixtures and sealed callback metrics remain evaluator integration evidence rather than customer execution proof.
