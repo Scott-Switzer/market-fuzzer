@@ -9,7 +9,7 @@ Build a sealed, procedurally generated market-evaluation platform that measures 
 M8 — isolated strategy runtime hardening.
 
 - Current branch: `codex/m8-durable-transcript`
-- Current PR: not yet opened
+- Current PR: #27 — durable response transcript (draft; verification pending)
 - Clean-main baseline SHA: `a429def` (PR #26)
 - Latest substantive Greptile-reviewed SHA: `0fda71eb2c8832b61e30a5a1a3f690be677bd7c1`
 - Latest self-reviewed SHA: `a429def`; Greptile is unavailable because trial credits are exhausted.
