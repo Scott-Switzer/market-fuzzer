@@ -33,6 +33,7 @@ class EventKindV2(StrEnum):
     COMMAND_ACCEPTED = "command_accepted"
     ORDER_CANCELLED = "order_cancelled"
     CANCEL_REJECTED = "cancel_rejected"
+    REPLACE_REJECTED = "replace_rejected"
     ORDER_REPLACED = "order_replaced"
     TRADE_EXECUTED = "trade_executed"
     SESSION_OPENED = "session_opened"
@@ -297,19 +298,25 @@ class EventKernelV2:
         return event
 
     def admit_replace(self, command: ReplaceOrderCommandV2) -> OrderEventV2:
+        """Record transport admission before the matching service resolves the live order."""
         if command.command_id in self._command_ids:
             raise OrderRejectedError(f"duplicate command_id {command.command_id}")
         self._command_ids.add(command.command_id)
         self._event_sequence += 1
         event = OrderEventV2(
             event_id=f"evt-{self._event_sequence:020d}",
-            kind=EventKindV2.ORDER_REPLACED,
+            kind=EventKindV2.COMMAND_ACCEPTED,
             exchange_time_ns=command.exchange_time_ns,
             venue_sequence=command.venue_sequence,
             event_priority=10,
             command_id=command.command_id,
             order_id=command.order_id,
-            payload={"quantity": command.quantity, "price_ticks": command.price_ticks},
+            payload={
+                "command_type": "replace",
+                "orig_order_id": command.order_id,
+                "quantity": command.quantity,
+                "price_ticks": command.price_ticks,
+            },
         )
         self.ledger.append(event)
         return event

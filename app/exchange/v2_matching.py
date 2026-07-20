@@ -80,6 +80,17 @@ class TradeV2:
     taker_fee_cents: int
 
 
+@dataclass(frozen=True, slots=True)
+class OpenOrderSnapshotV2:
+    """Read-only resting-order view suitable for the owning strategy's observation."""
+
+    order_id: str
+    instrument_id: str
+    side: SideV2
+    remaining_quantity: int
+    limit_price_ticks: int
+
+
 class MatchingExchangeV2:
     """Single-venue cash-like CLOB with conservative reservations and settlement.
 
@@ -126,6 +137,20 @@ class MatchingExchangeV2:
         bids = self._levels(instrument_id, SideV2.BUY)
         asks = self._levels(instrument_id, SideV2.SELL)
         return (max(bids) if bids else None, min(asks) if asks else None)
+
+    def open_orders_for(self, account_id: str, instrument_id: str) -> tuple[OpenOrderSnapshotV2, ...]:
+        """Return only the caller's own resting orders, without queue position or other account data."""
+        return tuple(
+            OpenOrderSnapshotV2(
+                order.command.order_id,
+                order.command.instrument_id,
+                order.command.side,
+                order.remaining_quantity,
+                order.command.price_ticks or 0,
+            )
+            for _, order in sorted(self._orders.items())
+            if order.command.account_id == account_id and order.command.instrument_id == instrument_id
+        )
 
     def close_session(self, *, exchange_time_ns: int, venue_sequence: int) -> None:
         if self.session_state == SessionStateV2.CLOSED:
@@ -277,6 +302,20 @@ class MatchingExchangeV2:
 
     def replace(self, command: ReplaceOrderCommandV2) -> tuple[TradeV2, ...]:
         """Apply a native replace while preserving priority only for a size reduction at the same price."""
+        self._validate_replace(command)
+        self.kernel.admit_replace(command)
+        return self._replace_after_admission(command)
+
+    def replace_command(self, command: ReplaceOrderCommandV2) -> tuple[bool, tuple[TradeV2, ...]]:
+        """Process an idempotent replace request with an explicit rejection path."""
+        self.kernel.admit_replace(command)
+        try:
+            return True, self._replace_after_admission(command)
+        except OrderRejectedError as error:
+            self._command_event(command, EventKindV2.REPLACE_REJECTED, {"reason": str(error)})
+            return False, ()
+
+    def _validate_replace(self, command: ReplaceOrderCommandV2) -> None:
         order = self._orders.get(command.order_id)
         if order is None:
             raise OrderRejectedError("unknown_resting_order")
@@ -288,6 +327,10 @@ class MatchingExchangeV2:
             raise OrderRejectedError("instrument_halted")
         if command.account_id in self._killed_accounts:
             raise OrderRejectedError("kill_switch_enabled")
+
+    def _replace_after_admission(self, command: ReplaceOrderCommandV2) -> tuple[TradeV2, ...]:
+        self._validate_replace(command)
+        order = self._orders[command.order_id]
         replacement = dataclass_replace(
             order.command,
             command_id=command.command_id,
@@ -299,7 +342,6 @@ class MatchingExchangeV2:
         self._validate_risk(replacement)
         if not self._can_reserve_replacement(order, replacement):
             raise OrderRejectedError("insufficient_available_resources_for_replace")
-        self.kernel.admit_replace(command)
         same_price_reduction = (
             replacement.price_ticks == order.command.price_ticks
             and replacement.quantity <= order.remaining_quantity
@@ -308,6 +350,15 @@ class MatchingExchangeV2:
             self._release(order.command, order.remaining_quantity - replacement.quantity)
             order.command = replacement
             order.remaining_quantity = replacement.quantity
+            self._command_event(
+                command,
+                EventKindV2.ORDER_REPLACED,
+                {
+                    "quantity": replacement.quantity,
+                    "price_ticks": replacement.price_ticks,
+                    "priority_retained": True,
+                },
+            )
             self._assert_conservation()
             return ()
         self._remove_resting(order)
@@ -317,6 +368,15 @@ class MatchingExchangeV2:
         trades = self._match(incoming)
         if incoming.remaining_quantity:
             self._rest(incoming)
+        self._command_event(
+            command,
+            EventKindV2.ORDER_REPLACED,
+            {
+                "quantity": replacement.quantity,
+                "price_ticks": replacement.price_ticks,
+                "priority_retained": False,
+            },
+        )
         self._assert_conservation()
         return tuple(trades)
 
@@ -575,7 +635,10 @@ class MatchingExchangeV2:
         )
 
     def _command_event(
-        self, command: CancelOrderCommandV2, kind: EventKindV2, payload: dict[str, object]
+        self,
+        command: CancelOrderCommandV2 | ReplaceOrderCommandV2,
+        kind: EventKindV2,
+        payload: dict[str, object],
     ) -> None:
         self._sequence += 1
         self.kernel.ledger.append(

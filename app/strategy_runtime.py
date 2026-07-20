@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from app.strategy_protocol import StrategyActionV1, StrategyObservationV1
+from app.strategy_protocol import failure_hold_action, parse_strategy_action, parse_strategy_observation
 
 _MAX_MESSAGE_BYTES = 64 * 1024
 
@@ -70,7 +70,8 @@ class ContainerStrategySessionV1:
         self.response_lookup = response_lookup
 
     def decide(self, observation: dict[str, Any]) -> StrategyResponseRecordV1:
-        public = StrategyObservationV1.model_validate(observation).model_dump(mode="json")
+        parsed_observation = parse_strategy_observation(observation)
+        public = parsed_observation.model_dump(mode="json")
         request_digest = _digest(public)
         idempotency_key = _digest({"artifact": self.artifact.artifact_digest, "request": request_digest})
         if self.response_recorder is None or self.response_lookup is None:
@@ -83,7 +84,7 @@ class ContainerStrategySessionV1:
                 or recovered.idempotency_key != idempotency_key
             ):
                 raise RuntimeError("persisted strategy response conflicts with current request")
-            StrategyActionV1.model_validate(recovered.action)
+            parse_strategy_action(recovered.action)
             return recovered
         command = [
             "docker",
@@ -120,9 +121,7 @@ class ContainerStrategySessionV1:
                 env={"PATH": "/usr/bin:/bin"},
             )
         except (OSError, subprocess.SubprocessError):
-            action = StrategyActionV1(
-                action_type="hold", rationale_code="isolated_runner_failure"
-            ).model_dump(mode="json")
+            action = failure_hold_action(parsed_observation)
             return self._record(idempotency_key, request_digest, action)
         try:
             if len(completed.stdout.encode()) > _MAX_MESSAGE_BYTES:
@@ -130,11 +129,9 @@ class ContainerStrategySessionV1:
             lines = [line for line in completed.stdout.splitlines() if line.strip()]
             if len(lines) != 1:
                 raise ValueError("isolated strategy must emit exactly one JSONL response")
-            action = StrategyActionV1.model_validate(json.loads(lines[0])).model_dump(mode="json")
+            action = parse_strategy_action(json.loads(lines[0])).model_dump(mode="json")
         except (json.JSONDecodeError, ValueError):
-            action = StrategyActionV1(
-                action_type="hold", rationale_code="isolated_runner_failure"
-            ).model_dump(mode="json")
+            action = failure_hold_action(parsed_observation)
         return self._record(idempotency_key, request_digest, action)
 
     def _record(
