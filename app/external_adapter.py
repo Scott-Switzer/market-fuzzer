@@ -178,7 +178,10 @@ def execute_registered_strategy(
                     "execution_boundary": "isolated_container_jsonl",
                     "network_access": False,
                     "user_code_execution": True,
-                    "production_eligible": True,
+                    "production_eligible": False,
+                    "production_blockers": (
+                        "durable response recording before order admission is not implemented",
+                    ),
                     "strategy_artifact_digest": artifact.artifact_digest,
                 }
             )

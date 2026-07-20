@@ -1,5 +1,6 @@
 import hashlib
 import json
+from typing import Literal
 
 import pytest
 
@@ -7,6 +8,7 @@ from app.external_adapter import execute_registered_strategy
 from app.simulation import run_simulation
 from app.strategy_lab import ExternalAdapterContract
 from app.strategy_protocol import StrategyActionV1
+from app.strategy_runtime import StrategyResponseRecordV1
 from app.world import build_demo_world
 
 
@@ -258,6 +260,69 @@ def test_http_adapter_rejects_oversized_response(monkeypatch) -> None:
         )
 
 
+def test_container_adapter_uses_isolated_runtime_without_premature_production_claim(monkeypatch) -> None:
+    contract = ExternalAdapterContract(
+        adapter_id="container_jsonl_v1",
+        adapter_version="1.0.0",
+        policy_id="guarded_pov",
+        input_observation_schema="market_observation_v1",
+        output_action_schema="execution_action_v1",
+        timeout_ms=250,
+        image_digest="registry.example/strategy@sha256:" + "a" * 64,
+        command=("/runner",),
+    ).model_dump(mode="json")
+    strategy = {
+        "strategy_id": "strategy-container-test",
+        "strategy_type": "external_adapter",
+        "external_adapter": contract,
+        "adapter_hash": hashlib.sha256(
+            json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    }
+    seen: dict = {}
+
+    def fake_decide(_, observation: dict) -> StrategyResponseRecordV1:
+        seen["observation"] = observation
+        action = StrategyActionV1(action_type="hold").model_dump(mode="json")
+        return StrategyResponseRecordV1("key", "request", "response", action)
+
+    def fake_run(policy_id, world, **kwargs):
+        seen["action"] = kwargs["execution_decider"](
+            {
+                "session_id": "world:execution-agent",
+                "step": 3,
+                "symbol": "NOVA",
+                "side": "buy",
+                "mid_ticks": 100,
+                "best_bid_ticks": 99,
+                "best_ask_ticks": 101,
+                "spread_bps": 200.0,
+                "observed_volume": 120,
+                "inventory": 0,
+                "remaining_quantity": 100,
+                "exchange_latency_profile": "high",
+                "intervention_active": True,
+            }
+        )
+        return {"policy_id": kwargs["reported_policy_id"]}
+
+    monkeypatch.setattr("app.external_adapter.ContainerStrategySessionV1.decide", fake_decide)
+    monkeypatch.setattr("app.external_adapter.run_policy_on_compiled_world", fake_run)
+    row = execute_registered_strategy(
+        strategy,
+        build_demo_world(42),
+        source_world_hash="world-hash",
+        scenario_pack_id="scenario-pack-test",
+    )
+    assert seen["observation"]["schema_version"] == "1.0"
+    assert seen["action"]["action_type"] == "hold"
+    assert row["policy_id"] == "strategy-container-test"
+    assert row["adapter_runtime"]["execution_boundary"] == "isolated_container_jsonl"
+    assert row["adapter_runtime"]["network_access"] is False
+    assert row["adapter_runtime"]["production_eligible"] is False
+    assert "durable response recording" in row["adapter_runtime"]["production_blockers"][0]
+
+
 def test_http_adapter_reject_action_policy_holds_on_protocol_error(monkeypatch) -> None:
     contract = ExternalAdapterContract(
         adapter_id="http_json_v1",
@@ -356,7 +421,7 @@ def test_http_adapter_reaches_real_simulation_with_side_and_lot_contract(monkeyp
     seen: list[dict] = []
 
     class Response:
-        def __init__(self, side: str) -> None:
+        def __init__(self, side: Literal["buy", "sell"]) -> None:
             self.body = json.dumps(
                 StrategyActionV1(
                     action_type="market", side=side, quantity=13, rationale_code="real_simulation"
