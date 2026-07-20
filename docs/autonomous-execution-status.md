@@ -8,11 +8,11 @@ Build a sealed, procedurally generated market-evaluation platform that measures 
 
 M9 — decision evidence.
 
-- Current branch: `codex/m9-sealed-strategy-metrics`
+- Current branch: `codex/m9-v2-runner-adapter`
 - Current PR: not yet opened
-- Clean-main baseline SHA: `711d99c` (PR #33)
+- Clean-main baseline SHA: `42e8bff` (PR #34)
 - Latest substantive Greptile-reviewed SHA: `0fda71eb2c8832b61e30a5a1a3f690be677bd7c1`
-- Latest self-reviewed SHA: `711d99c`; Greptile is unavailable because trial credits are exhausted.
+- Latest self-reviewed SHA: `42e8bff`; Greptile is unavailable because trial credits are exhausted.
 
 ## Completed evidence
 
@@ -42,11 +42,12 @@ M9 — decision evidence.
 - M9 paired decision evidence merged as PR #30 at `cdccc4e`; it reports common-random-number effects, deterministic bootstrap intervals, sign evidence, family sensitivity, and insufficient-evidence outcomes.
 - M9 sealed metric binding merged as PR #31 at `d0ed609`, and sealed metric comparison merged as PR #32 at `10113ec`.
 - M9 Benjamini-Hochberg multiplicity control merged as PR #33 at `711d99c`; two latest-head GitHub verification runs passed (6m45s and 6m52s), two Docker smokes passed (38s and 45s), and no GitHub review threads remained.
+- M9 committed metric-policy and vector-report evidence merged as PR #34 at `42e8bff`; two latest-head GitHub verification runs passed (6m41s and 7m3s), two Docker smokes passed (36s each), and clean `main` verification passed.
 
 ## Current work and next executable action
 
-- Bind the precommitted metric vector and weights to the sealed campaign result, reject ambiguous duplicate metric cells, and publish a vector decision report without manufacturing a post-hoc scalar claim.
-- Next executable action: complete full verification, self-review the focused M9 decision-policy report, open a PR, and merge only after latest-head checks pass.
+- Execute hidden generated event flow through V2, bind every strategy response to its frozen artifact and durable journal before admission, and record opaque exchange-ledger evidence with sealed metric cells.
+- Next executable action: complete full verification, self-review the focused V2 runner adapter, open a PR, and merge only after latest-head checks pass.
 
 ## Unresolved findings and blockers
 
@@ -79,6 +80,7 @@ M9 — decision evidence.
 - M4 generator paths are interpretable synthetic event streams with explicit assumptions, not copied historical data or order-level calibration evidence.
 - M7 calibration manifests declare source-resolution limits and generated-world similarity diagnostics as evidence against copying, not a novelty guarantee.
 - M9 paired and multiplicity-adjusted findings are sealed synthetic-campaign evidence only; a missing or insufficient metric is not a supported discovery.
+- The V2 runner provides deterministic cash-like exchange evidence with explicit generated-liquidity assumptions, opaque ledger and response-journal digests, and no strategy access to world provenance.
 
 ## Claims currently prohibited
 
@@ -87,4 +89,4 @@ M9 — decision evidence.
 - Order-level calibration, queue-position realism, cancellation behavior, or fill probability inferred solely from OHLCV data.
 - Overall production readiness, including general multi-machine orchestration, operational incident response, and all M9–M10 evidence and appliance gates.
 - The existing Arena benchmark matrix uses declared fixed seeds and variants; it is development-fixture evidence, not sealed primary evaluation.
-- A precommitted scoring-policy digest and vector report do not yet connect customer strategy execution metrics to the V2 exchange kernel.
+- V2 runner evidence does not yet establish Arena lifecycle integration, cancellation/replace strategy protocol support, live-market execution fidelity, or production readiness.

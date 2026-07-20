@@ -120,6 +120,12 @@ class MatchingExchangeV2:
         self.accounts[account.account_id] = account
         self._risk_limits[account.account_id] = risk_limits or AccountRiskLimitsV2()
 
+    def best_quote(self, instrument_id: str) -> tuple[int | None, int | None]:
+        """Current displayed best bid/offer; never exposes queue identity or hidden provenance."""
+        bids = self._levels(instrument_id, SideV2.BUY)
+        asks = self._levels(instrument_id, SideV2.SELL)
+        return (max(bids) if bids else None, min(asks) if asks else None)
+
     def close_session(self, *, exchange_time_ns: int, venue_sequence: int) -> None:
         if self.session_state == SessionStateV2.CLOSED:
             raise ExchangeValidationError("session is already closed")

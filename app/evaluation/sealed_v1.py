@@ -17,8 +17,9 @@ import secrets
 import string
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
-from typing import Any
+from typing import Any, Protocol
 
+from app.exchange.v2 import RunManifestV2
 from app.generators.v1 import GeneratedWorldV1, WorldGeneratorV1
 
 
@@ -191,6 +192,21 @@ class PrimaryWorldResultV1:
     world_receipt: str
     observation_count: int
     observation_digest: str
+    execution_ledger_digest: str | None = None
+    strategy_response_journal_digest: str | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            not _is_digest(self.world_receipt)
+            or self.observation_count < 0
+            or not _is_digest(self.observation_digest)
+            or (self.execution_ledger_digest is not None and not _is_digest(self.execution_ledger_digest))
+            or (
+                self.strategy_response_journal_digest is not None
+                and not _is_digest(self.strategy_response_journal_digest)
+            )
+        ):
+            raise SealedEvaluationError("primary world result has invalid opaque evidence")
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,6 +220,29 @@ class PrimaryWorldMetricV1:
     def __post_init__(self) -> None:
         if not _is_digest(self.world_receipt) or not self.metric_name or not math.isfinite(self.value):
             raise SealedEvaluationError("primary metric requires opaque receipt, name, and finite value")
+
+
+@dataclass(frozen=True, slots=True)
+class PrimaryWorldExecutionV1:
+    """V2-owned execution evidence for one hidden world, with no hidden provenance."""
+
+    metrics: dict[str, float]
+    ledger_digest: str
+    response_journal_digest: str
+
+    def __post_init__(self) -> None:
+        if (
+            not _is_digest(self.ledger_digest)
+            or not _is_digest(self.response_journal_digest)
+            or any(not name or not math.isfinite(value) for name, value in self.metrics.items())
+        ):
+            raise SealedEvaluationError("primary execution requires finite metrics and a V2 ledger digest")
+
+
+class PrimaryWorldRunnerV1(Protocol):
+    """Evaluator-owned runner; strategy code never receives the generated world object."""
+
+    def run(self, world: GeneratedWorldV1, manifest: RunManifestV2) -> PrimaryWorldExecutionV1: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,11 +367,16 @@ class SealedCampaignEvaluatorV1:
         instruments: tuple[str, ...],
         steps: int,
         metric_evaluator: Callable[[tuple[SealedObservationV1, ...]], dict[str, float]] | None = None,
+        world_runner: PrimaryWorldRunnerV1 | None = None,
     ) -> PreparedCampaignV1:
         if campaign.artifact is None:
             raise SealedEvaluationError("strategy artifact must freeze before hidden worlds are generated")
         if campaign.finalized_primary_result is not None:
             raise SealedEvaluationError("primary evaluation is already finalized")
+        if metric_evaluator is not None and world_runner is not None:
+            raise SealedEvaluationError(
+                "primary evaluation accepts either a legacy metric callback or V2 world runner"
+            )
         results: list[PrimaryWorldResultV1] = []
         metrics: list[PrimaryWorldMetricV1] = []
         for plan in self._primary_world_plans(campaign):
@@ -349,8 +393,31 @@ class SealedCampaignEvaluatorV1:
                 f"world-receipt:{world.digest}".encode(),
                 hashlib.sha256,
             ).hexdigest()
-            results.append(PrimaryWorldResultV1(receipt, len(observations), observation_digest))
-            if metric_evaluator is not None:
+            execution = None
+            if world_runner is not None:
+                execution = world_runner.run(
+                    world,
+                    RunManifestV2(
+                        world.digest,
+                        campaign.artifact.digest,
+                        campaign.generator_bundle.digest,
+                        campaign.commitment.commitment_digest,
+                        hashlib.sha256(campaign._secret_seed_material).hexdigest(),
+                    ),
+                )
+            results.append(
+                PrimaryWorldResultV1(
+                    receipt,
+                    len(observations),
+                    observation_digest,
+                    execution.ledger_digest if execution is not None else None,
+                    execution.response_journal_digest if execution is not None else None,
+                )
+            )
+            if execution is not None:
+                for name, value in sorted(execution.metrics.items()):
+                    metrics.append(PrimaryWorldMetricV1(receipt, name, value))
+            elif metric_evaluator is not None:
                 for name, value in sorted(metric_evaluator(observations).items()):
                     metrics.append(PrimaryWorldMetricV1(receipt, name, float(value)))
         result = PrimaryEvaluationResultV1(

@@ -36,6 +36,15 @@ class ContainerStrategyArtifactV1:
     def artifact_digest(self) -> str:
         return _digest({"image_digest": self.image_digest, "command": self.command})
 
+    @property
+    def canonical_bytes(self) -> bytes:
+        """Exact frozen-artifact preimage required by sealed campaign registration."""
+        return json.dumps(
+            {"image_digest": self.image_digest, "command": self.command},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+
 
 @dataclass(frozen=True, slots=True)
 class StrategyResponseRecordV1:
