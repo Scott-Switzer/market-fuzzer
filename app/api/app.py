@@ -403,6 +403,10 @@ def readiness() -> dict[str, Any]:
 def sealed_campaign_ui() -> FileResponse:
     return FileResponse(ROOT / "static" / "sealed-campaign.html")
 
+@app.get("/start")
+def guided_start_ui() -> FileResponse:
+    return FileResponse(ROOT / "static" / "start.html")
+
 
 @app.get("/synthetic-market-world")
 def synthetic_market_world_landing() -> FileResponse:
