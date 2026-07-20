@@ -87,6 +87,7 @@ from app.product import (
     scenario_hash,
     stable_id,
 )
+from app.robustness_product import evaluate_sma_robustness
 from app.scenario_studio import compile_scenario_pack
 from app.schemas import WorldSpec
 from app.simulation import run_simulation
@@ -406,6 +407,26 @@ def sealed_campaign_ui() -> FileResponse:
 @app.get("/start")
 def guided_start_ui() -> FileResponse:
     return FileResponse(ROOT / "static" / "start.html")
+
+
+class SmaRobustnessRequest(BaseModel):
+    closes: list[float] = Field(min_length=80, max_length=50_000)
+    fast_window: int = Field(default=20, ge=2, le=500)
+    slow_window: int = Field(default=50, ge=3, le=1_000)
+    worlds_per_regime: int = Field(default=30, ge=5, le=250)
+
+
+@app.post("/api/robustness/sma")
+def sma_robustness(payload: SmaRobustnessRequest) -> dict[str, object]:
+    try:
+        return evaluate_sma_robustness(
+            payload.closes,
+            fast=payload.fast_window,
+            slow=payload.slow_window,
+            worlds_per_regime=payload.worlds_per_regime,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @app.get("/synthetic-market-world")
