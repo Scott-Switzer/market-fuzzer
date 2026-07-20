@@ -7,6 +7,7 @@ scoped local compatibility testing with `ARENA_ALLOW_LEGACY_HTTP_ADAPTER=1`.
 Production evaluation must fail closed for HTTP callbacks. M8 replaces this
 bridge with a digest-pinned isolated session that has no default egress,
 bounded messages and resources, durable response recording before order
-admission, idempotency keys, and deterministic crash/timeout outcomes. Until
-that runner is implemented and tested, no customer-supplied executable strategy
-is production-eligible.
+admission, idempotency keys, and deterministic timeout outcomes. The response
+journal is SQLite-backed and records before the matcher receives an action.
+The runner remains ineligible for production claims until deterministic strategy
+crash recovery is implemented and tested.

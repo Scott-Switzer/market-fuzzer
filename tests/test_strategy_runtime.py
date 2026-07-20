@@ -3,6 +3,7 @@ import subprocess
 
 import pytest
 
+from app.execution_store import ArenaStore
 from app.strategy_runtime import ContainerStrategyArtifactV1, ContainerStrategySessionV1
 
 
@@ -32,7 +33,7 @@ def _observation() -> dict:
     }
 
 
-def test_container_session_uses_no_egress_digest_pinned_limits(monkeypatch) -> None:
+def test_container_session_records_response_before_returning_action(monkeypatch, tmp_path) -> None:
     seen = {}
 
     def run(command, **kwargs):
@@ -40,12 +41,27 @@ def test_container_session_uses_no_egress_digest_pinned_limits(monkeypatch) -> N
         return subprocess.CompletedProcess(command, 0, json.dumps({"action_type": "hold"}) + "\n", "")
 
     monkeypatch.setattr("app.strategy_runtime.subprocess.run", run)
-    response = ContainerStrategySessionV1(_artifact()).decide(_observation())
+    store = ArenaStore(tmp_path / "runtime.sqlite3")
+    response = ContainerStrategySessionV1(
+        _artifact(), response_recorder=store.record_strategy_response
+    ).decide(_observation())
     assert response.action["action_type"] == "hold"
     assert "--network" in seen["command"] and "none" in seen["command"]
     assert "--read-only" in seen["command"] and "--cap-drop" in seen["command"]
     assert seen["kwargs"]["env"] == {"PATH": "/usr/bin:/bin"}
     assert len(response.idempotency_key) == len(response.response_digest) == 64
+    persisted = store.strategy_response_record(response.idempotency_key)
+    assert persisted["response_digest"] == response.response_digest
+    assert store.record_strategy_response(response)["replayed"] is True
+
+
+def test_container_session_fails_closed_without_a_durable_response_recorder(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.strategy_runtime.subprocess.run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 0, '{"action_type":"hold"}\n', ""),
+    )
+    with pytest.raises(RuntimeError, match="response recorder"):
+        ContainerStrategySessionV1(_artifact()).decide(_observation())
 
 
 def test_container_session_fails_closed_on_bad_output(monkeypatch) -> None:
