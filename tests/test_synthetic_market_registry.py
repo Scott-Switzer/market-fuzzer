@@ -139,6 +139,49 @@ def test_sealed_campaign_prepare_api_persists_only_a_public_commitment(tmp_path,
     assert client.get(f"/api/enterprise/sealed-campaigns/{campaign['campaign_id']}/reveal").status_code == 409
 
 
+def test_sealed_campaign_job_api_queues_only_frozen_campaigns(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ARENA_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("ARENA_TEST_AUTH", "1")
+    store = ArenaStore(tmp_path / "registry.sqlite3")
+    store.create_strategy(
+        "strategy-job",
+        {
+            "name": "job strategy",
+            "description": "A bounded artifact registration for job API testing.",
+            "strategy_type": "arena_policy",
+            "version_label": "1.0.0",
+            "intended_use": "strategy_research",
+        },
+        "test",
+    )
+    store.create_sealed_campaign(
+        campaign_id="campaign-job",
+        strategy_id="strategy-job",
+        public_document={"secret_seed_commitment": "a" * 64},
+        commitment_digest="b" * 64,
+        policy={"private": True},
+        generator_bundle_digest="c" * 64,
+        secret_seed_material_hex="00" * 32,
+        instruments=("NOVA",),
+        steps=1,
+        actor="test",
+    )
+    client = TestClient(app)
+    assert client.post("/api/enterprise/sealed-campaigns/campaign-job/jobs").status_code == 409
+    store.freeze_sealed_campaign(
+        "campaign-job", artifact_digest="d" * 64, artifact_byte_length=1, actor="test"
+    )
+    queued = client.post("/api/enterprise/sealed-campaigns/campaign-job/jobs")
+    assert queued.status_code == 200
+    assert queued.json()["status"] == "queued"
+    assert "secret_seed_material_hex" not in queued.text
+    assert client.post("/api/enterprise/sealed-campaigns/campaign-job/jobs").status_code == 409
+    assert (
+        client.get(f"/api/enterprise/sealed-campaign-jobs/{queued.json()['job_id']}").json()["campaign_id"]
+        == "campaign-job"
+    )
+
+
 def test_enterprise_world_registry_persists_versioned_manifest(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ARENA_DB_PATH", str(tmp_path / "registry.sqlite3"))
     monkeypatch.setenv("ARENA_TEST_AUTH", "1")
