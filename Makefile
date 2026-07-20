@@ -15,8 +15,8 @@ e2e:
 	$(PYTHON) scripts/browser_e2e.py
 
 verify:
-	$(PYTHON) -m ruff format --check app tests
-	$(PYTHON) -m ruff check app tests
+	$(PYTHON) -m ruff format --check app scripts tests
+	$(PYTHON) -m ruff check app scripts tests
 	$(PYTHON) -m mypy app
 	$(PYTHON) -m pytest
 	$(PYTHON) scripts/determinism_check.py
@@ -61,7 +61,8 @@ docker-smoke:
 	cleanup; \
 	docker compose -p $$project build --quiet; \
 	docker compose -p $$project up -d --wait --wait-timeout 90; \
-	ARENA_BASE_URL=http://127.0.0.1:$$ARENA_PORT $(PYTHON) scripts/docker_health_smoke.py
+	ARENA_BASE_URL=http://127.0.0.1:$$ARENA_PORT $(PYTHON) scripts/docker_health_smoke.py; \
+	$(PYTHON) scripts/load_smoke.py --base-url http://127.0.0.1:$$ARENA_PORT
 
 performance:
 	$(PYTHON) scripts/performance_probe.py

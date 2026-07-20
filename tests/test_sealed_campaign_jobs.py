@@ -51,6 +51,32 @@ def test_sealed_campaign_job_claim_is_atomic_and_expired_lease_recovers(tmp_path
     assert recovered is not None and recovered["attempt"] == 2
 
 
+def test_worker_discovers_oldest_job_and_emits_heartbeat(tmp_path) -> None:
+    store = ArenaStore(tmp_path / "next.sqlite3")
+    _campaign(store, "next")
+    store.create_sealed_campaign_job("job-next", "campaign-next", "creator")
+
+    class Service:
+        def finalize(self, campaign_id: str, *, actor: str) -> None:
+            assert campaign_id == "campaign-next"
+
+    result = SealedCampaignJobWorkerV1(
+        store, service_factory=lambda: Service(), worker_id="worker-test"
+    ).run_next()
+    assert result is not None and result["status"] == "completed"
+    assert store.sealed_worker_heartbeats()[0]["worker_id"] == "worker-test"
+
+
+def test_continuous_worker_does_not_starve_queued_work_behind_failed_job(tmp_path) -> None:
+    store = ArenaStore(tmp_path / "starvation.sqlite3")
+    store.create_sealed_campaign_job("job-failed", _campaign(store, "failed"), "creator")
+    future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+    store.claim_sealed_campaign_job("job-failed", lease_expires_at=future)
+    store.finish_sealed_campaign_job("job-failed", status="failed", error="terminal")
+    store.create_sealed_campaign_job("job-queued", _campaign(store, "queued"), "creator")
+    assert store.next_claimable_sealed_campaign_job_id() == "job-queued"
+
+
 def test_worker_finishes_or_records_failure_without_exposing_private_campaign_material(tmp_path) -> None:
     store = ArenaStore(tmp_path / "worker.sqlite3")
     _campaign(store)

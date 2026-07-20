@@ -1,0 +1,30 @@
+{
+  "algorithm": "hmac-sha256-v1",
+  "claim_boundary": "operator-authenticated single-appliance evidence; not a public-key attestation",
+  "evidence": {
+    "baseline_sha": "e1c4480b17fcf69c38d0b1e98408f89d4a778c3a",
+    "browser_console_errors": 0,
+    "campaign_id": "sealed-campaign-bd9de455632a4bf9",
+    "claim_boundary": "single-machine release-candidate workflow evidence; not live-market fidelity, profitability, HA, or multi-tenant isolation evidence",
+    "commitment_digest": "049e7a0f830b632b36778552af5ca5063b1514ce4167d8e5e6bfa3ac4a3575c4",
+    "commitment_reveal_verified": true,
+    "container_image": "python@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de",
+    "docker_load_smoke": {
+      "concurrency": 8,
+      "errors": 0,
+      "max_ms": 85.865,
+      "p95_ms": 67.502,
+      "requests": 100
+    },
+    "generator_bundle_digest": "bb5510721302bf89b570f2d403bcea28c6bf50b37ee2bc5559b481350f7e22d9",
+    "hidden_world_count": 3,
+    "job_status": "completed",
+    "schema_version": "rc1_clean_host_evidence_v1",
+    "strategy_artifact_digest": "14cae82073c0cc87d600e1206c23eb159c5c80cbae7f5b383242aee63978f0b5",
+    "strategy_response_count": 104,
+    "worker_attempt": 1
+  },
+  "key_id": "3226037b16fea420",
+  "schema_version": "operator_signed_evidence_v1",
+  "signature": "26f4f59dfca52dcf6cfb25d2f48ae68261fc5616497965f737c48586b21b8ccc"
+}

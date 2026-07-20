@@ -1,3 +1,4 @@
+FROM docker:27-cli AS docker-cli
 FROM python:3.12-slim
 
 ARG GIT_COMMIT_SHA=unavailable
@@ -14,6 +15,7 @@ COPY pyproject.toml README.md ./
 COPY app ./app
 COPY configs ./configs
 COPY scripts ./scripts
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 RUN pip install --no-cache-dir .
 RUN useradd --create-home --uid 10001 appuser \
     && mkdir -p /data/artifacts \
