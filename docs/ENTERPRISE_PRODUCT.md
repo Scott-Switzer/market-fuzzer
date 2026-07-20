@@ -24,6 +24,27 @@ Create a world with `POST /api/enterprise/worlds`, inspect it with
 `POST /api/enterprise/scenario-packs`. These records describe inputs only;
 deterministic application code remains authoritative for simulation outcomes.
 
+## Sealed campaign lifecycle
+
+The V2 sealed evaluator is available through one deliberate lifecycle:
+
+1. Register a digest-pinned `container_jsonl_v1` strategy with the V2
+   observation/action schemas.
+2. `POST /api/enterprise/sealed-campaigns` creates a campaign and publishes
+   only the immutable public commitment.
+3. `POST /api/enterprise/sealed-campaigns/{campaign_id}/freeze` binds the
+   exact strategy artifact before hidden-world execution.
+4. `POST /api/enterprise/sealed-campaigns/{campaign_id}/finalize` executes
+   the evaluator-owned primary campaign.
+5. `GET /api/enterprise/sealed-campaigns/{campaign_id}/reveal` is available
+   only after successful finalization and verifies the commitment preimage.
+
+Public campaign reads never disclose hidden family membership, parameter
+ranges, or secret seed material. Finalization is currently a bounded
+synchronous API operation; durable asynchronous job orchestration and recovery
+remain product-appliance work, so this endpoint is not an operational scale
+claim.
+
 ## Product roadmap
 
 1. World Registry: worlds, versions, calibration references, and provenance.

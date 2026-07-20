@@ -45,7 +45,13 @@ from app.calibration import (
 )
 from app.compiler import compile_world
 from app.decision_benchmark import build_decision_change_benchmark
-from app.evaluation import development_fixture_evidence
+from app.evaluation import (
+    CampaignPolicyV1,
+    HiddenParameterRangeV1,
+    SealedCampaignServiceError,
+    SealedCampaignServiceV1,
+    development_fixture_evidence,
+)
 from app.execution_arena import (
     CHALLENGE_ID,
     HIDDEN_VARIANTS,
@@ -202,6 +208,28 @@ class ProductRunRequest(BaseModel):
     properties: list[dict] = Field(default_factory=lambda: DEFAULT_PROPERTIES.copy(), max_length=16)
     scenario: dict = Field(default_factory=dict, max_length=32)
     mode: str = Field(default="quick", pattern="^(quick|deep)$")
+
+
+class SealedParameterRangeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    family_id: str = Field(min_length=3, max_length=100)
+    parameter_name: str = Field(min_length=1, max_length=100)
+    lower_bound: float
+    upper_bound: float
+
+
+class SealedCampaignPrepareRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    strategy_id: str = Field(min_length=3, max_length=100)
+    same_family_ids: tuple[str, ...] = Field(min_length=1, max_length=3)
+    holdout_family_ids: tuple[str, ...] = Field(min_length=1, max_length=3)
+    worlds_per_family: int = Field(ge=1, le=8)
+    hidden_parameter_ranges: tuple[SealedParameterRangeRequest, ...] = Field(default=(), max_length=16)
+    scoring_policy_digest: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
+    instruments: tuple[str, ...] = Field(min_length=1, max_length=16)
+    steps: int = Field(ge=1, le=10_000)
 
 
 class FailureAnalysisRequest(BaseModel):
@@ -715,6 +743,73 @@ def enterprise_strategy(strategy_id: str) -> dict[str, Any]:
         return _execution_store().strategy(strategy_id)
     except KeyError as exc:
         raise HTTPException(404, "strategy not found") from exc
+
+
+@app.post("/api/enterprise/sealed-campaigns")
+def enterprise_prepare_sealed_campaign(
+    payload: SealedCampaignPrepareRequest, request: Request
+) -> dict[str, Any]:
+    """Publish a public commitment while keeping seeds and hidden ranges evaluator-private."""
+    try:
+        policy = CampaignPolicyV1(
+            same_family_ids=payload.same_family_ids,
+            holdout_family_ids=payload.holdout_family_ids,
+            worlds_per_family=payload.worlds_per_family,
+            hidden_parameter_ranges=tuple(
+                HiddenParameterRangeV1(**item.model_dump()) for item in payload.hidden_parameter_ranges
+            ),
+            scoring_policy_digest=payload.scoring_policy_digest.lower(),
+        )
+        return _sealed_campaign_service().prepare(
+            campaign_id=new_registry_id("sealed-campaign"),
+            strategy_id=payload.strategy_id,
+            policy=policy,
+            instruments=payload.instruments,
+            steps=payload.steps,
+            actor=_enterprise_actor(request),
+        )
+    except KeyError as exc:
+        raise HTTPException(404, "strategy not found") from exc
+    except (SealedCampaignServiceError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.get("/api/enterprise/sealed-campaigns/{campaign_id}")
+def enterprise_sealed_campaign(campaign_id: str) -> dict[str, Any]:
+    try:
+        return _execution_store().sealed_campaign(campaign_id)
+    except KeyError as exc:
+        raise HTTPException(404, "sealed campaign not found") from exc
+
+
+@app.post("/api/enterprise/sealed-campaigns/{campaign_id}/freeze")
+def enterprise_freeze_sealed_campaign(campaign_id: str, request: Request) -> dict[str, Any]:
+    try:
+        return _sealed_campaign_service().freeze(campaign_id, actor=_enterprise_actor(request))
+    except KeyError as exc:
+        raise HTTPException(404, "sealed campaign not found") from exc
+    except SealedCampaignServiceError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/enterprise/sealed-campaigns/{campaign_id}/finalize")
+def enterprise_finalize_sealed_campaign(campaign_id: str, request: Request) -> dict[str, Any]:
+    try:
+        return _sealed_campaign_service().finalize(campaign_id, actor=_enterprise_actor(request))
+    except KeyError as exc:
+        raise HTTPException(404, "sealed campaign not found") from exc
+    except SealedCampaignServiceError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.get("/api/enterprise/sealed-campaigns/{campaign_id}/reveal")
+def enterprise_reveal_sealed_campaign(campaign_id: str) -> dict[str, Any]:
+    try:
+        return _sealed_campaign_service().reveal(campaign_id)
+    except KeyError as exc:
+        raise HTTPException(404, "sealed campaign not found") from exc
+    except SealedCampaignServiceError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.post("/api/enterprise/experiments")
@@ -2217,6 +2312,11 @@ def _cached_execution_store(resolved_path: str) -> ArenaStore:
 
 def _execution_store() -> ArenaStore:
     return _cached_execution_store(_resolved_arena_db_path())
+
+
+def _sealed_campaign_service() -> SealedCampaignServiceV1:
+    """Evaluator-only service; its private campaign view never crosses this boundary."""
+    return SealedCampaignServiceV1(_execution_store())
 
 
 def _execution_challenge_record(challenge_id: str) -> dict[str, Any]:

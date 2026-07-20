@@ -6,13 +6,13 @@ Build a sealed, procedurally generated market-evaluation platform that measures 
 
 ## Current milestone
 
-M9 — decision evidence.
+M8 — sealed campaign API integration.
 
-- Current branch: `codex/m8-streaming-strategy-session`
+- Current branch: `codex/m6-sealed-campaign-api`
 - Current PR: not yet opened
-- Clean-main baseline SHA: `7c15785` (PR #37)
+- Clean-main baseline SHA: `d432a00` (PR #39)
 - Latest substantive Greptile-reviewed SHA: `0fda71eb2c8832b61e30a5a1a3f690be677bd7c1`
-- Latest self-reviewed SHA: `2ef3383`; Greptile is unavailable because trial credits are exhausted.
+- Latest self-reviewed SHA: `814c92e7f08696f2c6b890b738ef5ad6f5848b06`; Greptile is unavailable because trial credits are exhausted.
 
 ## Completed evidence
 
@@ -47,11 +47,12 @@ M9 — decision evidence.
 - M3 typed V2 cancellation merged as PR #36 at `2ef3383`; unique cancel requests now have acknowledgement, original-order-linked completion or rejection, and deterministic ledger evidence. Two latest-head GitHub verification runs passed (6m50s and 7m31s), with Docker smokes passing in 40s and 35s; clean `main` verification passed.
 - M8 isolated strategy protocol V2 merged as PR #37 at `7c15785`; sealed V2 observations expose only strategy-owned resting orders, lifecycle actions use typed cancel/replace commands, and guessed order IDs fail before admission. Latest-head GitHub verification and Docker smoke checks passed with zero unresolved GitHub review threads; clean `main` verification passed.
 - M8 durable sealed-campaign lifecycle and resource-bound artifact freezing merged as PR #38 at `2baa4fc`; public campaign records redact seed material and hidden policy ranges, registered V2 container artifacts freeze before V2 execution, and reveal is post-finalization only. Two latest-head verification runs passed in 6m09s and 7m08s; Docker smokes passed in 44s and 35s; clean `main` verification passed.
+- M8 streaming isolated sessions merged as PR #39 at `d432a00`; every hidden world receives a fresh no-egress JSONL container while retaining streaming decisions and durable response journaling inside that world. Latest-head GitHub verification and Docker checks passed, and clean `main` verification passed.
 
 ## Current work and next executable action
 
-- Streaming sealed-session implementation is complete locally: one bounded JSONL process runs per hidden world, response records remain idempotent and durable, and the process is reset before each world to prevent cross-world strategy state.
-- Next executable action: self-review the final diff, open the streaming-session PR, and merge only after latest-head checks pass.
+- Sealed campaign lifecycle endpoints are implemented locally: prepare, public read, freeze, finalization, and post-finalization reveal delegate only to the evaluator-owned service. Focused API tests prove public reads redact hidden ranges and seed material and that reveal fails before finalization. `make verify` (including browser E2E), static analysis, and the emulated Docker smoke passed locally.
+- Next executable action: complete self-review, open the sealed-campaign API PR, and merge only after latest-head checks pass.
 
 ## Unresolved findings and blockers
 
@@ -72,7 +73,7 @@ M9 — decision evidence.
 | M5 — sealed evaluation protocol | merged and clean-main verified |
 | M6 — shared evaluation evidence integration | merged and clean-main verified |
 | M7 — historical calibration boundary | merged and clean-main verified |
-| M8 — strategy runtime isolation | V2 protocol and durable campaign lifecycle merged; bounded streaming sealed-session runtime in progress; appliance hardening remains M10 |
+| M8 — strategy runtime isolation | V2 protocol, durable campaign lifecycle, and bounded streaming sealed-session runtime merged; public API lifecycle integration in progress; appliance hardening remains M10 |
 | M9 — decision evidence | in progress |
 | M10 — product appliance | pending |
 
