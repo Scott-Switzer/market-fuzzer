@@ -16,8 +16,8 @@ class ExternalAdapterContract(BaseModel):
     adapter_id: Literal["declarative_in_process_v1", "http_json_v1", "container_jsonl_v1"]
     adapter_version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
     policy_id: Literal["twap", "aggressive_pov", "guarded_pov", "completion_first"]
-    input_observation_schema: Literal["market_observation_v1"]
-    output_action_schema: Literal["execution_action_v1"]
+    input_observation_schema: Literal["market_observation_v1", "market_observation_v2"]
+    output_action_schema: Literal["execution_action_v1", "execution_action_v2"]
     timeout_ms: int = Field(ge=1, le=1_000)
     error_policy: Literal["fail_cell", "reject_action"] = "fail_cell"
     endpoint_url: str | None = Field(default=None, max_length=500)
@@ -35,6 +35,10 @@ class ExternalAdapterContract(BaseModel):
             raise ValueError("container_jsonl_v1 adapters require image_digest and command")
         if self.adapter_id == "container_jsonl_v1" and (self.endpoint_url or self.auth_env_var):
             raise ValueError("container adapters cannot include HTTP endpoint metadata")
+        if (self.input_observation_schema.endswith("v2")) != (self.output_action_schema.endswith("v2")):
+            raise ValueError("strategy observation and action schemas must use the same protocol version")
+        if self.adapter_id != "container_jsonl_v1" and self.input_observation_schema.endswith("v2"):
+            raise ValueError("strategy protocol V2 requires the isolated container adapter")
         return self
 
 
