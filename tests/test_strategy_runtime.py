@@ -43,7 +43,9 @@ def test_container_session_records_response_before_returning_action(monkeypatch,
     monkeypatch.setattr("app.strategy_runtime.subprocess.run", run)
     store = ArenaStore(tmp_path / "runtime.sqlite3")
     response = ContainerStrategySessionV1(
-        _artifact(), response_recorder=store.record_strategy_response
+        _artifact(),
+        response_recorder=store.record_strategy_response,
+        response_lookup=store.find_strategy_response,
     ).decide(_observation())
     assert response.action["action_type"] == "hold"
     assert "--network" in seen["command"] and "none" in seen["command"]
@@ -55,19 +57,46 @@ def test_container_session_records_response_before_returning_action(monkeypatch,
     assert store.record_strategy_response(response)["replayed"] is True
 
 
-def test_container_session_fails_closed_without_a_durable_response_recorder(monkeypatch) -> None:
+def test_container_session_fails_closed_without_a_durable_response_journal(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.strategy_runtime.subprocess.run",
         lambda command, **kwargs: subprocess.CompletedProcess(command, 0, '{"action_type":"hold"}\n', ""),
     )
-    with pytest.raises(RuntimeError, match="response recorder"):
+    with pytest.raises(RuntimeError, match="response journal"):
         ContainerStrategySessionV1(_artifact()).decide(_observation())
 
 
-def test_container_session_fails_closed_on_bad_output(monkeypatch) -> None:
+def test_container_session_journals_bad_output_as_deterministic_hold(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         "app.strategy_runtime.subprocess.run",
         lambda command, **kwargs: subprocess.CompletedProcess(command, 0, "not-json\n", ""),
     )
-    with pytest.raises(RuntimeError, match="invalid action"):
-        ContainerStrategySessionV1(_artifact()).decide(_observation())
+    store = ArenaStore(tmp_path / "bad-output.sqlite3")
+    response = ContainerStrategySessionV1(
+        _artifact(),
+        response_recorder=store.record_strategy_response,
+        response_lookup=store.find_strategy_response,
+    ).decide(_observation())
+    assert response.action["rationale_code"] == "isolated_runner_failure"
+
+
+def test_container_session_records_failure_and_replays_without_rerunning(monkeypatch, tmp_path) -> None:
+    store = ArenaStore(tmp_path / "recovery.sqlite3")
+    calls = 0
+
+    def fail(command, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise subprocess.TimeoutExpired(command, 0.1)
+
+    monkeypatch.setattr("app.strategy_runtime.subprocess.run", fail)
+    session = ContainerStrategySessionV1(
+        _artifact(),
+        response_recorder=store.record_strategy_response,
+        response_lookup=store.find_strategy_response,
+    )
+    first = session.decide(_observation())
+    second = session.decide(_observation())
+    assert first.action["rationale_code"] == "isolated_runner_failure"
+    assert second == first
+    assert calls == 1

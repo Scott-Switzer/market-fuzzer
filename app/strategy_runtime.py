@@ -54,13 +54,28 @@ class ContainerStrategySessionV1:
         artifact: ContainerStrategyArtifactV1,
         *,
         response_recorder: Callable[[StrategyResponseRecordV1], object] | None = None,
+        response_lookup: Callable[[str], StrategyResponseRecordV1 | None] | None = None,
     ) -> None:
         self.artifact = artifact
         self.response_recorder = response_recorder
+        self.response_lookup = response_lookup
 
     def decide(self, observation: dict[str, Any]) -> StrategyResponseRecordV1:
         public = StrategyObservationV1.model_validate(observation).model_dump(mode="json")
         request_digest = _digest(public)
+        idempotency_key = _digest({"artifact": self.artifact.artifact_digest, "request": request_digest})
+        if self.response_recorder is None or self.response_lookup is None:
+            raise RuntimeError("isolated strategy response journal is required before order admission")
+        recovered = self.response_lookup(idempotency_key)
+        if recovered is not None:
+            if (
+                recovered.artifact_digest != self.artifact.artifact_digest
+                or recovered.request_digest != request_digest
+                or recovered.idempotency_key != idempotency_key
+            ):
+                raise RuntimeError("persisted strategy response conflicts with current request")
+            StrategyActionV1.model_validate(recovered.action)
+            return recovered
         command = [
             "docker",
             "run",
@@ -95,25 +110,34 @@ class ContainerStrategySessionV1:
                 check=True,
                 env={"PATH": "/usr/bin:/bin"},
             )
-        except (OSError, subprocess.SubprocessError) as error:
-            raise RuntimeError("isolated strategy execution failed closed") from error
-        if len(completed.stdout.encode()) > _MAX_MESSAGE_BYTES:
-            raise RuntimeError("isolated strategy response exceeds message budget")
-        lines = [line for line in completed.stdout.splitlines() if line.strip()]
-        if len(lines) != 1:
-            raise RuntimeError("isolated strategy must emit exactly one JSONL response")
+        except (OSError, subprocess.SubprocessError):
+            action = StrategyActionV1(
+                action_type="hold", rationale_code="isolated_runner_failure"
+            ).model_dump(mode="json")
+            return self._record(idempotency_key, request_digest, action)
         try:
+            if len(completed.stdout.encode()) > _MAX_MESSAGE_BYTES:
+                raise ValueError("isolated strategy response exceeds message budget")
+            lines = [line for line in completed.stdout.splitlines() if line.strip()]
+            if len(lines) != 1:
+                raise ValueError("isolated strategy must emit exactly one JSONL response")
             action = StrategyActionV1.model_validate(json.loads(lines[0])).model_dump(mode="json")
-        except (json.JSONDecodeError, ValueError) as error:
-            raise RuntimeError("isolated strategy emitted an invalid action") from error
+        except (json.JSONDecodeError, ValueError):
+            action = StrategyActionV1(
+                action_type="hold", rationale_code="isolated_runner_failure"
+            ).model_dump(mode="json")
+        return self._record(idempotency_key, request_digest, action)
+
+    def _record(
+        self, idempotency_key: str, request_digest: str, action: dict[str, Any]
+    ) -> StrategyResponseRecordV1:
         record = StrategyResponseRecordV1(
-            idempotency_key=_digest({"artifact": self.artifact.artifact_digest, "request": request_digest}),
+            idempotency_key=idempotency_key,
             artifact_digest=self.artifact.artifact_digest,
             request_digest=request_digest,
             response_digest=_digest(action),
             action=action,
         )
-        if self.response_recorder is None:
-            raise RuntimeError("isolated strategy response recorder is required before order admission")
+        assert self.response_recorder is not None
         self.response_recorder(record)
         return record

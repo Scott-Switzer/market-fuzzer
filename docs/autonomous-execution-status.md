@@ -8,9 +8,9 @@ Build a sealed, procedurally generated market-evaluation platform that measures 
 
 M8 — isolated strategy runtime hardening.
 
-- Current branch: `codex/m8-durable-transcript`
-- Current PR: #27 — durable response transcript (draft; verification pending)
-- Clean-main baseline SHA: `a429def` (PR #26)
+- Current branch: `codex/m8-crash-recovery`
+- Current PR: not yet opened
+- Clean-main baseline SHA: `80a695b` (PR #27)
 - Latest substantive Greptile-reviewed SHA: `0fda71eb2c8832b61e30a5a1a3f690be677bd7c1`
 - Latest self-reviewed SHA: `a429def`; Greptile is unavailable because trial credits are exhausted.
 
@@ -36,11 +36,12 @@ M8 — isolated strategy runtime hardening.
 - M7 merged as PR #23 at `78f66ee`; typed calibration manifests, source-resolution claim boundaries, temporal partitions, and generated-world similarity diagnostics are on `main`. No raw Portfolio Engine data, `.env`, or credentials were read.
 - M8 HTTP fail-closed enforcement merged as PR #24 at `cf5d189`; legacy callbacks require explicit local opt-in.
 - M8 digest-pinned no-egress container session merged as PR #25 at `babf674` and registered-strategy integration merged as PR #26 at `a429def`; both latest-head GitHub verification and Docker checks passed with zero unresolved GitHub review threads.
+- M8 durable response journaling merged as PR #27 at `80a695b`; full latest-head GitHub verification and Docker checks passed with zero unresolved GitHub review threads.
 
 ## Current work and next executable action
 
-- Add a durable, idempotent SQLite response journal before container actions reach matching; fail closed if it is unavailable or conflicts.
-- Next executable action: run full verification, self-review the durable-transcript diff, open a focused PR, and merge only after latest-head checks pass.
+- Add deterministic recovery: replay persisted responses without rerunning customer code and persist runner failure as a no-action response.
+- Next executable action: run full verification, self-review the crash-recovery diff, open a focused PR, and merge only after latest-head checks pass.
 
 ## Unresolved findings and blockers
 
@@ -77,5 +78,5 @@ M8 — isolated strategy runtime hardening.
 - Unbiased or impossible-to-memorize evaluation.
 - Live profitability, universal market realism, best execution, production readiness, or all-asset-class coverage.
 - Order-level calibration, queue-position realism, cancellation behavior, or fill probability inferred solely from OHLCV data.
-- Production readiness for customer-supplied strategies. The isolated container session remains ineligible until deterministic crash recovery is implemented and tested.
+- Overall production readiness, including general multi-machine orchestration, operational incident response, and all M9–M10 evidence and appliance gates.
 - The existing Arena benchmark matrix uses declared fixed seeds and variants; it is development-fixture evidence, not sealed primary evaluation.
