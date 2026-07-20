@@ -24,8 +24,9 @@ fail-closed and no order is admitted.
 ## Current scope and limits
 
 This implements a single-venue, cash-like continuous double auction with
-generated displayed liquidity. It supports current protocol actions (`hold`,
-`limit`, and collared `market`) and reports mark-to-market P&L, fills, trades,
-orders, rejections, and inventory. It does not yet expose cancellation or
-replace actions through the customer strategy protocol, connect the V2 runner
-to the Arena HTTP lifecycle, or establish live-market execution fidelity.
+generated displayed liquidity. Protocol V2 supports `hold`, submit limit or
+collared-market orders, cancel, and replace; observations expose only the
+strategy's own open orders. The runner reports mark-to-market P&L, fills,
+trades, submit/cancel/replace counts, rejections, and inventory. It does not
+yet connect the V2 runner to the Arena HTTP lifecycle or establish live-market
+execution fidelity.

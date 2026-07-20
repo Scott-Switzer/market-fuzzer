@@ -206,3 +206,20 @@ def test_replace_same_price_reduction_keeps_priority_but_increase_loses_priority
     assert exchange.replace(replace_command("sell-a", "seller-a", 100, 101, sequence=3)) == ()
     trades = exchange.submit(command("buy", "buyer", SideV2.BUY, 101, quantity=200, sequence=4))
     assert [trade.maker_order_id for trade in trades] == ["sell-b", "sell-a"]
+
+
+def test_typed_replace_commands_audit_outcomes_and_reject_unknown_orders() -> None:
+    exchange = make_exchange()
+    exchange.submit(command("resting", "seller-a", SideV2.SELL, 101, sequence=1))
+    accepted, trades = exchange.replace_command(replace_command("resting", "seller-a", 50, 101, sequence=2))
+    assert accepted is True and trades == ()
+    assert exchange.kernel.ledger.events[-2].kind == EventKindV2.COMMAND_ACCEPTED
+    event = exchange.kernel.ledger.events[-1]
+    assert event.kind == EventKindV2.ORDER_REPLACED
+    assert event.payload["priority_retained"] is True
+
+    rejected, trades = exchange.replace_command(replace_command("missing", "seller-a", 50, 101, sequence=3))
+    assert rejected is False and trades == ()
+    event = exchange.kernel.ledger.events[-1]
+    assert event.kind == EventKindV2.REPLACE_REJECTED
+    assert event.payload == {"orig_order_id": "missing", "reason": "unknown_resting_order"}

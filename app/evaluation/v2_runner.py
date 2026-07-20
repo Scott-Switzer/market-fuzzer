@@ -14,10 +14,19 @@ import math
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, cast
 
-from app.exchange.v2 import EventKernelV2, OrderCommandV2, OrderTypeV2, RunManifestV2, SideV2, TimeInForceV2
-from app.exchange.v2_matching import AccountRiskLimitsV2, AccountStateV2, MatchingExchangeV2
+from app.exchange.v2 import (
+    CancelOrderCommandV2,
+    EventKernelV2,
+    OrderCommandV2,
+    OrderTypeV2,
+    ReplaceOrderCommandV2,
+    RunManifestV2,
+    SideV2,
+    TimeInForceV2,
+)
+from app.exchange.v2_matching import AccountRiskLimitsV2, AccountStateV2, MatchingExchangeV2, TradeV2
 from app.generators.v1 import GeneratedWorldV1
-from app.strategy_protocol import StrategyActionV1, StrategyObservationV1
+from app.strategy_protocol import StrategyActionV2, StrategyObservationV2, StrategyOpenOrderV2
 from app.strategy_runtime import StrategyResponseRecordV1
 
 from .sealed_v1 import PrimaryWorldExecutionV1
@@ -117,8 +126,11 @@ class SealedV2WorldRunnerV1:
         strategy_trade_quantity = 0
         strategy_trade_count = 0
         strategy_order_count = 0
+        strategy_cancel_count = 0
+        strategy_replace_count = 0
         strategy_rejection_count = 0
         response_digests: list[str] = []
+        observed_strategy_order_ids: set[str] = set()
         events = tuple(sorted(world.events, key=lambda item: item.exchange_time_ns))
         for step, event in enumerate(events):
             initial_mark.setdefault(event.instrument_id, event.price_ticks)
@@ -154,12 +166,44 @@ class SealedV2WorldRunnerV1:
             record = self.strategy_port.decide(observation)
             action = self._verified_action(record, observation, manifest.strategy_artifact_digest)
             response_digests.append(record.response_digest)
+            observed_strategy_order_ids.update(item["order_id"] for item in observation["open_orders"])
+            before = len(exchange.kernel.ledger.events)
+            trades: tuple[TradeV2, ...] = ()
+            command_id: str | None = None
+            command: OrderCommandV2 | CancelOrderCommandV2 | ReplaceOrderCommandV2
+            if action.action_type == "submit":
+                command = self._command_from_action(action, event, step)
+                command_id = command.command_id
+                trades = exchange.submit(command)
+                strategy_order_count += 1
+            elif action.action_type == "cancel":
+                self._require_observed_order_id(action.order_id, observed_strategy_order_ids)
+                command = CancelOrderCommandV2(
+                    f"strategy-cancel-{step:020d}",
+                    action.order_id or "",
+                    strategy_account,
+                    event.exchange_time_ns,
+                    step * 10 + 5,
+                )
+                command_id = command.command_id
+                exchange.cancel_command(command)
+                strategy_cancel_count += 1
+            elif action.action_type == "replace":
+                self._require_observed_order_id(action.order_id, observed_strategy_order_ids)
+                command = ReplaceOrderCommandV2(
+                    f"strategy-replace-{step:020d}",
+                    action.order_id or "",
+                    strategy_account,
+                    event.exchange_time_ns,
+                    step * 10 + 5,
+                    action.quantity,
+                    action.limit_price_ticks or 0,
+                )
+                command_id = command.command_id
+                _, trades = exchange.replace_command(command)
+                strategy_replace_count += 1
             if action.action_type == "hold":
                 continue
-            command = self._command_from_action(action, event, step)
-            before = len(exchange.kernel.ledger.events)
-            trades = exchange.submit(command)
-            strategy_order_count += 1
             strategy_trade_quantity += sum(
                 trade.quantity
                 for trade in trades
@@ -168,12 +212,13 @@ class SealedV2WorldRunnerV1:
             strategy_trade_count += sum(
                 1 for trade in trades if strategy_account in (trade.buyer_account_id, trade.seller_account_id)
             )
-            strategy_rejection_count += sum(
-                1
-                for ledger_event in exchange.kernel.ledger.events[before:]
-                if ledger_event.kind.value == "order_rejected"
-                and ledger_event.command_id == command.command_id
-            )
+            if command_id is not None:
+                strategy_rejection_count += sum(
+                    1
+                    for ledger_event in exchange.kernel.ledger.events[before:]
+                    if ledger_event.kind.value in {"order_rejected", "cancel_rejected", "replace_rejected"}
+                    and ledger_event.command_id == command_id
+                )
         final_time = events[-1].exchange_time_ns + 1
         exchange.close_session(exchange_time_ns=final_time, venue_sequence=len(events) * 10 + 9)
         account = exchange.accounts[strategy_account]
@@ -191,6 +236,8 @@ class SealedV2WorldRunnerV1:
                 "strategy_filled_quantity": float(strategy_trade_quantity),
                 "strategy_trade_count": float(strategy_trade_count),
                 "strategy_order_count": float(strategy_order_count),
+                "strategy_cancel_count": float(strategy_cancel_count),
+                "strategy_replace_count": float(strategy_replace_count),
                 "strategy_rejection_count": float(strategy_rejection_count),
                 "absolute_inventory_quantity": float(
                     sum(abs(account.positions.get(instrument, 0)) for instrument in instruments)
@@ -214,7 +261,16 @@ class SealedV2WorldRunnerV1:
     ) -> dict[str, Any]:
         bid, ask = self._best_quote(exchange, instrument_id)
         spread_bps = 0.0 if bid is None or ask is None else (ask - bid) * 10_000 / mid_ticks
-        return StrategyObservationV1(
+        open_orders = tuple(
+            StrategyOpenOrderV2(
+                order_id=item.order_id,
+                side=item.side.value,
+                remaining_quantity=item.remaining_quantity,
+                limit_price_ticks=item.limit_price_ticks,
+            )
+            for item in exchange.open_orders_for("strategy", instrument_id)
+        )
+        return StrategyObservationV2(
             session_id=f"sealed-{manifest.campaign_commitment[:24]}",
             step=step,
             symbol=instrument_id,
@@ -228,6 +284,7 @@ class SealedV2WorldRunnerV1:
             remaining_quantity=0,
             exchange_latency_profile="normal",
             intervention_active=False,
+            open_orders=open_orders,
         ).model_dump(mode="json")
 
     @staticmethod
@@ -239,7 +296,7 @@ class SealedV2WorldRunnerV1:
         record: StrategyResponseRecordV1,
         observation: dict[str, Any],
         artifact_digest: str,
-    ) -> StrategyActionV1:
+    ) -> StrategyActionV2:
         request_digest = _digest(observation)
         expected_idempotency = _digest({"artifact": artifact_digest, "request": request_digest})
         if (
@@ -251,11 +308,18 @@ class SealedV2WorldRunnerV1:
             raise SealedV2RunnerError(
                 "strategy response record does not bind to the frozen artifact and observation"
             )
-        return StrategyActionV1.model_validate(record.action)
+        try:
+            return StrategyActionV2.model_validate(record.action)
+        except ValueError as error:
+            raise SealedV2RunnerError(
+                "sealed V2 execution requires a strategy action protocol version 2.0"
+            ) from error
 
-    def _command_from_action(self, action: StrategyActionV1, event: Any, step: int) -> OrderCommandV2:
-        side = SideV2(action.side or "buy")
-        if action.action_type == "limit":
+    def _command_from_action(self, action: StrategyActionV2, event: Any, step: int) -> OrderCommandV2:
+        if action.action_type != "submit" or action.side is None or action.order_type is None:
+            raise SealedV2RunnerError("only validated submit actions may create V2 orders")
+        side = SideV2(action.side)
+        if action.order_type == "limit":
             assert action.limit_price_ticks is not None
             price_ticks = action.limit_price_ticks
             time_in_force = TimeInForceV2.DAY
@@ -279,3 +343,10 @@ class SealedV2WorldRunnerV1:
             exchange_time_ns=event.exchange_time_ns,
             venue_sequence=step * 10 + 5,
         )
+
+    @staticmethod
+    def _require_observed_order_id(order_id: str | None, observed_order_ids: set[str]) -> None:
+        if order_id is None or order_id not in observed_order_ids:
+            raise SealedV2RunnerError(
+                "strategy lifecycle action may reference only a previously observed own order ID"
+            )

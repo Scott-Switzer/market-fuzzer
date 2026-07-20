@@ -18,7 +18,14 @@ from .v2 import (
     SideV2,
     TimeInForceV2,
 )
-from .v2_matching import AccountRiskLimitsV2, AccountStateV2, MatchingExchangeV2, SessionStateV2, TradeV2
+from .v2_matching import (
+    AccountRiskLimitsV2,
+    AccountStateV2,
+    MatchingExchangeV2,
+    OpenOrderSnapshotV2,
+    SessionStateV2,
+    TradeV2,
+)
 
 __all__ = [
     "Account",
@@ -38,6 +45,7 @@ __all__ = [
     "OrderCommandV2",
     "OrderEventV2",
     "OrderRejectedError",
+    "OpenOrderSnapshotV2",
     "OrderType",
     "OrderTypeV2",
     "ReplaceOrderCommandV2",

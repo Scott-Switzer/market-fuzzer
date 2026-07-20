@@ -34,6 +34,10 @@ def _observation() -> dict:
     }
 
 
+def _observation_v2() -> dict:
+    return {**_observation(), "schema_version": "2.0", "open_orders": []}
+
+
 def test_container_session_records_response_before_returning_action(monkeypatch, tmp_path) -> None:
     seen = {}
 
@@ -61,6 +65,40 @@ def test_container_session_records_response_before_returning_action(monkeypatch,
 def test_container_artifact_canonical_bytes_match_its_sealed_digest() -> None:
     artifact = _artifact()
     assert hashlib.sha256(artifact.canonical_bytes).hexdigest() == artifact.artifact_digest
+
+
+def test_container_session_preserves_v2_protocol_on_success_and_failure(monkeypatch, tmp_path) -> None:
+    store = ArenaStore(tmp_path / "v2.sqlite3")
+    monkeypatch.setattr(
+        "app.strategy_runtime.subprocess.run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 0, '{"schema_version":"2.0","action_type":"hold"}\n', ""
+        ),
+    )
+    response = ContainerStrategySessionV1(
+        _artifact(),
+        response_recorder=store.record_strategy_response,
+        response_lookup=store.find_strategy_response,
+    ).decide(_observation_v2())
+    assert response.action["schema_version"] == "2.0"
+    monkeypatch.setattr(
+        "app.strategy_runtime.subprocess.run", lambda *args, **kwargs: (_ for _ in ()).throw(OSError())
+    )
+    failed = ContainerStrategySessionV1(
+        _artifact(),
+        response_recorder=store.record_strategy_response,
+        response_lookup=store.find_strategy_response,
+    ).decide({**_observation_v2(), "step": 2})
+    assert failed.action == {
+        "schema_version": "2.0",
+        "action_type": "hold",
+        "rationale_code": "isolated_runner_failure",
+        "side": None,
+        "order_type": None,
+        "quantity": 0,
+        "limit_price_ticks": None,
+        "order_id": None,
+    }
 
 
 def test_container_session_fails_closed_without_a_durable_response_journal(monkeypatch) -> None:

@@ -15,7 +15,7 @@ from app.evaluation.sealed_v1 import (
 from app.evaluation.v2_runner import SealedV2RunnerError, SealedV2WorldRunnerV1
 from app.exchange.v2 import RunManifestV2
 from app.generators.v1 import HeterogeneousAgentGeneratorV1, RegimeSwitchingPointProcessGeneratorV1
-from app.strategy_protocol import StrategyActionV1
+from app.strategy_protocol import StrategyActionV2
 from app.strategy_runtime import StrategyResponseRecordV1
 
 
@@ -30,8 +30,9 @@ class _ReactivePort:
 
     def decide(self, observation: dict) -> StrategyResponseRecordV1:
         self.observations.append(observation)
-        action = StrategyActionV1(
-            action_type="market",
+        action = StrategyActionV2(
+            action_type="submit",
+            order_type="market",
             side="sell" if observation["side"] == "buy" else "buy",
             quantity=10,
         ).model_dump(mode="json")
@@ -77,6 +78,7 @@ def test_v2_runner_is_deterministic_and_exposes_only_strategy_protocol_fields() 
         "remaining_quantity",
         "exchange_latency_profile",
         "intervention_active",
+        "open_orders",
     }
     serialized = json.dumps(first_port.observations)
     for hidden in ("seed", "family", "regime", "generator", "ledger", "receipt"):
@@ -123,5 +125,105 @@ def test_sealed_campaign_binds_v2_ledger_metrics_and_disallows_callback_mixing()
     result = finalized.finalized_primary_result
     assert all(world.execution_ledger_digest is not None for world in result.worlds)
     assert all(world.strategy_response_journal_digest is not None for world in result.worlds)
-    assert len(result.metrics) == len(result.worlds) * 7
+    assert len(result.metrics) == len(result.worlds) * 9
     assert "family" not in json.dumps(result.__dict__ if hasattr(result, "__dict__") else str(result))
+
+
+class _LifecyclePort(_ReactivePort):
+    def decide(self, observation: dict) -> StrategyResponseRecordV1:
+        self.observations.append(observation)
+        if observation["step"] == 0:
+            action = StrategyActionV2(
+                action_type="submit",
+                order_type="limit",
+                side="buy",
+                quantity=10,
+                limit_price_ticks=max(1, observation["mid_ticks"] - 100),
+            ).model_dump(mode="json")
+        elif observation["step"] == 1 and observation["open_orders"]:
+            action = StrategyActionV2(
+                action_type="cancel", order_id=observation["open_orders"][0]["order_id"]
+            ).model_dump(mode="json")
+        else:
+            action = StrategyActionV2(action_type="hold").model_dump(mode="json")
+        request_digest = _digest(observation)
+        return StrategyResponseRecordV1(
+            _digest({"artifact": self.artifact_digest, "request": request_digest}),
+            self.artifact_digest,
+            request_digest,
+            _digest(action),
+            action,
+        )
+
+
+def test_v2_runner_exposes_only_own_open_orders_and_executes_typed_cancel() -> None:
+    artifact = "a" * 64
+    port = _LifecyclePort(artifact)
+    result = SealedV2WorldRunnerV1(port).run(_world(), _manifest(artifact))
+    assert result.metrics["strategy_order_count"] == 1
+    assert result.metrics["strategy_cancel_count"] == 1
+    assert all(
+        order["order_id"].startswith("strategy-order-")
+        for observation in port.observations
+        for order in observation["open_orders"]
+    )
+
+
+class _ReplacePort(_LifecyclePort):
+    def decide(self, observation: dict) -> StrategyResponseRecordV1:
+        self.observations.append(observation)
+        if observation["step"] == 0:
+            action = StrategyActionV2(
+                action_type="submit",
+                order_type="limit",
+                side="buy",
+                quantity=10,
+                limit_price_ticks=max(1, observation["mid_ticks"] - 100),
+            ).model_dump(mode="json")
+        elif observation["step"] == 1 and observation["open_orders"]:
+            order = observation["open_orders"][0]
+            action = StrategyActionV2(
+                action_type="replace",
+                order_id=order["order_id"],
+                quantity=5,
+                limit_price_ticks=order["limit_price_ticks"],
+            ).model_dump(mode="json")
+        else:
+            action = StrategyActionV2(action_type="hold").model_dump(mode="json")
+        request_digest = _digest(observation)
+        return StrategyResponseRecordV1(
+            _digest({"artifact": self.artifact_digest, "request": request_digest}),
+            self.artifact_digest,
+            request_digest,
+            _digest(action),
+            action,
+        )
+
+
+def test_v2_runner_executes_typed_replace_with_visible_order_reference() -> None:
+    artifact = "a" * 64
+    result = SealedV2WorldRunnerV1(_ReplacePort(artifact)).run(_world(), _manifest(artifact))
+    assert result.metrics["strategy_order_count"] == 1
+    assert result.metrics["strategy_replace_count"] == 1
+    assert result.metrics["strategy_rejection_count"] == 0
+
+
+class _GuessedOrderPort(_ReactivePort):
+    def decide(self, observation: dict) -> StrategyResponseRecordV1:
+        self.observations.append(observation)
+        action = StrategyActionV2(
+            action_type="cancel", order_id="strategy-order-00000000000000000000"
+        ).model_dump(mode="json")
+        request_digest = _digest(observation)
+        return StrategyResponseRecordV1(
+            _digest({"artifact": self.artifact_digest, "request": request_digest}),
+            self.artifact_digest,
+            request_digest,
+            _digest(action),
+            action,
+        )
+
+
+def test_v2_runner_rejects_lifecycle_actions_for_order_ids_never_observed() -> None:
+    with pytest.raises(SealedV2RunnerError, match="previously observed"):
+        SealedV2WorldRunnerV1(_GuessedOrderPort("a" * 64)).run(_world(), _manifest("a" * 64))
