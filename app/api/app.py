@@ -38,6 +38,7 @@ from app.arena import (
     public_dataset,
     validate_submission_csv,
 )
+from app.break_test.service import get_available_strategies, get_session, run_break_test
 from app.calibration import (
     CalibrationPackV1,
     build_demo_calibration_pack,
@@ -343,6 +344,12 @@ class DemoSessionRequest(BaseModel):
 @app.get("/")
 def index() -> FileResponse:
     """Customer product entry point."""
+    return FileResponse(ROOT / "static" / "break-test.html")
+
+
+@app.get("/legacy-start")
+def legacy_start() -> FileResponse:
+    """Previous start page retained for reference."""
     return FileResponse(ROOT / "static" / "start.html")
 
 
@@ -436,6 +443,122 @@ def sma_robustness(payload: SmaRobustnessRequest) -> dict[str, object]:
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+class BreakTestRequest(BaseModel):
+    closes: list[float] = Field(min_length=80, max_length=50_000)
+    strategy_type: Literal["sma_crossover", "breakout", "rsi_reversion", "python"] = "sma_crossover"
+    params: dict[str, int] | None = None
+    worlds_per_regime: int = Field(default=100, ge=10, le=500)
+    fix_and_retest_params: dict[str, int] | None = None
+    forward_mode: Literal["gbm", "exchange"] = "gbm"
+    strategy_code: str | None = Field(default=None, max_length=20_000)
+
+
+class StrategyParamRange(BaseModel):
+    min: int
+    max: int
+
+
+class StrategyInfo(BaseModel):
+    name: str
+    description: str
+    default_params: dict[str, int]
+    param_ranges: dict[str, StrategyParamRange]
+
+
+class QuantSensitivityRequest(BaseModel):
+    closes: list[float] = Field(min_length=80, max_length=50_000)
+    strategy_type: Literal["sma_crossover", "breakout", "rsi_reversion", "python"] = "sma_crossover"
+    params: dict[str, int] | None = None
+
+
+class QuantWorstCaseRequest(BaseModel):
+    closes: list[float] = Field(min_length=80, max_length=50_000)
+    strategy_type: Literal["sma_crossover", "breakout", "rsi_reversion", "python"] = "sma_crossover"
+    params: dict[str, int] | None = None
+    worlds_per_regime: int = Field(default=40, ge=10, le=200)
+
+
+@app.get("/api/break-test/strategies")
+def break_test_strategies() -> dict[str, StrategyInfo]:
+    raw = get_available_strategies()
+    result: dict[str, StrategyInfo] = {}
+    for key, info in raw.items():
+        ranges = info.get("param_ranges", {})
+        result[key] = StrategyInfo(
+            name=str(info["name"]),
+            description=str(info["description"]),
+            default_params=dict(info["default_params"]),  # type: ignore[arg-type]
+            param_ranges={k: StrategyParamRange(min=v[0], max=v[1]) for k, v in ranges.items()},  # type: ignore[misc]
+        )
+    return result
+
+
+@app.post("/api/break-test/run")
+def break_test_run(payload: BreakTestRequest) -> dict[str, object]:
+    try:
+        return run_break_test(
+            payload.closes,
+            strategy_type=payload.strategy_type,
+            params=payload.params,
+            worlds_per_regime=payload.worlds_per_regime,
+            fix_and_retest_params=payload.fix_and_retest_params,
+            forward_mode=payload.forward_mode,
+            strategy_code=payload.strategy_code,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.get("/api/break-test/session/{session_id}")
+def break_test_session(session_id: str) -> dict[str, object]:
+    result = get_session(session_id)
+    if result is None:
+        raise HTTPException(404, "Session not found")
+    return result
+
+
+@app.post("/api/quant/sensitivity")
+def quant_sensitivity(payload: QuantSensitivityRequest) -> dict[str, object]:
+    try:
+        from app.break_test.quant_validation import sensitivity_analysis
+    except Exception as exc:
+        raise HTTPException(500, f"quant module unavailable: {exc}") from exc
+    try:
+        return sensitivity_analysis(
+            payload.closes,
+            payload.strategy_type,
+            payload.params or {},
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"sensitivity failed: {exc}") from exc
+
+
+@app.post("/api/quant/worst-case")
+def quant_worst_case(payload: QuantWorstCaseRequest) -> dict[str, object]:
+    try:
+        from app.break_test.quant_validation import worst_case_attribution
+    except Exception as exc:
+        raise HTTPException(500, f"quant module unavailable: {exc}") from exc
+    try:
+        return worst_case_attribution(
+            payload.closes,
+            payload.strategy_type,
+            payload.params or {},
+            worlds_per_regime=payload.worlds_per_regime,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"worst-case failed: {exc}") from exc
+
+
+@app.get("/break-test")
+def break_test_ui() -> FileResponse:
+    return FileResponse(ROOT / "static" / "break-test.html")
 
 
 @app.get("/synthetic-market-world")

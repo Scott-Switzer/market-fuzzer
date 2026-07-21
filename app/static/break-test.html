@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Strategy Break Test · Synthetic Market World</title>
+    <style>
+      :root{--ink:#10233f;--muted:#617089;--line:#dce5f0;--blue:#1e64d6;--blue-dark:#12428f;--mint:#e8f7ef;--amber:#fff5d9;--red:#dc2626;--green:#16a34a;--bg:#f5f8fc;--white:#fff}
+      *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,sans-serif}
+      header{height:70px;background:var(--white);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 max(24px,calc((100vw - 1180px)/2));gap:24px}.brand{font-weight:900;letter-spacing:.08em;text-decoration:none;font-size:14px}.brand i{color:var(--blue);font-style:normal}nav{display:flex;gap:22px;color:var(--muted);font-size:13px;font-weight:700}nav a{text-decoration:none}nav a:hover{color:var(--blue)}nav a.active{color:var(--blue)}
+      main{max-width:1180px;margin:0 auto;padding:48px 24px 90px}.eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;font-weight:850;color:var(--blue)}
+      h1{font-size:clamp(36px,5vw,60px);line-height:1.02;letter-spacing:-.05em;max-width:780px;margin:10px 0 16px}h2{font-size:22px;letter-spacing:-.025em;margin:8px 0 6px}h3{font-size:16px;margin:0 0 6px}
+      .lead{max-width:690px;color:var(--muted);font-size:18px;margin:0}.hero{display:flex;justify-content:space-between;gap:40px;align-items:flex-end;margin-bottom:40px}.hero-note{max-width:310px;border-left:3px solid var(--blue);padding:12px 0 12px 18px;color:var(--muted);font-size:13px}.hero-note strong{display:block;color:var(--ink);font-size:15px;margin-bottom:4px}
+      .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:0 0 28px}.step{background:var(--white);border:1px solid var(--line);border-radius:12px;padding:14px 16px;opacity:.45;transition:opacity .2s}.step.active{opacity:1;border-color:var(--blue);box-shadow:0 0 0 1px var(--blue)}.step.done{opacity:.75;border-color:var(--green)}.step b{display:block;color:var(--blue);font-size:12px;letter-spacing:.1em}.step span{display:block;font-weight:800;margin-top:8px;font-size:13px}.step small{display:block;color:var(--muted);margin-top:2px;font-size:12px}
+      .step-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}.wide{grid-column:1/-1}
+      .panel{background:var(--white);border:1px solid var(--line);border-radius:16px;padding:24px;box-shadow:0 8px 28px rgba(16,35,63,.04)}.panel-head{display:flex;justify-content:space-between;gap:15px;align-items:flex-start;margin-bottom:16px}.panel h2{font-size:22px;letter-spacing:-.03em;margin:6px 0 0}.panel-intro{font-size:13px;color:var(--muted);margin:6px 0 0;line-height:1.45}
+      .label{font-size:11px;letter-spacing:.14em;text-transform:uppercase;font-weight:850;color:var(--blue)}
+      .badge{display:inline-block;font-size:10px;font-weight:850;letter-spacing:.08em;padding:4px 8px;border-radius:6px;background:#eef4ff;color:var(--blue);white-space:nowrap}.badge.green{background:var(--mint);color:var(--green)}.badge.red{background:#fef2f2;color:var(--red)}.badge.amber{background:var(--amber);color:#9a6700}
+      form{display:grid;gap:14px}label{display:grid;gap:5px;font-size:12px;font-weight:800;color:#334155}input,select,textarea{width:100%;padding:10px 12px;border:1px solid #cbd7e5;border-radius:8px;background:var(--white);color:var(--ink);font:inherit;transition:border .15s}input:focus,select:focus,textarea:focus{outline:0;border-color:var(--blue);box-shadow:0 0 0 3px #2457d61f}.form-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}.help{font-size:11px;color:var(--muted);font-weight:400;margin:2px 0 0}
+      button{border:1px solid #cbd5e1;border-radius:8px;padding:11px 16px;background:var(--white);color:var(--ink);font-weight:750;cursor:pointer;font-size:13px;transition:background .1s}.primary{background:var(--blue);border-color:var(--blue);color:var(--white)}.primary:hover{background:var(--blue-dark)}button:disabled{opacity:.5;cursor:default}
+      .metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;margin:14px 0}.metric{background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:12px;text-align:center}.metric small{display:block;color:var(--muted);font-size:10px;font-weight:850;letter-spacing:.08em;text-transform:uppercase}.metric b{display:block;font-size:22px;margin:6px 0 0}.metric .good{color:var(--green)}.metric .bad{color:var(--red)}.metric .neutral{color:var(--ink)}
+      .regime-table{width:100%;border-collapse:collapse;font-size:13px;margin:12px 0}.regime-table th{text-align:left;font-size:10px;font-weight:850;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:8px 10px;border-bottom:2px solid var(--line)}.regime-table td{padding:10px;border-bottom:1px solid var(--line)}.regime-table .loss{color:var(--red);font-weight:800}.regime-table .win{color:var(--green);font-weight:800}
+      .chart-svg{width:100%;height:180px;margin:14px 0}.chart-svg svg{width:100%;height:100%}
+      .status{font-size:13px;color:var(--muted);margin:10px 0 0;min-height:20px}.status.error{color:var(--red)}
+      .report-card{background:#f8fafc;border:1px solid var(--line);border-radius:12px;padding:18px;margin:14px 0}.report-card .label{font-size:10px;margin-bottom:6px}.report-card p{margin:4px 0;font-size:14px;line-height:1.5}
+      .alt-card{background:var(--white);border:2px solid var(--blue);border-radius:12px;padding:18px;margin:14px 0}.alt-card h3{color:var(--blue)}
+      .compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+      .hidden{display:none!important}
+      @media(max-width:820px){.hero{display:block}.hero-note{width:auto;margin-top:16px}.step-grid{grid-template-columns:1fr}.steps{grid-template-columns:1fr 1fr}.form-row{grid-template-columns:1fr}.compare-grid{grid-template-columns:1fr}}
+      @media(max-width:520px){.steps{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}}
+    </style>
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="/break-test">STRATEGY <i>BREAK TEST</i></a>
+      <nav>
+        <a href="/break-test" class="active">Break Test</a>
+        <a href="/synthetic-market-world">World Registry</a>
+        <a href="/strategy-stress-lab">Stress Lab</a>
+        <a href="/arena">Arena</a>
+        <a href="/market-fuzzer">Fuzzer</a>
+      </nav>
+    </header>
+    <main>
+      <section class="hero">
+        <div>
+          <div class="eyebrow">STRATEGY ROBUSTNESS VALIDATION</div>
+          <h1>Backtest it. Stress it. Find where it breaks.</h1>
+          <p class="lead">Upload a strategy or pick a built-in example. Run a conventional backtest, then forward-test the unchanged strategy through hundreds of unseen synthetic markets. Get a clear report showing where and why it fails.</p>
+        </div>
+        <div class="hero-note">
+          <strong>Synthetic evidence</strong>
+          Results depend on declared parameters and uploaded data. This is not a profitability forecast or live-trading approval.
+        </div>
+      </section>
+
+      <div id="steps" class="steps">
+        <div class="step active" data-step="1"><b>01</b><span>Choose strategy</span><small>Pick built-in or write code</small></div>
+        <div class="step" data-step="2"><b>02</b><span>Run backtest</span><small>Historical baseline</small></div>
+        <div class="step" data-step="3"><b>03</b><span>Forward test</span><small>Synthetic stress</small></div>
+        <div class="step" data-step="4"><b>04</b><span>Review report</span><small>Failure + fix</small></div>
+      </div>
+
+      <div class="step-grid">
+        <!-- Step 1: Configure -->
+        <section class="panel wide" id="step-1">
+          <div class="panel-head"><div><div class="label">01 · CONFIGURE</div><h2>Pick a strategy and load data</h2></div></div>
+          <form id="config-form">
+              <div class="form-row">
+              <label>Strategy type
+                <select id="strategy-type">
+                  <option value="sma_crossover">SMA Crossover</option>
+                  <option value="breakout">Breakout Momentum</option>
+                  <option value="rsi_reversion">RSI Mean Reversion</option>
+                  <option value="python">Custom Python</option>
+                </select>
+              </label>
+              <label>Forward mode
+                <select id="forward-mode">
+                  <option value="gbm">Fast (GBM synthetic)</option>
+                  <option value="exchange">Exchange simulation</option>
+                </select>
+              </label>
+            </div>
+            <div id="python-code-section" class="hidden">
+              <label>Python strategy function
+                <textarea id="strategy-code" rows="10" style="font-family:ui-monospace,monospace;font-size:12px" placeholder="def strategy(observations, params):&#10;    actions = []&#10;    for obs in observations:&#10;        if obs['mid_ticks'] > 100:&#10;            actions.append({'action_type': 'market', 'side': 'buy', 'quantity': 100})&#10;        else:&#10;            actions.append({'action_type': 'hold'})&#10;    return actions"></textarea>
+              </label>
+              <p class="help">Define a function <code>strategy(observations, params)</code> returning a list of action dicts. Each observation has: step, mid_ticks, spread_bps, inventory, etc. Each action needs: action_type (hold|market|limit), side, quantity. NumPy available as <code>np</code>.</p>
+            </div>
+            <div class="form-row">
+              <label>Data source
+                <select id="data-source">
+                  <option value="demo">Demo data (synthetic equity)</option>
+                  <option value="csv">Upload CSV</option>
+                </select>
+              </label>
+              <div id="csv-upload" class="hidden">
+                <label>Price CSV (one column: close)<input id="csv-file" type="file" accept=".csv,.txt" /></label>
+                <p class="help">Single column of closing prices, one per row. At least 80 rows.</p>
+              </div>
+            </div>
+            <div id="params-section">
+              <p class="label" style="margin:4px 0 8px">PARAMETERS</p>
+              <div id="param-fields" class="form-row"></div>
+            </div>
+            <div class="form-row">
+              <label>Forward-test worlds per regime
+                <select id="worlds-per-regime">
+                  <option value="30">30 (fast)</option>
+                  <option value="100" selected>100 (standard)</option>
+                  <option value="250">250 (thorough)</option>
+                </select>
+              </label>
+              <label>&nbsp;<button id="run-btn" class="primary" style="margin-top:auto">Run Break Test →</button></label>
+              <label>&nbsp;<button id="demo-btn" style="margin-top:auto">Try demo</button></label>
+            </div>
+          </form>
+          <p id="config-status" class="status"></p>
+        </section>
+
+        <!-- Step 2: Results -->
+        <section class="panel wide hidden" id="step-2">
+          <div class="panel-head"><div><div class="label">02 · HISTORICAL BACKTEST</div><h2>Baseline performance</h2></div><span id="historical-badge" class="badge green">Baseline</span></div>
+          <div id="historical-metrics" class="metrics"></div>
+          <div id="equity-chart" class="chart-svg"></div>
+          <div id="regime-diagnostic" class="panel-intro"></div>
+          <div id="historical-params" style="margin:10px 0 0;font-size:12px;color:var(--muted)"></div>
+        </section>
+
+        <!-- Step 3: Forward test -->
+        <section class="panel wide hidden" id="step-3">
+          <div class="panel-head"><div><div class="label">03 · FORWARD TEST</div><h2>Stress in unseen synthetic markets</h2></div><span id="forward-badge" class="badge">Running…</span></div>
+          <p class="panel-intro">The same frozen strategy ran unchanged across hundreds of synthetic price paths in 4 distinct market regimes.</p>
+          <div id="forward-summary" class="report-card"></div>
+          <table class="regime-table"><thead><tr><th>Regime</th><th>Worlds</th><th>Loss Rate</th><th>Median Return</th><th>Worst Drawdown</th><th>Best Return</th></tr></thead><tbody id="forward-rows"></tbody></table>
+          <p class="help">Each regime generated <span id="fwd-count-label">100</span> synthetic price paths from the same volatility structure as the uploaded data.</p>
+          <p class="help" id="forward-mode-label" style="margin-top:4px"></p>
+        </section>
+
+        <!-- Step 4: Report -->
+        <section class="panel wide hidden" id="step-4">
+          <div class="panel-head"><div><div class="label">04 · FAILURE REPORT</div><h2>Where it breaks</h2></div><span id="report-badge" class="badge">Automated</span></div>
+          <div id="failure-report" class="report-card"></div>
+          <div id="failure-analysis" class="panel wide hidden" style="margin-top:14px">
+            <div class="panel-head"><div><div class="label">04B · REGIME ANALYSIS</div><h2>Failure analysis by regime</h2></div></div>
+            <div id="segmentation-insights"></div>
+            <div id="historical-context" class="metrics" style="margin-top:10px"></div>
+          </div>
+          <div id="correction-section" class="alt-card">
+            <h3>Suggested correction</h3>
+            <p id="correction-reason"></p>
+            <div id="correction-params"></div>
+            <button id="fix-and-retest-btn" class="primary">Fix and retest →</button>
+          </div>
+          <div id="session-info" class="help" style="margin-top:12px"></div>
+        </section>
+
+        <!-- Step 5: Quant Analysis -->
+        <section class="panel wide hidden" id="step-5">
+          <div class="panel-head"><div><div class="label">05 · QUANT ANALYSIS</div><h2>Parameter sensitivity & worst-case attribution</h2></div></div>
+          <div class="form-row">
+            <button id="run-sensitivity-btn" class="primary">Run sensitivity sweep →</button>
+            <button id="run-worst-case-btn">Run worst-case attribution →</button>
+          </div>
+          <div id="quant-status" class="status" style="margin-top:10px"></div>
+          <div id="sensitivity-results" class="hidden" style="margin-top:14px">
+            <h3>Parameter sensitivity sweep</h3>
+            <div id="sensitivity-summary" class="metrics"></div>
+            <p class="help">Best parameter set according to robustness score across regimes.</p>
+            <div id="sensitivity-top" style="margin-top:10px"></div>
+          </div>
+          <div id="worst-case-results" class="hidden" style="margin-top:14px">
+            <h3>Worst-case attribution</h3>
+            <table class="regime-table"><thead><tr><th>Regime</th><th>Worst Drawdown</th><th>Loss Rate</th><th>Attribution</th></tr></thead><tbody id="worst-case-rows"></tbody></table>
+            <div id="worst-case-summary" class="metrics" style="margin-top:10px"></div>
+          </div>
+        </section>
+
+        <!-- Step 6: Comparison (shown after fix and retest) -->
+        <section class="panel wide hidden" id="step-6">
+          <div class="panel-head"><div><div class="label">06 · COMPARISON</div><h2>Original vs corrected</h2></div></div>
+          <div class="compare-grid" id="compare-grid"></div>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      const $ = id => document.getElementById(id);
+      const esc = x => String(x ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+      const api = async (url, opts = {}) => {
+        const r = await fetch(url, { headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) }, ...opts });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) throw Error(body.detail || `Request failed (${r.status})`);
+        return body;
+      };
+
+      let strategies = {};
+      let lastResult = null;
+      let lastCorrected = null;
+      let demoPrices = null;
+
+      const paramSpecs = {
+        sma_crossover: [
+          { key: 'fast', label: 'Fast SMA', min: 2, max: 200, def: 20 },
+          { key: 'slow', label: 'Slow SMA', min: 3, max: 500, def: 50 },
+        ],
+        breakout: [
+          { key: 'entry_lookback', label: 'Entry lookback', min: 3, max: 200, def: 20 },
+          { key: 'exit_lookback', label: 'Exit lookback', min: 2, max: 100, def: 10 },
+        ],
+        rsi_reversion: [
+          { key: 'period', label: 'RSI period', min: 2, max: 100, def: 14 },
+          { key: 'oversold', label: 'Oversold threshold', min: 5, max: 45, def: 30 },
+          { key: 'overbought', label: 'Overbought threshold', min: 55, max: 95, def: 70 },
+        ],
+      };
+
+      function getParams() {
+        const type = $('strategy-type').value;
+        if (type === 'python') {
+          return { type, params: {} };
+        }
+        const fields = document.querySelectorAll('#param-fields input');
+        const params = {};
+        fields.forEach(f => { params[f.dataset.key] = parseInt(f.value, 10); });
+        return { type, params };
+      }
+
+      function renderParams(type) {
+        if (type === 'python') {
+          $('param-fields').innerHTML = '';
+          $('params-section').classList.add('hidden');
+          $('python-code-section').classList.remove('hidden');
+          return;
+        }
+        $('params-section').classList.remove('hidden');
+        $('python-code-section').classList.add('hidden');
+        const specs = paramSpecs[type] || [];
+        $('param-fields').innerHTML = specs.map(s => `
+          <label>${esc(s.label)}
+            <input type="number" data-key="${esc(s.key)}" value="${s.def}" min="${s.min}" max="${s.max}" />
+            <span class="help">Range: ${s.min}–${s.max}</span>
+          </label>
+        `).join('');
+      }
+
+      function generateDemoPrices() {
+        if (demoPrices) return demoPrices;
+        const len = 260;
+        const p = [100];
+        for (let i = 1; i < len; i++) {
+          const r = Math.random() - 0.5 + (i > 200 ? -0.02 : i > 100 ? 0.01 : 0.005);
+          const v = Math.max(p[i - 1] * (1 + r * 0.012), 50);
+          p.push(Math.round(v * 100) / 100);
+        }
+        demoPrices = p;
+        return p;
+      }
+
+      function readCSV() {
+        return new Promise((resolve, reject) => {
+          const file = $('csv-file').files[0];
+          if (!file) reject(new Error('Select a CSV file'));
+          const reader = new FileReader();
+          reader.onload = e => {
+            const lines = e.target.result.trim().split('\n').map(l => parseFloat(l.trim())).filter(v => !isNaN(v));
+            if (lines.length < 80) reject(new Error(`Need at least 80 prices, got ${lines.length}`));
+            resolve(lines);
+          };
+          reader.onerror = () => reject(new Error('Failed to read file'));
+          reader.readAsText(file);
+        });
+      }
+
+      async function getPrices() {
+        const src = $('data-source').value;
+        if (src === 'demo') return generateDemoPrices();
+        return readCSV();
+      }
+
+      function activateStep(n) {
+        document.querySelectorAll('.step').forEach(s => {
+          const step = parseInt(s.dataset.step, 10);
+          s.classList.toggle('active', step === n);
+          s.classList.toggle('done', step < n);
+        });
+      }
+
+      function renderSvgChart(equity, containerId) {
+        const el = $(containerId);
+        if (!equity || equity.length < 2) { el.innerHTML = ''; return; }
+        const w = 700, h = 160, pad = { t: 10, r: 10, b: 25, l: 50 };
+        const min = Math.min(...equity), max = Math.max(...equity), range = max - min || 1;
+        const xScale = i => pad.l + (i / (equity.length - 1)) * (w - pad.l - pad.r);
+        const yScale = v => pad.t + (1 - (v - min) / range) * (h - pad.t - pad.b);
+        const line = equity.map((v, i) => `${xScale(i)},${yScale(v)}`).join(' ');
+        const startColor = equity[0] <= equity[equity.length - 1] ? '#16a34a' : '#dc2626';
+        el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">
+          <defs><linearGradient id="eq-grad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="${startColor}" stop-opacity=".15"/>
+            <stop offset="100%" stop-color="${startColor}" stop-opacity=".01"/>
+          </linearGradient></defs>
+          <path d="M${line}" fill="none" stroke="${startColor}" stroke-width="1.5"/>
+          <polygon points="${xScale(0)},${h - pad.b} L${line} L${xScale(equity.length - 1)},${h - pad.b}" fill="url(#eq-grad)"/>
+          <text x="${pad.l}" y="${h - 5}" fill="#617089" font-size="10">1</text>
+          <text x="${w - pad.r - 20}" y="${h - 5}" fill="#617089" font-size="10">${equity.length}</text>
+          <text x="3" y="${pad.t + 10}" fill="#617089" font-size="10">${max.toFixed(2)}</text>
+          <text x="3" y="${h - pad.b - 5}" fill="#617089" font-size="10">${min.toFixed(2)}</text>
+        </svg>`;
+      }
+
+      function renderMetrics(metrics, containerId) {
+        const m = $(containerId);
+        if (!metrics) { m.innerHTML = '<p class="muted">No metrics available.</p>'; return; }
+        const items = [
+          { label: 'Return', value: metrics.total_return_pct, fmt: v => `${v.toFixed(2)}%`, cls: v => v >= 0 ? 'good' : 'bad' },
+          { label: 'Benchmark', value: metrics.benchmark_total_return_pct, fmt: v => `${v.toFixed(2)}%`, cls: v => v >= 0 ? 'good' : 'bad' },
+          { label: 'Max Drawdown', value: metrics.max_drawdown_pct, fmt: v => `${v.toFixed(2)}%`, cls: () => 'bad' },
+          { label: 'Max DD Duration', value: metrics.max_dd_duration_days, fmt: v => `${v} days`, cls: () => 'bad' },
+          { label: 'Sharpe', value: metrics.sharpe, fmt: v => v.toFixed(2), cls: v => v >= 0.5 ? 'good' : v >= 0 ? 'neutral' : 'bad' },
+          { label: 'Sortino', value: metrics.sortino, fmt: v => v.toFixed(2), cls: v => v >= 0.5 ? 'good' : v >= 0 ? 'neutral' : 'bad' },
+          { label: 'Calmar', value: metrics.calmar, fmt: v => v.toFixed(2), cls: v => v >= 1 ? 'good' : v >= 0 ? 'neutral' : 'bad' },
+          { label: 'Alpha', value: metrics.alpha, fmt: v => v.toFixed(4), cls: v => v > 0 ? 'good' : 'bad' },
+          { label: 'Beta', value: metrics.beta, fmt: v => v.toFixed(2), cls: () => 'neutral' },
+          { label: 'Trades', value: metrics.trades, fmt: v => v, cls: () => 'neutral' },
+          { label: 'Win Rate', value: metrics.win_rate_pct, fmt: v => `${v.toFixed(1)}%`, cls: v => v >= 50 ? 'good' : 'bad' },
+          { label: 'Profit Factor', value: metrics.profit_factor, fmt: v => v.toFixed(2), cls: v => v >= 1.2 ? 'good' : v >= 1 ? 'neutral' : 'bad' },
+          { label: 'Turnover', value: metrics.turnover, fmt: v => v.toFixed(2), cls: () => 'neutral' },
+          { label: 'VaR 95%', value: metrics.var_95_pct, fmt: v => `${v.toFixed(2)}%`, cls: () => 'bad' },
+          { label: 'CVaR 95%', value: metrics.cvar_95_pct, fmt: v => `${v.toFixed(2)}%`, cls: () => 'bad' },
+          { label: 'Expectancy', value: metrics.expectancy, fmt: v => v.toFixed(4), cls: v => v > 0 ? 'good' : 'bad' },
+        ];
+        m.innerHTML = items.map(i => `<div class="metric"><small>${i.label}</small><b class="${i.cls(i.value)}">${i.fmt(i.value)}</b></div>`).join('');
+      }
+
+      function renderForwardRows(regimes, countLabel) {
+        const tbody = $('forward-rows');
+        $('fwd-count-label').textContent = countLabel || '100';
+        if (!regimes || !regimes.length) { tbody.innerHTML = '<tr><td colspan="6" class="muted">No forward test results.</td></tr>'; return; }
+        tbody.innerHTML = regimes.map(r => `
+          <tr>
+            <td><strong>${esc(r.regime)}</strong></td>
+            <td>${esc(r.worlds)}</td>
+            <td class="${r.loss_rate_pct > 50 ? 'loss' : 'win'}">${esc(r.loss_rate_pct)}%</td>
+            <td class="${r.median_return_pct >= 0 ? 'win' : 'loss'}">${esc(r.median_return_pct)}%</td>
+            <td class="loss">${esc(r.worst_drawdown_pct)}%</td>
+            <td class="${r.best_return_pct >= 0 ? 'win' : 'loss'}">${r.best_return_pct}%</td>
+          </tr>
+        `).join('');
+      }
+
+      function renderReport(result) {
+        $('failure-report').innerHTML = `
+          <div class="label">AUTOMATED FAILURE ANALYSIS</div>
+          <p>${esc(result.failure_summary)}</p>
+          <div class="metrics" style="margin-top:12px">
+            <div class="metric"><small>Overall loss rate</small><b class="bad">${esc(result.forward_test.overall_loss_rate_pct)}%</b></div>
+            <div class="metric"><small>Total synthetic worlds</small><b>${esc(result.forward_test.total_worlds)}</b></div>
+          </div>
+        `;
+        const analysis = result.failure_analysis || {};
+        if (analysis.segmentation_insights) {
+          const insights = Array.isArray(analysis.segmentation_insights) ? analysis.segmentation_insights : [];
+          if (insights.length) {
+            $('segmentation-insights').innerHTML = insights.map(ins => `<p style="margin:6px 0">${esc(ins)}</p>`).join('');
+            $('failure-analysis').classList.remove('hidden');
+          }
+        }
+        if (analysis.historical_context) {
+          $('historical-context').innerHTML = Object.entries(analysis.historical_context).map(([k,v]) => `<div class="metric"><small>${esc(k)}</small><b>${esc(v)}</b></div>`).join('');
+        }
+        const cs = result.correction_suggestion || {};
+        $('correction-reason').textContent = cs.rationale || 'No automatic correction available.';
+        const alts = cs.alternatives || [];
+        $('correction-params').innerHTML = alts.length
+          ? `<div class="help">Suggested fix${alts.length > 1 ? 'es' : ''}:</div>` + alts.map(a => `
+            <div style="background:#f0f7ff;border-radius:8px;padding:10px;margin:8px 0">
+              <strong>${esc(a.label)}</strong>
+              <p class="help">${esc(a.reason)}</p>
+              <code style="font-size:11px">${Object.entries(a.parameter_changes).map(([k,v]) => `${k}: ${v}`).join(', ')}</code>
+            </div>
+          `).join('')
+          : '<p class="help">No parameter suggestions available for this strategy type.</p>';
+        if (alts.length) {
+          $('fix-and-retest-btn').dataset.correction = JSON.stringify(alts[0].parameter_changes);
+          $('fix-and-retest-btn').disabled = false;
+        } else {
+          $('fix-and-retest-btn').disabled = true;
+        }
+      }
+
+      function renderComparison(original, corrected) {
+        const grid = $('compare-grid');
+        grid.innerHTML = `
+          <div><div class="label">ORIGINAL</div>
+            <div class="metrics">${renderMetricBlock(original.historical)}</div>
+            <p class="help" style="margin-top:8px">Failure: ${esc(original.failure_summary)}</p>
+          </div>
+          <div><div class="label">CORRECTED</div>
+            <div class="metrics">${renderMetricBlock(corrected.historical)}</div>
+            <p class="help" style="margin-top:8px">Failure: ${esc(corrected.failure_summary)}</p>
+          </div>
+          <div class="wide">${renderForwardCompare(original.forward_test.regimes, corrected.forward_test.regimes)}</div>
+        `;
+        $('step-5').classList.remove('hidden');
+      }
+
+      function renderMetricBlock(metrics) {
+        if (!metrics) return '<p class="muted">No data</p>';
+        const items = [
+          { label: 'Return', v: metrics.total_return_pct, f: v => `${v}%`, c: v => v >= 0 ? 'good' : 'bad' },
+          { label: 'Sharpe', v: metrics.sharpe, f: v => v.toFixed(2), c: v => v >= 0.5 ? 'good' : 'neutral' },
+          { label: 'Drawdown', v: metrics.max_drawdown_pct, f: v => `${v}%`, c: () => 'bad' },
+          { label: 'Win Rate', v: metrics.win_rate_pct, f: v => `${v}%`, c: v => v >= 50 ? 'good' : 'bad' },
+        ];
+        return items.map(i => `<div class="metric"><small>${i.label}</small><b class="${i.c(i.v)}">${i.f(i.v)}</b></div>`).join('');
+      }
+
+      function renderForwardCompare(orig, corr) {
+        if (!orig || !corr) return '';
+        const pairs = orig.map((o, i) => ({ o, c: corr[i] || {} }));
+        return `<table class="regime-table"><thead><tr><th>Regime</th><th>Original Loss Rate</th><th>Corrected Loss Rate</th><th>Change</th></tr></thead>
+          <tbody>${pairs.map(p => {
+            const origLoss = p.o.loss_rate_pct;
+            const corrLoss = p.c.loss_rate_pct;
+            const change = corrLoss != null && origLoss != null ? (origLoss - corrLoss) : null;
+            const changeStr = change != null ? (change > 0 ? `-${change.toFixed(1)}%` : `+${Math.abs(change).toFixed(1)}%`) : '—';
+            const changeCls = change > 0 ? 'win' : 'loss';
+            return `<tr><td><strong>${esc(p.o.regime)}</strong></td>
+              <td class="${origLoss > 50 ? 'loss' : 'win'}">${origLoss}%</td>
+              <td class="${corrLoss > 50 ? 'loss' : 'win'}">${corrLoss}%</td>
+              <td class="${changeCls}">${changeStr}</td></tr>`;
+          }).join('')}</tbody></table>`;
+      }
+
+      $('strategy-type').onchange = () => renderParams($('strategy-type').value);
+      $('data-source').onchange = () => {
+        $('csv-upload').classList.toggle('hidden', $('data-source').value !== 'csv');
+      };
+
+      $('config-form').onsubmit = async e => {
+        e.preventDefault();
+        const btn = $('run-btn');
+        btn.disabled = true;
+        btn.textContent = 'Running…';
+        $('config-status').textContent = '';
+        $('config-status').className = 'status';
+        try {
+          const prices = await getPrices();
+          const { type, params } = getParams();
+          const worlds = parseInt($('worlds-per-regime').value, 10);
+          const forwardMode = $('forward-mode').value;
+          const body = { closes: prices, strategy_type: type, params, worlds_per_regime: worlds, forward_mode: forwardMode };
+          if (type === 'python') {
+            body.strategy_code = $('strategy-code').value;
+          }
+          const result = await api('/api/break-test/run', {
+            method: 'POST',
+            body: JSON.stringify(body),
+          });
+          lastResult = result;
+          lastCorrected = null;
+
+          activateStep(2);
+          $('step-2').classList.remove('hidden');
+          renderMetrics(result.historical, 'historical-metrics');
+          renderSvgChart(result.equity_curve, 'equity-chart');
+          $('historical-params').textContent = `Parameters: ${JSON.stringify(result.strategy.parameters)}`;
+          if (result.regime_analysis) {
+            const r = result.regime_analysis;
+            $('regime-diagnostic').textContent = `Detected regime: ${r.regime} · drift ${r.detected_drift}%/yr · vol ${r.detected_volatility}%/yr · high-vol periods ${r.high_vol_periods_pct}% of time.`;
+          }
+          $('historical-badge').textContent = `Baseline (${result.strategy.type})`;
+          activateStep(3);
+          $('step-3').classList.remove('hidden');
+          $('forward-badge').textContent = `${result.forward_test.total_worlds} worlds`;
+          renderForwardRows(result.forward_test.regimes, worlds);
+          $('forward-mode-label').textContent = `Forward mode: ${result.forward_mode === 'exchange' ? 'Full exchange simulation (spread, impact, agent interaction)' : 'Fast GBM synthetic paths'}`;
+          activateStep(4);
+          $('step-4').classList.remove('hidden');
+          renderReport(result);
+          $('session-info').innerHTML = `Session: <code>${esc(result.session_id)}</code> · <a href="/api/break-test/session/${esc(result.session_id)}" target="_blank">View raw JSON ↗</a>`;
+          activateStep(5);
+          $('step-5').classList.remove('hidden');
+          $('quant-status').textContent = 'Run sensitivity or worst-case with your current historical baseline.';
+          window.scrollTo({ top: document.querySelector('#step-5').offsetTop - 90, behavior: 'smooth' });
+          $('config-status').textContent = 'Test complete.';
+        } catch (err) {
+          $('config-status').textContent = err.message;
+          $('config-status').className = 'status error';
+        } finally {
+          btn.disabled = false;
+          btn.textContent = 'Run Break Test →';
+        }
+      };
+
+      $('fix-and-retest-btn').onclick = async () => {
+        if (!lastResult) return;
+        const btn = $('fix-and-retest-btn');
+        btn.disabled = true;
+        btn.textContent = 'Running corrected test…';
+        try {
+          const prices = await getPrices();
+          const worlds = parseInt($('worlds-per-regime').value, 10);
+          const correction = JSON.parse(btn.dataset.correction || '{}');
+          const { type } = getParams();
+          const originalParams = lastResult.strategy.parameters;
+          const fixParams = { ...originalParams, ...correction };
+          const forwardMode = $('forward-mode').value;
+          const body = { closes: prices, strategy_type: type, params: fixParams, worlds_per_regime: worlds, forward_mode: forwardMode };
+          if (type === 'python') {
+            body.strategy_code = $('strategy-code').value;
+          }
+          const result = await api('/api/break-test/run', {
+            method: 'POST',
+            body: JSON.stringify(body),
+          });
+          lastCorrected = result;
+          renderComparison(lastResult, lastCorrected);
+          window.scrollTo({ top: $('step-5').offsetTop - 90, behavior: 'smooth' });
+        } catch (err) {
+          $('config-status').textContent = 'Fix and retest failed: ' + err.message;
+          $('config-status').className = 'status error';
+        } finally {
+          btn.disabled = false;
+          btn.textContent = 'Fix and retest →';
+        }
+      };
+
+      function quantHelper(route) {
+        if (!lastResult) {
+          alert('Run a break test first to establish the baseline.');
+          return;
+        }
+        const prices = lastResult.equity_curve || generateDemoPrices();
+        const type = lastResult.strategy.type;
+        const params = lastResult.strategy.parameters || {};
+        if (!params || Object.keys(params).length === 0) {
+          alert('This strategy needs resolved parameters to run quant analysis.');
+          return;
+        }
+        $('quant-status').textContent = 'Running…';
+        api('/api' + route, {
+          method: 'POST',
+          body: JSON.stringify({ closes: prices, strategy_type: type, params, worlds_per_regime: 20 }),
+        }).then(data => {
+          if (route === '/quant/sensitivity') {
+            $('sensitivity-results').classList.remove('hidden');
+            $('worst-case-results').classList.add('hidden');
+            const best = data.best || {};
+            $('sensitivity-summary').innerHTML = Object.entries({
+              candidates_tested: data.candidates_tested,
+              robustness_score: best.robustness_score,
+              parameter_stability: data.stability?.parameter_stability,
+            }).map(([k,v]) => `<div class="metric"><small>${esc(k)}</small><b>${esc(v)}</b></div>`).join('');
+            const top3 = data.top_3 || [];
+            $('sensitivity-top').innerHTML = '<table class="regime-table"><thead><tr><th>Rank</th><th>Params</th><th>Score</th></tr></thead><tbody>' +
+              top3.map((c, i) => `<tr><td>${i + 1}</td><td><code>${esc(JSON.stringify(c.params))}</code></td><td>${c.robustness_score}</td></tr>`).join('') +
+              '</tbody></table>';
+            $('quant-status').textContent = `Sensitivity complete: ${data.candidates_tested} parameter sets evaluated.`;
+          } else {
+            $('worst-case-results').classList.remove('hidden');
+            $('sensitivity-results').classList.add('hidden');
+            $('worst-case-rows').innerHTML = (data.regime_worst_cases || []).map(item => `
+              <tr>
+                <td><strong>${esc(item.regime)}</strong></td>
+                <td class="loss">${item.worst_drawdown_pct}%</td>
+                <td class="${item.loss_rate_pct > 50 ? 'loss' : 'win'}">${item.loss_rate_pct}%</td>
+                <td>${esc(item.attribution)}</td>
+              </tr>
+            `).join('');
+            $('worst-case-summary').innerHTML = Object.entries({
+              overall_worst: data.overall_worst_regime?.regime,
+              historical_trade_sharpe: data.historical_trade_sharpe,
+              historical_avg_trade: data.historical_avg_trade,
+            }).map(([k,v]) => `<div class="metric"><small>${esc(k)}</small><b>${esc(v)}</b></div>`).join('');
+            $('quant-status').textContent = `Worst-case attribution complete. Worst regime: ${data.overall_worst_regime?.regime}`;
+          }
+        }).catch(err => {
+          $('quant-status').textContent = 'Quant analysis failed: ' + err.message;
+          $('quant-status').className = 'status error';
+        });
+      }
+
+      $('run-sensitivity-btn').onclick = () => quantHelper('/quant/sensitivity');
+      $('run-worst-case-btn').onclick = () => quantHelper('/quant/worst-case');
+
+      $('demo-btn').onclick = async () => {
+        const btn = $('demo-btn');
+        btn.disabled = true;
+        btn.textContent = 'Loading demo…';
+        try {
+          const prices = generateDemoPrices();
+          $('data-source').value = 'demo';
+          $('csv-upload').classList.add('hidden');
+          const body = { closes: prices, strategy_type: 'sma_crossover', params: { fast: 20, slow: 50 }, worlds_per_regime: 120 };
+          const result = await api('/api/break-test/run', {
+            method: 'POST',
+            body: JSON.stringify(body),
+          });
+          lastResult = result;
+          lastCorrected = null;
+          activateStep(2);
+          $('step-2').classList.remove('hidden');
+          renderMetrics(result.historical, 'historical-metrics');
+          renderSvgChart(result.equity_curve, 'equity-chart');
+          $('historical-params').textContent = 'Parameters: {"fast":20,"slow":50}';
+          $('historical-badge').textContent = `Baseline (${result.strategy.type})`;
+          activateStep(3);
+          $('step-3').classList.remove('hidden');
+          $('forward-badge').textContent = `${result.forward_test.total_worlds} worlds`;
+          renderForwardRows(result.forward_test.regimes, 120);
+          $('forward-mode-label').textContent = 'Forward mode: Fast GBM synthetic paths';
+          activateStep(4);
+          $('step-4').classList.remove('hidden');
+          renderReport(result);
+          $('session-info').innerHTML = `Session: <code>${esc(result.session_id)}</code> · <a href="/api/break-test/session/${esc(result.session_id)}" target="_blank">View raw JSON ↗</a>`;
+          activateStep(5);
+          $('step-5').classList.remove('hidden');
+          $('quant-status').textContent = 'Demo complete. Try quant analysis below.';
+          window.scrollTo({ top: document.querySelector('#step-2').offsetTop - 90, behavior: 'smooth' });
+        } catch (err) {
+          $('config-status').textContent = 'Demo failed: ' + err.message;
+          $('config-status').className = 'status error';
+        } finally {
+          btn.disabled = false;
+          btn.textContent = 'Try demo';
+        }
+      };
+
+      renderParams('sma_crossover');
+    </script>
+  </body>
+</html>
