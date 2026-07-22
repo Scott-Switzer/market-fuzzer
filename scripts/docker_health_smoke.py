@@ -35,7 +35,11 @@ def main() -> None:
     assert ready["database"] == "ok"
     assert ready["artifact_store"] == "ok"
 
-    status, _, arena = _get("/")
+    status, _, home = _get("/")
+    assert status == 200
+    assert "Strategy Break Test" in home or "Synthetic Market World" in home
+
+    status, _, arena = _get("/arena")
     assert status == 200
     assert "Quant Challenge Arena" in arena
 

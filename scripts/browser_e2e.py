@@ -179,7 +179,7 @@ def main() -> None:
         try:
             student_page = student.new_page()
             _collect_console(student_page, console_errors)
-            student_page.goto("/", wait_until="networkidle")
+            student_page.goto("/arena", wait_until="networkidle")
             assert "Quant Challenge Arena" in student_page.title()
             student_page.get_by_role("heading", name="Can your strategy survive", exact=False).wait_for()
             student_page.get_by_role("link", name="Advanced Market Fuzzer", exact=False).wait_for()
@@ -193,7 +193,7 @@ def main() -> None:
             public_brief = _expect(student.request.get(CHALLENGE_ROOT), 200, "load public challenge")
             assert public_brief["challenge_id"] == CHALLENGE_ID
             public_text = str(public_brief)
-            public_html_response = student.request.get("/")
+            public_html_response = student.request.get("/arena")
             public_js_response = student.request.get("/static/arena.js")
             assert public_html_response.status == 200
             assert public_js_response.status == 200
@@ -287,7 +287,7 @@ def main() -> None:
 
             instructor_page = instructor.new_page()
             _collect_console(instructor_page, console_errors)
-            instructor_page.goto("/", wait_until="networkidle")
+            instructor_page.goto("/arena", wait_until="networkidle")
             instructor_page.locator("#instructor-code").fill("browser-e2e-instructor-code")
             with instructor_page.expect_response(
                 lambda response: response.url.endswith("/api/arena/demo-session"), timeout=30_000
@@ -426,7 +426,7 @@ def main() -> None:
                     assert evidence_id in explanation_text
 
             student_page.set_viewport_size({"width": 390, "height": 844})
-            student_page.goto("/", wait_until="networkidle")
+            student_page.goto("/arena", wait_until="networkidle")
             student_page.get_by_role("heading", name="Can your strategy survive", exact=False).wait_for()
             student_page.locator("#policy-section").scroll_into_view_if_needed()
             comparison_selector.wait_for()

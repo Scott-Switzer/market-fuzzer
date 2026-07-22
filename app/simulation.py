@@ -8,16 +8,29 @@ import time
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Literal
 
 from app.agents.behaviors import AgentContext, ExecutionAgent, MarketMaker, build_agents
-from app.exchange import Account, CancelRequest, Exchange, Order, OrderType, Side
+from app.exchange import (
+    Account,
+    CancelRequest,
+    EventKernelV2,
+    Exchange,
+    ExchangeEngineV2,
+    Order,
+    OrderType,
+    Side,
+    build_run_manifest_v2,
+)
+from app.break_test.costs import toxicity_bps
+from app.break_test.metrics import compute_tca_metrics, tca_by_bucket
+from app.exchange.volume_profile import displayed_depth_autor, intraday_volume_weights
 from app.orderflow import QueueReactiveProvider, RuleBasedProvider
 from app.schemas import WorldSpec
 from app.strategy_protocol import StrategyActionV1
-
 MESSAGE_STEP_MS = 20
 ExecutionDecider = Callable[[dict[str, Any]], dict[str, Any]]
+ExchangeEngineName = Literal["v1", "v2"]
 
 
 @dataclass(frozen=True)
@@ -250,10 +263,34 @@ def _orders_from_adapter_action(
     return [order] if order else []
 
 
-def run_simulation(spec: WorldSpec, *, execution_decider: ExecutionDecider | None = None) -> SimulationResult:
+def run_simulation(
+    spec: WorldSpec,
+    *,
+    execution_decider: ExecutionDecider | None = None,
+    exchange_engine: ExchangeEngineName = "v2",
+    collect_timeline: bool = True,
+    collect_agent_states: bool = True,
+    collect_strategy_steps: bool = True,
+    strategy_artifact_digest: str | None = None,
+) -> SimulationResult:
+    """Run one sealed world simulation.
+
+    Collection flags default on for backward compatibility. Callers that only
+    need trades/summary can set ``collect_timeline`` / ``collect_agent_states`` /
+    ``collect_strategy_steps`` to False to skip per-step appends.
+    """
     started = time.perf_counter()
     rng = random.Random(spec.seed)
-    exchange = Exchange([asset.ticker for asset in spec.assets], spec.exchange)
+    symbols = [asset.ticker for asset in spec.assets]
+    if exchange_engine == "v2":
+        kernel = EventKernelV2(
+            build_run_manifest_v2(spec, strategy_artifact_digest=strategy_artifact_digest)
+        )
+        exchange: Exchange = ExchangeEngineV2(symbols, spec.exchange, kernel=kernel)
+    elif exchange_engine == "v1":
+        exchange = Exchange(symbols, spec.exchange)
+    else:
+        raise ValueError(f"unsupported exchange_engine {exchange_engine!r}")
     provider = (
         QueueReactiveProvider(spec) if spec.order_flow_provider == "queue_reactive" else RuleBasedProvider()
     )
@@ -281,12 +318,26 @@ def run_simulation(spec: WorldSpec, *, execution_decider: ExecutionDecider | Non
     timeline: list[dict] = []
     agent_states: list[dict] = []
     strategy_observations: list[dict] = []
+    # Slim mid/spread tracks keep summary math correct when full timeline is omitted.
+    target_mid_series: list[int] = []
+    target_spread_series: list[int | None] = []
     trade_cursor = 0
     initial_cash_cents = exchange.total_cash_cents()
     initial_inventory = {symbol: exchange.total_inventory(symbol) for symbol in exchange.books}
     event_map: dict[int, list] = {}
     for event in spec.events:
         event_map.setdefault(event.simulation_step, []).append(event)
+
+    volume_weights = intraday_volume_weights(spec.exchange.intraday_volume_profile, spec.clock.steps)
+    # Default step budget: ADTV spread across the session, optionally hard-capped.
+    base_step_volume = max(spec.exchange.lot_size, int(spec.exchange.adtv // max(spec.clock.steps, 1)))
+    configured_cap = spec.exchange.per_step_volume_cap
+    volume_limiting_enabled = (
+        spec.exchange.intraday_volume_profile != "flat" or configured_cap is not None
+    )
+    step_volume_remaining: dict[str, int] = {asset.ticker: 0 for asset in spec.assets}
+    step_volume_budget: dict[str, int] = {asset.ticker: 0 for asset in spec.assets}
+    asset_liquidity = {asset.ticker: asset.liquidity_profile for asset in spec.assets}
 
     def apply_execution_fills(trades: list[Any]) -> None:
         execution.executed_quantity += sum(
@@ -296,12 +347,36 @@ def run_simulation(spec: WorldSpec, *, execution_decider: ExecutionDecider | Non
         )
 
     def submit_to_exchange(order: Order, step: int) -> list[Any]:
-        trades = exchange.submit(order, step)
+        max_match: int | None = None
+        if volume_limiting_enabled:
+            max_match = max(0, int(step_volume_remaining.get(order.symbol, 0)))
+        trades = exchange.submit(order, step, max_match_quantity=max_match)
+        filled = sum(int(trade.quantity) for trade in trades)
+        if volume_limiting_enabled and order.symbol in step_volume_remaining:
+            step_volume_remaining[order.symbol] = max(0, step_volume_remaining[order.symbol] - filled)
         apply_execution_fills(trades)
         agent = agent_map.get(order.agent_id)
-        if agent is not None and order.remaining and order.order_type == OrderType.LIMIT:
+        if (
+            agent is not None
+            and order.remaining
+            and order.order_type == OrderType.LIMIT
+            and order.order_id in exchange.books[order.symbol].orders
+        ):
             agent.resting_order_ids.add(order.order_id)
         return trades
+
+    def refresh_step_volume(step: int) -> float:
+        weight = volume_weights[step] if step < len(volume_weights) else (1.0 / max(spec.clock.steps, 1))
+        relative = weight * spec.clock.steps  # mean ~1.0 across the session
+        for asset in spec.assets:
+            budget = int(round(base_step_volume * relative))
+            budget -= budget % spec.exchange.lot_size
+            if configured_cap is not None:
+                budget = min(budget, int(configured_cap))
+            budget = max(spec.exchange.lot_size, budget)
+            step_volume_budget[asset.ticker] = budget
+            step_volume_remaining[asset.ticker] = budget
+        return relative
 
     def active_strategy_quantity() -> int:
         queued = sum(
@@ -391,6 +466,8 @@ def run_simulation(spec: WorldSpec, *, execution_decider: ExecutionDecider | Non
         )
 
     # Prime persistent books before the first strategy slice.
+    if volume_limiting_enabled:
+        refresh_step_volume(0)
     for agent in agents:
         if isinstance(agent, MarketMaker):
             for asset in spec.assets:
@@ -413,6 +490,19 @@ def run_simulation(spec: WorldSpec, *, execution_decider: ExecutionDecider | Non
     forced_remaining = spec.interventions.forced_seller_quantity
     forced_start = max(1, spec.clock.steps // 2)
     for step in range(spec.clock.steps):
+        volume_relative = refresh_step_volume(step) if volume_limiting_enabled else 1.0
+        depth_autor = 1.0
+        if volume_limiting_enabled:
+            depth_autor = (
+                displayed_depth_autor(
+                    spec.exchange.baseline_depth,
+                    asset_liquidity.get(spec.experiment.target_asset, "normal"),
+                    volume_weight=volume_relative,
+                    intervention_multiplier=1.0,
+                )
+                / max(spec.exchange.baseline_depth, 1)
+            )
+        step_liquidity_multiplier = liquidity_multiplier * depth_autor
         for event in event_map.get(step, []):
             if event.asset:
                 fundamentals[event.asset] = max(
@@ -538,7 +628,7 @@ def run_simulation(spec: WorldSpec, *, execution_decider: ExecutionDecider | Non
                     mid,
                     prices[asset.ticker],
                     observed_volume,
-                    liquidity_multiplier,
+                    step_liquidity_multiplier,
                 )
                 latency = _latency_profile(agent.latency_ms, spec.exchange.latency_profile)
                 if isinstance(agent, ExecutionAgent) and asset.ticker == spec.experiment.target_asset:
@@ -594,7 +684,7 @@ def run_simulation(spec: WorldSpec, *, execution_decider: ExecutionDecider | Non
                             "spread_bps": min(1_000_000.0, max(0.0, spread_bps)),
                             "exchange_latency_profile": spec.exchange.latency_profile,
                             "intervention_active": bool(
-                                liquidity_multiplier < 1.0
+                                step_liquidity_multiplier < 1.0
                                 or spec.macro.volatility_regime != "normal"
                                 or spec.exchange.latency_profile == "high"
                             ),
@@ -648,7 +738,7 @@ def run_simulation(spec: WorldSpec, *, execution_decider: ExecutionDecider | Non
                             buffer_steps = int(agent.parameters.get("completion_buffer_steps", 0))
                             steps_left = spec.clock.steps - step
                             adaptive_stress_active = (
-                                liquidity_multiplier < 1.0
+                                step_liquidity_multiplier < 1.0
                                 or spec.macro.volatility_regime != "normal"
                                 or spec.exchange.latency_profile == "high"
                             )
@@ -742,32 +832,50 @@ def run_simulation(spec: WorldSpec, *, execution_decider: ExecutionDecider | Non
             or not parent_capacity_ties
         ):
             raise AssertionError(f"execution inventory invariant failed at step {step}")
-        timeline.append(
-            {
-                "step": step,
-                "asset_states": asset_states,
-                "liquidity_multiplier": liquidity_multiplier,
-                "events": [row for row in events_log if row["step"] == step],
-                "accounting": {
-                    "cash_conservation": cash_conservation,
-                    "inventory_conservation": inventory_conservation,
-                    "strategy_inventory_ties": strategy_inventory_ties,
-                    "parent_capacity_ties": parent_capacity_ties,
-                },
-            }
-        )
-        trade_cursor = len(exchange.trade_log)
-        for agent in agents:
-            account = exchange.accounts[agent.agent_id]
-            agent_states.append(
+        target_state = asset_states[spec.experiment.target_asset]
+        target_mid_series.append(int(target_state["mid_ticks"]))
+        target_spread_series.append(target_state["spread_ticks"])
+        if collect_timeline:
+            timeline.append(
                 {
                     "step": step,
-                    "agent_id": agent.agent_id,
-                    "agent_type": agent.agent_type,
-                    "cash_cents": account.cash_cents,
-                    "inventory": dict(account.inventory),
+                    "asset_states": asset_states,
+                    "liquidity_multiplier": step_liquidity_multiplier,
+                    "events": [row for row in events_log if row["step"] == step],
+                    "accounting": {
+                        "cash_conservation": cash_conservation,
+                        "inventory_conservation": inventory_conservation,
+                        "strategy_inventory_ties": strategy_inventory_ties,
+                        "parent_capacity_ties": parent_capacity_ties,
+                    },
                 }
             )
+        trade_cursor = len(exchange.trade_log)
+        if collect_agent_states:
+            for agent in agents:
+                account = exchange.accounts[agent.agent_id]
+                agent_states.append(
+                    {
+                        "step": step,
+                        "agent_id": agent.agent_id,
+                        "agent_type": agent.agent_type,
+                        "cash_cents": account.cash_cents,
+                        "inventory": dict(account.inventory),
+                    }
+                )
+        elif step == spec.clock.steps - 1:
+            # Retain a final agent snapshot so callers can still resolve execution inventory.
+            for agent in agents:
+                account = exchange.accounts[agent.agent_id]
+                agent_states.append(
+                    {
+                        "step": step,
+                        "agent_id": agent.agent_id,
+                        "agent_type": agent.agent_type,
+                        "cash_cents": account.cash_cents,
+                        "inventory": dict(account.inventory),
+                    }
+                )
 
     exchange.finalize_order_log(spec.clock.steps - 1)
     strategy_trades = [
@@ -778,21 +886,30 @@ def run_simulation(spec: WorldSpec, *, execution_decider: ExecutionDecider | Non
     executed = sum(trade["quantity"] for trade in strategy_trades)
     if executed > spec.experiment.parent_order.quantity:
         raise AssertionError("execution fills exceed parent quantity")
-    strategy_steps = _build_strategy_steps(
-        steps=spec.clock.steps,
-        target_quantity=spec.experiment.parent_order.quantity,
-        target_symbol=spec.experiment.target_asset,
-        side=execution.side,
-        strategy_id=execution.agent_id,
-        arrival_price=arrival_price,
-        orders=exchange.order_log,
-        cancels=exchange.cancel_log,
-        trades=exchange.trade_log,
-        observations=strategy_observations,
-        agent_states=agent_states,
-    )
-    for frame, strategy_step in zip(timeline, strategy_steps, strict=True):
-        frame["strategy"] = strategy_step
+    if collect_strategy_steps:
+        strategy_steps = _build_strategy_steps(
+            steps=spec.clock.steps,
+            target_quantity=spec.experiment.parent_order.quantity,
+            target_symbol=spec.experiment.target_asset,
+            side=execution.side,
+            strategy_id=execution.agent_id,
+            arrival_price=arrival_price,
+            orders=exchange.order_log,
+            cancels=exchange.cancel_log,
+            trades=exchange.trade_log,
+            observations=strategy_observations,
+            agent_states=agent_states,
+        )
+    else:
+        strategy_steps = []
+    if collect_timeline and collect_strategy_steps:
+        for frame, strategy_step in zip(timeline, strategy_steps):
+            frame["strategy"] = strategy_step
+        if len(timeline) != len(strategy_steps):
+            print(
+                f"Strategy step/timeline length mismatch for seed={spec.seed}: "
+                f"{len(timeline)} frames vs {len(strategy_steps)} strategy steps."
+            )
     notional_ticks = sum(trade["price_ticks"] * trade["quantity"] for trade in strategy_trades)
     average = notional_ticks / executed if executed else 0.0
     target_market_trades = [
@@ -806,12 +923,73 @@ def run_simulation(spec: WorldSpec, *, execution_decider: ExecutionDecider | Non
     )
     direction = 1 if spec.experiment.parent_order.side == "buy" else -1
     shortfall = direction * (average / arrival_price - 1) * 10_000 if executed else 0.0
-    last_price = timeline[-1]["asset_states"][spec.experiment.target_asset]["mid_ticks"]
-    mids = [frame["asset_states"][spec.experiment.target_asset]["mid_ticks"] for frame in timeline]
+    mids = target_mid_series or [arrival_price]
+    last_price = mids[-1]
     temporary = direction * ((max(mids) if direction > 0 else min(mids)) / arrival_price - 1) * 10_000
-    spreads = [frame["asset_states"][spec.experiment.target_asset]["spread_ticks"] for frame in timeline]
+    spreads = target_spread_series
     valid_spreads = [spread for spread in spreads if spread is not None]
     max_loss = min(direction * (mid / arrival_price - 1) * 10_000 for mid in mids)
+    final_strategy_step = strategy_steps[-1] if strategy_steps else {
+        "strategy_active_quantity": active_strategy_quantity(),
+        "parent_inventory_accounting_ties": True,
+        "child_order_accounting_ties": True,
+        "strategy_inventory_accounting_ties": True,
+    }
+    engine_provenance = (
+        exchange.provenance()
+        if isinstance(exchange, ExchangeEngineV2)
+        else {"engine_version": "v1", "protocol_version": None, "ledger_digest": None, "event_count": 0}
+    )
+
+    steps = spec.clock.steps
+    signed_taker_flow_by_step = [0 for _ in range(steps)]
+    depth_by_step = [0 for _ in range(steps)]
+    for trade in exchange.trade_log:
+        step_idx = int(trade.get("step", trade.get("fill_step", 0)) or 0)
+        if step_idx < 0 or step_idx >= steps:
+            continue
+        qty = int(trade.get("quantity", 0) or 0)
+        taker_id = trade.get("taker_id")
+        if taker_id == trade.get("buyer_id"):
+            signed_taker_flow_by_step[step_idx] += qty
+        else:
+            signed_taker_flow_by_step[step_idx] -= qty
+    if timeline:
+        for frame in timeline:
+            step_idx = int(frame.get("step", 0) or 0)
+            if step_idx < 0 or step_idx >= steps:
+                continue
+            state = frame.get("asset_states", {}).get(spec.experiment.target_asset, {})
+            depth_by_step[step_idx] = int(state.get("bid_depth", 0) or 0) + int(state.get("ask_depth", 0) or 0)
+    else:
+        # Slim path: approximate depth from exchange baseline when timeline omitted.
+        baseline = int(spec.exchange.baseline_depth)
+        depth_by_step = [baseline for _ in range(steps)]
+
+    toxicity_series = [
+        toxicity_bps(
+            signed_taker_flow_by_step[index - 1] if index > 0 else 0,
+            depth_by_step[index - 1] if index > 0 else depth_by_step[0],
+            kappa=float(spec.exchange.toxicity_kappa),
+        )
+        for index in range(steps)
+    ]
+    tca = compute_tca_metrics(
+        arrival_price=float(arrival_price),
+        average_execution_price=float(average) if executed else float(arrival_price),
+        market_vwap=float(market_vwap),
+        final_price=float(last_price),
+        filled_quantity=float(executed),
+        target_quantity=float(spec.experiment.parent_order.quantity),
+        side=str(spec.experiment.parent_order.side),
+    )
+    tca_buckets = tca_by_bucket(
+        strategy_trades,
+        arrival_price=float(arrival_price),
+        side=str(spec.experiment.parent_order.side),
+        adtv=float(spec.exchange.adtv),
+    )
+
     summary = {
         "filled_quantity": executed,
         "fill_rate": executed / spec.experiment.parent_order.quantity,
@@ -821,11 +999,19 @@ def run_simulation(spec: WorldSpec, *, execution_decider: ExecutionDecider | Non
         "vwap_slippage_bps": direction * (average / market_vwap - 1) * 10_000 if executed else 0.0,
         "implementation_shortfall_bps": shortfall,
         "slippage_bps": shortfall,
+        "slippage_vs_vwap": tca["slippage_vs_vwap"],
+        "slippage_vs_arrival": tca["slippage_vs_arrival"],
+        "opportunity_cost": tca["opportunity_cost"],
+        "completion_rate_penalty_bps": tca["completion_rate_penalty_bps"],
+        "tca_by_bucket": tca_buckets,
         "temporary_impact_bps": temporary,
         "spread_paid_bps": (sum(valid_spreads) / len(valid_spreads) / arrival_price * 10_000)
         if valid_spreads
         else 0.0,
         "adverse_selection_bps": direction * (last_price / average - 1) * 10_000 if executed else 0.0,
+        "toxicity_bps_mean": round(float(sum(toxicity_series) / max(len(toxicity_series), 1)), 4),
+        "signed_taker_flow_by_step": signed_taker_flow_by_step,
+        "signed_taker_flow_total": int(sum(signed_taker_flow_by_step)),
         "remaining_inventory": spec.experiment.parent_order.quantity - executed,
         "persistent_impact_bps": direction * (last_price / arrival_price - 1) * 10_000,
         "max_mark_to_market_loss_bps": max_loss,
@@ -840,10 +1026,10 @@ def run_simulation(spec: WorldSpec, *, execution_decider: ExecutionDecider | Non
             for row in exchange.cancel_log
             if row["agent_id"] == execution.agent_id
         ),
-        "strategy_active_quantity": strategy_steps[-1]["strategy_active_quantity"],
-        "parent_inventory_accounting_ties": strategy_steps[-1]["parent_inventory_accounting_ties"],
-        "child_order_accounting_ties": strategy_steps[-1]["child_order_accounting_ties"],
-        "strategy_inventory_accounting_ties": strategy_steps[-1]["strategy_inventory_accounting_ties"],
+        "strategy_active_quantity": final_strategy_step["strategy_active_quantity"],
+        "parent_inventory_accounting_ties": final_strategy_step["parent_inventory_accounting_ties"],
+        "child_order_accounting_ties": final_strategy_step["child_order_accounting_ties"],
+        "strategy_inventory_accounting_ties": final_strategy_step["strategy_inventory_accounting_ties"],
         "market_disruption": max(0.0, temporary - shortfall),
         "fees_cents": exchange.fee_account_cents,
         "world_type": spec.world_type,
@@ -856,6 +1042,20 @@ def run_simulation(spec: WorldSpec, *, execution_decider: ExecutionDecider | Non
         "calibration_parameter_set_id": spec.calibration_parameter_set_id,
         "order_flow_provider": spec.order_flow_provider,
         "interventions": spec.interventions.model_dump(mode="json"),
+        "exchange_engine": engine_provenance["engine_version"],
+        "ledger_digest": engine_provenance.get("ledger_digest"),
+        "event_kernel_event_count": engine_provenance.get("event_count"),
+        "intraday_volume_profile": spec.exchange.intraday_volume_profile,
+        "per_step_volume_cap": spec.exchange.per_step_volume_cap,
+        "volume_limiting_enabled": volume_limiting_enabled,
+        "htb_bps_annual": spec.exchange.htb_bps_annual,
+        "htb_schedule": spec.exchange.htb_schedule,
+        "toxicity_kappa": spec.exchange.toxicity_kappa,
+        "collection": {
+            "timeline": collect_timeline,
+            "agent_states": collect_agent_states,
+            "strategy_steps": collect_strategy_steps,
+        },
     }
     latency_profile = {
         "profile_name": spec.exchange.latency_profile,

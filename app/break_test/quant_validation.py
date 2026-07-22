@@ -158,7 +158,8 @@ def _backtest_metrics(prices: list[float], positions: list[float]) -> dict[str, 
     returns = np.diff(px) / px[:-1]
     held = pos[:-1]
     turnover = np.abs(np.diff(pos, prepend=0.0))[:-1]
-    strategy_returns = held * returns - turnover * 2.0 / 10_000
+    global_cost = 2.0 / 10_000
+    strategy_returns = held * returns - turnover * global_cost
     equity = np.cumprod(1 + strategy_returns)
     peaks = np.maximum.accumulate(equity)
     drawdown = equity / peaks - 1
@@ -188,7 +189,7 @@ def _quick_forward_test(prices: list[float], strategy_type: str, params: dict[st
     base_vol = max(float(np.std(base_returns)), 0.0001)
     results: list[dict[str, object]] = []
     for regime_index, key in enumerate(REGIME_KEYS):
-        drift, vol_mult, reversal = SYNTHETIC_REGIMES[key]
+        drift, vol_mult, reversal = SYNTHETIC_REGIMES[key]["drift"], SYNTHETIC_REGIMES[key]["vol"], SYNTHETIC_REGIMES[key]["reversal"]
         returns_list: list[float] = []
         drawdowns: list[float] = []
         losses = 0

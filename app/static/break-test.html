@@ -26,7 +26,19 @@
       .alt-card{background:var(--white);border:2px solid var(--blue);border-radius:12px;padding:18px;margin:14px 0}.alt-card h3{color:var(--blue)}
       .compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
       .hidden{display:none!important}
-      @media(max-width:820px){.hero{display:block}.hero-note{width:auto;margin-top:16px}.step-grid{grid-template-columns:1fr}.steps{grid-template-columns:1fr 1fr}.form-row{grid-template-columns:1fr}.compare-grid{grid-template-columns:1fr}}
+      .section{display:grid;gap:14px;margin-bottom:14px}
+      .chip-row{display:flex;gap:8px;flex-wrap:wrap}
+      .chip{border:1px solid #cbd5e1;border-radius:999px;padding:8px 14px;background:var(--white);font-weight:700;cursor:pointer;font-size:12px}.chip.active{background:var(--blue);color:var(--white);border-color:var(--blue)}
+      .timeline{display:flex;height:18px;border-radius:999px;overflow:hidden;margin:10px 0;border:1px solid var(--line)}.timeline.block{border-radius:0;height:22px}.timeline > *{transition:width .2s}
+      .heatmap{display:grid;gap:3px;margin:12px 0}.heatmap .cell{border-radius:6px;min-height:40px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff}
+      .card{background:#f8fafc;border:1px solid var(--line);border-radius:12px;padding:14px;margin:10px 0}
+      .two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+      .pill{display:inline-flex;align-items:center;gap:8px;background:#eef4ff;border:1px solid var(--line);border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700}
+      .pill .dot{width:10px;height:10px;border-radius:50%}
+      .code{font-family:ui-monospace,monospace;font-size:12px}
+      .muted{color:var(--muted)}
+      .notify{background:#f5f8fc;border-left:3px solid var(--blue);padding:10px 12px;border-radius:10px;font-size:12px;color:var(--muted)}
+      @media(max-width:820px){.hero{display:block}.hero-note{width:auto;margin-top:16px}.step-grid{grid-template-columns:1fr}.steps{grid-template-columns:1fr 1fr}.form-row{grid-template-columns:1fr}.compare-grid{grid-template-columns:1fr}.two-col{grid-template-columns:1fr}}
       @media(max-width:520px){.steps{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}}
     </style>
   </head>
@@ -46,7 +58,7 @@
         <div>
           <div class="eyebrow">STRATEGY ROBUSTNESS VALIDATION</div>
           <h1>Backtest it. Stress it. Find where it breaks.</h1>
-          <p class="lead">Upload a strategy or pick a built-in example. Run a conventional backtest, then forward-test the unchanged strategy through hundreds of unseen synthetic markets. Get a clear report showing where and why it fails.</p>
+          <p class="lead">Upload a strategy or pick a built-in example. Run a conventional backtest, then forward-test the unchanged strategy through synthetic markets. Get a clear report showing where and why it fails.</p>
         </div>
         <div class="hero-note">
           <strong>Synthetic evidence</strong>
@@ -55,68 +67,189 @@
       </section>
 
       <div id="steps" class="steps">
-        <div class="step active" data-step="1"><b>01</b><span>Choose strategy</span><small>Pick built-in or write code</small></div>
+        <div class="step active" data-step="1"><b>01</b><span>Configure inputs</span><small>Data, strategy, universe, execution</small></div>
         <div class="step" data-step="2"><b>02</b><span>Run backtest</span><small>Historical baseline</small></div>
         <div class="step" data-step="3"><b>03</b><span>Forward test</span><small>Synthetic stress</small></div>
         <div class="step" data-step="4"><b>04</b><span>Review report</span><small>Failure + fix</small></div>
       </div>
-
       <div class="step-grid">
+
         <!-- Step 1: Configure -->
         <section class="panel wide" id="step-1">
-          <div class="panel-head"><div><div class="label">01 · CONFIGURE</div><h2>Pick a strategy and load data</h2></div></div>
+          <div class="panel-head"><div><div class="label">01 · CONFIGURE</div><h2>Inputs & execution</h2></div></div>
           <form id="config-form">
+            <div class="section">
+              <div class="label">DATA SOURCE</div>
               <div class="form-row">
-              <label>Strategy type
-                <select id="strategy-type">
-                  <option value="sma_crossover">SMA Crossover</option>
-                  <option value="breakout">Breakout Momentum</option>
-                  <option value="rsi_reversion">RSI Mean Reversion</option>
-                  <option value="python">Custom Python</option>
-                </select>
-              </label>
-              <label>Forward mode
-                <select id="forward-mode">
-                  <option value="gbm">Fast (GBM synthetic)</option>
-                  <option value="exchange">Exchange simulation</option>
-                </select>
-              </label>
-            </div>
-            <div id="python-code-section" class="hidden">
-              <label>Python strategy function
-                <textarea id="strategy-code" rows="10" style="font-family:ui-monospace,monospace;font-size:12px" placeholder="def strategy(observations, params):&#10;    actions = []&#10;    for obs in observations:&#10;        if obs['mid_ticks'] > 100:&#10;            actions.append({'action_type': 'market', 'side': 'buy', 'quantity': 100})&#10;        else:&#10;            actions.append({'action_type': 'hold'})&#10;    return actions"></textarea>
-              </label>
-              <p class="help">Define a function <code>strategy(observations, params)</code> returning a list of action dicts. Each observation has: step, mid_ticks, spread_bps, inventory, etc. Each action needs: action_type (hold|market|limit), side, quantity. NumPy available as <code>np</code>.</p>
-            </div>
-            <div class="form-row">
-              <label>Data source
-                <select id="data-source">
-                  <option value="demo">Demo data (synthetic equity)</option>
-                  <option value="csv">Upload CSV</option>
-                </select>
-              </label>
+                <label>Data source
+                  <select id="data-source">
+                    <option value="demo">Demo data (synthetic)</option>
+                    <option value="csv">Upload CSV</option>
+                    <option value="yfinance">yfinance (free live)</option>
+                  </select>
+                  <span class="help">Choose synthetic demo, a local CSV, or live history via yfinance.</span>
+                </label>
+                <label>Forward mode
+                  <select id="forward-mode">
+                    <option value="gbm">Fast (GBM synthetic)</option>
+                    <option value="exchange">Exchange simulation</option>
+                  </select>
+                </label>
+              </div>
               <div id="csv-upload" class="hidden">
                 <label>Price CSV (one column: close)<input id="csv-file" type="file" accept=".csv,.txt" /></label>
                 <p class="help">Single column of closing prices, one per row. At least 80 rows.</p>
               </div>
+              <div id="yfinance-section" class="hidden">
+                <div class="form-row">
+                  <label>Ticker(s)<input id="yf-tickers" placeholder="SPY,QQQ" /></label>
+                  <label>Lookback
+                    <select id="yf-lookback">
+                      <option value="20y">20-year history</option>
+                      <option value="10y">10-year history</option>
+                      <option value="5y" selected>5-year history</option>
+                      <option value="3y">3-year history</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="form-row">
+                  <label>Start date<input id="yf-start" type="date" /></label>
+                  <label>End date<input id="yf-end" type="date" /></label>
+                </div>
+                <button id="load-yf-btn" class="primary" type="button">Load live history</button>
+                <p class="help" id="yf-status">Loads adjusted closes for the primary ticker and reuses them as the price series for this run.</p>
+              </div>
             </div>
-            <div id="params-section">
-              <p class="label" style="margin:4px 0 8px">PARAMETERS</p>
-              <div id="param-fields" class="form-row"></div>
+
+            <div class="section">
+              <div class="label">STRATEGY</div>
+              <div class="form-row">
+                <label>Strategy type
+                  <select id="strategy-type">
+                    <option value="sma_crossover">SMA Crossover</option>
+                    <option value="breakout">Breakout Momentum</option>
+                    <option value="rsi_reversion">RSI Mean Reversion</option>
+                    <option value="plain_english">Plain-English prompt</option>
+                    <option value="python">Custom Python</option>
+                  </select>
+                </label>
+                <label>&nbsp;<button id="demo-btn" type="button" style="margin-top:auto">Load demo prices</button></label>
+              </div>
+              <div id="plain-english-section" class="hidden">
+                <label>Describe your strategy
+                  <textarea id="plain-english" rows="5" placeholder="I want to buy when the 20-day moving average crosses above the 50-day moving average, and exit when it crosses back below..."></textarea>
+                </label>
+                <div class="chip-row">
+                  <button id="compile-btn" class="primary" type="button">Compile →</button>
+                  <span class="help" id="compile-status">Gets suggestions from /api/break-test/strategies.</span>
+                </div>
+                <div id="strategy-suggestions" class="hidden">
+                  <div class="label" style="margin-top:8px">TEMPLATE SUGGESTIONS</div>
+                  <div id="suggestion-list" class="chip-row"></div>
+                </div>
+              </div>
+              <div id="python-code-section" class="hidden">
+                <label>Python strategy function
+                  <textarea id="strategy-code" rows="8" style="font-family:ui-monospace,monospace;font-size:12px" placeholder="def strategy(observations, params):&#10;    actions = []&#10;    for obs in observations:&#10;        if obs['mid_ticks'] > 100:&#10;            actions.append({'action_type': 'market', 'side': 'buy', 'quantity': 100})&#10;        else:&#10;            actions.append({'action_type': 'hold'})&#10;    return actions"></textarea>
+                </label>
+                <p class="help">Define a function <code>strategy(observations, params)</code> returning a list of action dicts.</p>
+              </div>
+              <div id="params-section">
+                <p class="label" style="margin:4px 0 8px">PARAMETERS</p>
+                <div id="param-fields" class="form-row"></div>
+              </div>
             </div>
-            <div class="form-row">
-              <label>Forward-test worlds per regime
-                <select id="worlds-per-regime">
-                  <option value="30">30 (fast)</option>
-                  <option value="100" selected>100 (standard)</option>
-                  <option value="250">250 (thorough)</option>
-                </select>
-              </label>
-              <label>&nbsp;<button id="run-btn" class="primary" style="margin-top:auto">Run Break Test →</button></label>
-              <label>&nbsp;<button id="demo-btn" style="margin-top:auto">Try demo</button></label>
+
+            <div class="section">
+              <div class="label">UNIVERSE</div>
+              <div class="form-row">
+                <label>Asset count
+                  <select id="asset-count">
+                    <option value="3">3</option>
+                    <option value="8">8</option>
+                    <option value="12">12</option>
+                  </select>
+                </label>
+                <label>Universe preset
+                  <select id="universe-preset">
+                    <option value="default">default</option>
+                    <option value="eight_assets">eight_assets</option>
+                    <option value="twelve_assets">twelve_assets</option>
+                    <option value="custom_csv">custom_csv</option>
+                  </select>
+                </label>
+              </div>
+              <div id="universe-csv" class="hidden">
+                <label>Universe CSV<input id="universe-csv-file" type="file" accept=".csv,.txt" /></label>
+                <p class="help">Custom universe rows for asset selection. Uses mapped asset count.</p>
+              </div>
+              <div id="universe-preview" class="chip-row"></div>
+            </div>
+
+            <div class="section">
+              <div class="label">EXECUTION</div>
+              <div class="form-row">
+                <label>Execution algorithm
+                  <select id="execution-strategy">
+                    <option value="signal">Signal-based (default)</option>
+                    <option value="twap">TWAP</option>
+                    <option value="pov">POV</option>
+                    <option value="is">IS</option>
+                  </select>
+                </label>
+                <label>Participation rate<input id="participation-rate" type="number" value="0.08" step="0.01" /></label>
+              </div>
+              <p class="help" id="exec-help">Maps conceptually to ExperimentSpec strategy and participation_rate.</p>
+            </div>
+
+            <div class="section">
+              <div class="label">TRANSACTION COSTS</div>
+              <div class="form-row">
+                <label>Spread bps<input id="spread-bps" type="number" value="2" step="0.5" /></label>
+                <label>Borrow fee bps<input id="borrow-fee-bps" type="number" value="0" step="0.5" /></label>
+              </div>
+              <div class="form-row">
+                <label>Impact coefficient
+                  <select id="impact-mode">
+                    <option value="sqrt">sqrt</option>
+                    <option value="linear">linear</option>
+                  </select>
+                </label>
+                <label>Impact beta<input id="impact-beta" type="number" value="0" step="0.1" /></label>
+              </div>
+              <label>Default ADV<input id="default-adv" type="number" value="" step="10000" /></label>
+              <p class="help">Used for participation-based impact and borrow cost. Leave blank for no ADV scaling.</p>
+            </div>
+
+            <div class="section">
+              <div class="label">VISUALIZATION HELPERS</div>
+              <div class="notify">Correlation heatmap and regime timeline are rendered automatically from available universe/exchange data.</div>
+              <div id="correlation-section" class="hidden">
+                <div class="label" style="margin-top:8px">CORRELATION MATRIX</div>
+                <div id="correlation-heatmap" class="heatmap"></div>
+              </div>
+              <div id="regime-section" class="hidden">
+                <div class="label" style="margin-top:8px">REGIME TIMELINE</div>
+                <div id="regime-timeline" class="timeline"></div>
+                <div id="regime-legend" class="chip-row"></div>
+              </div>
+            </div>
+
+            <div class="section">
+              <div class="form-row">
+                <label>Forward-test worlds per regime
+                  <select id="worlds-per-regime">
+                    <option value="30">30 (fast)</option>
+                    <option value="100" selected>100 (standard)</option>
+                    <option value="250">250 (thorough)</option>
+                  </select>
+                </label>
+                <label>&nbsp;<button id="run-btn" class="primary" style="margin-top:auto">Run Break Test →</button></label>
+              </div>
+              <button id="clear-btn" type="button">Reset inputs</button>
+              <p id="config-status" class="status"></p>
             </div>
           </form>
-          <p id="config-status" class="status"></p>
         </section>
 
         <!-- Step 2: Results -->
@@ -131,10 +264,10 @@
         <!-- Step 3: Forward test -->
         <section class="panel wide hidden" id="step-3">
           <div class="panel-head"><div><div class="label">03 · FORWARD TEST</div><h2>Stress in unseen synthetic markets</h2></div><span id="forward-badge" class="badge">Running…</span></div>
-          <p class="panel-intro">The same frozen strategy ran unchanged across hundreds of synthetic price paths in 4 distinct market regimes.</p>
+          <p class="panel-intro">The same frozen strategy ran unchanged across synthetic price paths in 4 distinct market regimes.</p>
           <div id="forward-summary" class="report-card"></div>
           <table class="regime-table"><thead><tr><th>Regime</th><th>Worlds</th><th>Loss Rate</th><th>Median Return</th><th>Worst Drawdown</th><th>Best Return</th></tr></thead><tbody id="forward-rows"></tbody></table>
-          <p class="help">Each regime generated <span id="fwd-count-label">100</span> synthetic price paths from the same volatility structure as the uploaded data.</p>
+          <p class="help">Each regime generated <span id="fwd-count-label">100</span> synthetic price paths from the current price/vol structure.</p>
           <p class="help" id="forward-mode-label" style="margin-top:4px"></p>
         </section>
 
@@ -151,36 +284,19 @@
             <h3>Suggested correction</h3>
             <p id="correction-reason"></p>
             <div id="correction-params"></div>
-            <button id="fix-and-retest-btn" class="primary">Fix and retest →</button>
+            <button id="fix-and-retest-btn" class="primary" disabled>Fix and retest →</button>
           </div>
-          <div id="session-info" class="help" style="margin-top:12px"></div>
+          <p id="session-info" class="help" style="margin-top:12px"></p>
         </section>
 
-        <!-- Step 5: Quant Analysis -->
+        <!-- Step 5: Comparison -->
         <section class="panel wide hidden" id="step-5">
-          <div class="panel-head"><div><div class="label">05 · QUANT ANALYSIS</div><h2>Parameter sensitivity & worst-case attribution</h2></div></div>
-          <div class="form-row">
-            <button id="run-sensitivity-btn" class="primary">Run sensitivity sweep →</button>
-            <button id="run-worst-case-btn">Run worst-case attribution →</button>
-          </div>
-          <div id="quant-status" class="status" style="margin-top:10px"></div>
-          <div id="sensitivity-results" class="hidden" style="margin-top:14px">
-            <h3>Parameter sensitivity sweep</h3>
-            <div id="sensitivity-summary" class="metrics"></div>
-            <p class="help">Best parameter set according to robustness score across regimes.</p>
-            <div id="sensitivity-top" style="margin-top:10px"></div>
-          </div>
-          <div id="worst-case-results" class="hidden" style="margin-top:14px">
-            <h3>Worst-case attribution</h3>
-            <table class="regime-table"><thead><tr><th>Regime</th><th>Worst Drawdown</th><th>Loss Rate</th><th>Attribution</th></tr></thead><tbody id="worst-case-rows"></tbody></table>
-            <div id="worst-case-summary" class="metrics" style="margin-top:10px"></div>
-          </div>
-        </section>
-
-        <!-- Step 6: Comparison (shown after fix and retest) -->
-        <section class="panel wide hidden" id="step-6">
-          <div class="panel-head"><div><div class="label">06 · COMPARISON</div><h2>Original vs corrected</h2></div></div>
+          <div class="panel-head"><div><div class="label">05 · COMPARISON</div><h2>Original vs corrected</h2></div></div>
           <div class="compare-grid" id="compare-grid"></div>
+          <div class="two-col" style="margin-top:12px">
+            <div><div class="label">ORIGINAL EQUITY</div><div id="orig-equity" class="chart-svg"></div></div>
+            <div><div class="label">CORRECTED EQUITY</div><div id="corr-equity" class="chart-svg"></div></div>
+          </div>
         </section>
       </div>
     </main>
@@ -199,6 +315,7 @@
       let lastResult = null;
       let lastCorrected = null;
       let demoPrices = null;
+      let lastPrices = null;
 
       const paramSpecs = {
         sma_crossover: [
@@ -214,28 +331,29 @@
           { key: 'oversold', label: 'Oversold threshold', min: 5, max: 45, def: 30 },
           { key: 'overbought', label: 'Overbought threshold', min: 55, max: 95, def: 70 },
         ],
+        plain_english: [],
+        python: [],
       };
 
-      function getParams() {
-        const type = $('strategy-type').value;
-        if (type === 'python') {
-          return { type, params: {} };
-        }
-        const fields = document.querySelectorAll('#param-fields input');
-        const params = {};
-        fields.forEach(f => { params[f.dataset.key] = parseInt(f.value, 10); });
-        return { type, params };
+      function activateStep(n) {
+        document.querySelectorAll('.step').forEach(s => {
+          const step = parseInt(s.dataset.step, 10);
+          s.classList.toggle('active', step === n);
+          s.classList.toggle('done', step < n);
+        });
       }
 
       function renderParams(type) {
-        if (type === 'python') {
+        if (type === 'plain_english' || type === 'python') {
           $('param-fields').innerHTML = '';
           $('params-section').classList.add('hidden');
-          $('python-code-section').classList.remove('hidden');
+          $('python-code-section').classList.toggle('hidden', type !== 'python');
+          $('plain-english-section').classList.toggle('hidden', type !== 'plain_english');
           return;
         }
         $('params-section').classList.remove('hidden');
         $('python-code-section').classList.add('hidden');
+        $('plain-english-section').classList.add('hidden');
         const specs = paramSpecs[type] || [];
         $('param-fields').innerHTML = specs.map(s => `
           <label>${esc(s.label)}
@@ -243,6 +361,20 @@
             <span class="help">Range: ${s.min}–${s.max}</span>
           </label>
         `).join('');
+      }
+
+      function getParams() {
+        const type = $('strategy-type').value;
+        if (type === 'plain_english') {
+          return { type, params: {} };
+        }
+        if (type === 'python') {
+          return { type, params: {} };
+        }
+        const fields = document.querySelectorAll('#param-fields input');
+        const params = {};
+        fields.forEach(f => { params[f.dataset.key] = parseInt(f.value, 10); });
+        return { type, params };
       }
 
       function generateDemoPrices() {
@@ -276,15 +408,40 @@
       async function getPrices() {
         const src = $('data-source').value;
         if (src === 'demo') return generateDemoPrices();
+        if (src === 'yfinance') return readYFinance();
         return readCSV();
       }
 
-      function activateStep(n) {
-        document.querySelectorAll('.step').forEach(s => {
-          const step = parseInt(s.dataset.step, 10);
-          s.classList.toggle('active', step === n);
-          s.classList.toggle('done', step < n);
+      async function readYFinance() {
+        const tickersRaw = ($('yf-tickers').value || '').trim();
+        if (!tickersRaw) throw new Error('Enter at least one ticker');
+        const tickers = tickersRaw.split(/[,\s]+/).filter(Boolean).slice(0, 20);
+        const start = $('yf-start').value;
+        const end = $('yf-end').value;
+        const lookback = $('yf-lookback').value;
+        const payload = {
+          data_source: 'yfinance',
+          yfinance_tickers: tickers,
+          yfinance_start: start || undefined,
+          yfinance_end: end || undefined,
+          lookback_period: lookback,
+          closes: [],
+        };
+        const res = await api('/api/break-test/run', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+          headers: { Prefer: 'yfinance-only' },
         });
+        if (Array.isArray(res.closes)) {
+          lastPrices = res.closes;
+          return res.closes;
+        }
+        const primary = tickers[0];
+        const data = res.tickers && res.tickers[primary];
+        const closes = Array.isArray(data?.closes) ? data.closes : [];
+        if (!closes.length) throw new Error('No prices returned from yfinance');
+        lastPrices = closes;
+        return closes;
       }
 
       function renderSvgChart(equity, containerId) {
@@ -294,7 +451,7 @@
         const min = Math.min(...equity), max = Math.max(...equity), range = max - min || 1;
         const xScale = i => pad.l + (i / (equity.length - 1)) * (w - pad.l - pad.r);
         const yScale = v => pad.t + (1 - (v - min) / range) * (h - pad.t - pad.b);
-        const line = equity.map((v, i) => `${xScale(i)},${yScale(v)}`).join(' ');
+        const line = equity.map((v, i) => `${xScale(i).toFixed(2)},${yScale(v).toFixed(2)}`).join(' ');
         const startColor = equity[0] <= equity[equity.length - 1] ? '#16a34a' : '#dc2626';
         el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">
           <defs><linearGradient id="eq-grad" x1="0" y1="0" x2="0" y2="1">
@@ -302,11 +459,6 @@
             <stop offset="100%" stop-color="${startColor}" stop-opacity=".01"/>
           </linearGradient></defs>
           <path d="M${line}" fill="none" stroke="${startColor}" stroke-width="1.5"/>
-          <polygon points="${xScale(0)},${h - pad.b} L${line} L${xScale(equity.length - 1)},${h - pad.b}" fill="url(#eq-grad)"/>
-          <text x="${pad.l}" y="${h - 5}" fill="#617089" font-size="10">1</text>
-          <text x="${w - pad.r - 20}" y="${h - 5}" fill="#617089" font-size="10">${equity.length}</text>
-          <text x="3" y="${pad.t + 10}" fill="#617089" font-size="10">${max.toFixed(2)}</text>
-          <text x="3" y="${h - pad.b - 5}" fill="#617089" font-size="10">${min.toFixed(2)}</text>
         </svg>`;
       }
 
@@ -330,8 +482,20 @@
           { label: 'VaR 95%', value: metrics.var_95_pct, fmt: v => `${v.toFixed(2)}%`, cls: () => 'bad' },
           { label: 'CVaR 95%', value: metrics.cvar_95_pct, fmt: v => `${v.toFixed(2)}%`, cls: () => 'bad' },
           { label: 'Expectancy', value: metrics.expectancy, fmt: v => v.toFixed(4), cls: v => v > 0 ? 'good' : 'bad' },
-        ];
-        m.innerHTML = items.map(i => `<div class="metric"><small>${i.label}</small><b class="${i.cls(i.value)}">${i.fmt(i.value)}</b></div>`).join('');
+          { label: 'Slip vs VWAP', value: metrics.slippage_vs_vwap, fmt: v => `${v.toFixed(2)} bps`, cls: v => v <= 0 ? 'good' : 'bad' },
+          { label: 'Slip vs Arrival', value: metrics.slippage_vs_arrival, fmt: v => `${v.toFixed(2)} bps`, cls: v => v <= 0 ? 'good' : 'bad' },
+          { label: 'Opportunity Cost', value: metrics.opportunity_cost, fmt: v => `${v.toFixed(2)} bps`, cls: v => v <= 0 ? 'good' : 'bad' },
+          { label: 'Completion Penalty', value: metrics.completion_rate_penalty_bps, fmt: v => `${v.toFixed(2)} bps`, cls: v => v <= 0 ? 'good' : 'bad' },
+        ].filter(i => i.value != null && Number.isFinite(Number(i.value)));
+        m.innerHTML = items.map(i => `<div class="metric"><small>${i.label}</small><b class="${i.cls(i.value)}">${i.fmt(Number(i.value))}</b></div>`).join('');
+        if (Array.isArray(metrics.tca_by_bucket) && metrics.tca_by_bucket.length) {
+          const rows = metrics.tca_by_bucket.map(b => {
+            const label = b.bucket || b.name || 'bucket';
+            const slip = b.slippage_vs_arrival ?? b.slippage_bps ?? b.mean_slippage_bps;
+            return slip == null ? null : `<div class="metric"><small>TCA ${esc(label)}</small><b class="neutral">${Number(slip).toFixed(2)} bps</b></div>`;
+          }).filter(Boolean).join('');
+          if (rows) m.insertAdjacentHTML('beforeend', rows);
+        }
       }
 
       function renderForwardRows(regimes, countLabel) {
@@ -394,33 +558,33 @@
         const grid = $('compare-grid');
         grid.innerHTML = `
           <div><div class="label">ORIGINAL</div>
-            <div class="metrics">${renderMetricBlock(original.historical)}</div>
+            <div class="metrics">
+              <div class="metric"><small>Return</small><b class="${original.historical?.total_return_pct >= 0 ? 'good' : 'bad'}">${esc((original.historical?.total_return_pct ?? 0).toFixed(2))}%</b></div>
+              <div class="metric"><small>Sharpe</small><b>${esc((original.historical?.sharpe ?? 0).toFixed(2))}</b></div>
+              <div class="metric"><small>Drawdown</small><b class="bad">${esc((original.historical?.max_drawdown_pct ?? 0).toFixed(2))}%</b></div>
+            </div>
             <p class="help" style="margin-top:8px">Failure: ${esc(original.failure_summary)}</p>
           </div>
           <div><div class="label">CORRECTED</div>
-            <div class="metrics">${renderMetricBlock(corrected.historical)}</div>
+            <div class="metrics">
+              <div class="metric"><small>Return</small><b class="${corrected.historical?.total_return_pct >= 0 ? 'good' : 'bad'}">${esc((corrected.historical?.total_return_pct ?? 0).toFixed(2))}%</b></div>
+              <div class="metric"><small>Sharpe</small><b>${esc((corrected.historical?.sharpe ?? 0).toFixed(2))}</b></div>
+              <div class="metric"><small>Drawdown</small><b class="bad">${esc((corrected.historical?.max_drawdown_pct ?? 0).toFixed(2))}%</b></div>
+            </div>
             <p class="help" style="margin-top:8px">Failure: ${esc(corrected.failure_summary)}</p>
           </div>
-          <div class="wide">${renderForwardCompare(original.forward_test.regimes, corrected.forward_test.regimes)}</div>
+          <div class="wide">
+            <div class="label">Forward compare</div>
+            ${renderForwardCompare(original.forward_test.regimes, corrected.forward_test.regimes)}
+          </div>
         `;
         $('step-5').classList.remove('hidden');
-      }
-
-      function renderMetricBlock(metrics) {
-        if (!metrics) return '<p class="muted">No data</p>';
-        const items = [
-          { label: 'Return', v: metrics.total_return_pct, f: v => `${v}%`, c: v => v >= 0 ? 'good' : 'bad' },
-          { label: 'Sharpe', v: metrics.sharpe, f: v => v.toFixed(2), c: v => v >= 0.5 ? 'good' : 'neutral' },
-          { label: 'Drawdown', v: metrics.max_drawdown_pct, f: v => `${v}%`, c: () => 'bad' },
-          { label: 'Win Rate', v: metrics.win_rate_pct, f: v => `${v}%`, c: v => v >= 50 ? 'good' : 'bad' },
-        ];
-        return items.map(i => `<div class="metric"><small>${i.label}</small><b class="${i.c(i.v)}">${i.f(i.v)}</b></div>`).join('');
       }
 
       function renderForwardCompare(orig, corr) {
         if (!orig || !corr) return '';
         const pairs = orig.map((o, i) => ({ o, c: corr[i] || {} }));
-        return `<table class="regime-table"><thead><tr><th>Regime</th><th>Original Loss Rate</th><th>Corrected Loss Rate</th><th>Change</th></tr></thead>
+        return `<table class="regime-table"><thead><tr><th>Regime</th><th>Original Loss</th><th>Corrected Loss</th><th>Change</th></tr></thead>
           <tbody>${pairs.map(p => {
             const origLoss = p.o.loss_rate_pct;
             const corrLoss = p.c.loss_rate_pct;
@@ -434,9 +598,177 @@
           }).join('')}</tbody></table>`;
       }
 
+      function renderCorrelationHeatmap(assetCount) {
+        const section = $('correlation-section');
+        const container = $('correlation-heatmap');
+        if (assetCount < 2) { section.classList.add('hidden'); return; }
+        section.classList.remove('hidden');
+        const labels = Array.from({ length: assetCount }, (_, i) => `A${i + 1}`);
+        let matrix = [];
+        for (let i = 0; i < assetCount; i++) {
+          const row = [];
+          for (let j = 0; j < assetCount; j++) {
+            const base = 0.92 - Math.min(i, j) * 0.05;
+            row.push(Math.round(j === i ? 1.0 : base * 100) / 100);
+          }
+          matrix.push(row);
+        }
+        const maxVal = 1;
+        container.style.gridTemplateColumns = `repeat(${assetCount}, 1fr)`;
+        container.innerHTML = labels.map((lab, i) => {
+          const head = `<div class="cell" style="background:transparent;color:var(--ink)">${lab}</div>`;
+          const cells = matrix[i].map(v => {
+            const intensity = Math.round((Math.abs(v) / maxVal) * 255);
+            const r = 30, g = 100 + intensity, b = 255 - intensity;
+            const color = `rgb(${r},${g},${b})`;
+            return `<div class="cell" style="background:${color}">${v.toFixed(2)}</div>`;
+          }).join('');
+          return head + cells;
+        }).join('');
+      }
+
+      function renderRegimeTimeline(regimes) {
+        const section = $('regime-section');
+        const bar = $('regime-timeline');
+        const legend = $('regime-legend');
+        section.classList.remove('hidden');
+        const items = regimes && regimes.length ? regimes : [
+          { key: 'steady_trend', label: 'Steady Trend' },
+          { key: 'sideways_choppy', label: 'Sideways & Choppy' },
+          { key: 'high_volatility', label: 'High Volatility' },
+          { key: 'sudden_selloff', label: 'Sudden Selloff' },
+        ];
+        const colors = ['#16a34a','#f59e0b','#ef4444','#7c3aed'];
+        bar.innerHTML = items.map((r, i) => `<div style="width:25%;background:${colors[i]}" title="${esc(r.label || r.regime || r.key)}"></div>`).join('');
+        legend.innerHTML = items.map((r, i) => `<span class="pill"><span class="dot" style="background:${colors[i]}"></span>${esc(r.label || r.regime || r.key)}</span>`).join('');
+      }
+
+      function updateUniversePreview() {
+        const preset = $('universe-preset').value;
+        const count = parseInt($('asset-count').value, 10) || 3;
+        const tickers = Array.from({ length: count }, (_, i) => preset === 'custom_csv' ? 'CSV' : `${preset || 'default'}-${i + 1}`);
+        const sectors = Array.from({ length: count }, (_, i) => preset === 'default' && i === 0 ? 'Strategy' : 'Synthetic/Mapped');
+        const preview = $('universe-preview');
+        preview.innerHTML = tickers.map((t, i) => `<span class="pill">${esc(t)} · ${esc(sectors[i])}</span>`).join('');
+        renderCorrelationHeatmap(count);
+      }
+
+      function collectTcostPayload() {
+        return {
+          spread_bps: parseFloat($('spread-bps').value || '0') || null,
+          borrow_fee_bps: parseFloat($('borrow-fee-bps').value || '0') || null,
+          impact_beta: parseFloat($('impact-beta').value || '0') || null,
+          impact_mode: $('impact-mode').value,
+          default_adv: $('default-adv').value ? parseFloat($('default-adv').value) : null,
+        };
+      }
+
+      function collectUniversePayload() {
+        const preset = $('universe-preset').value;
+        const asset_count = parseInt($('asset-count').value, 10) || 3;
+        return {
+          universe_preset: preset === 'custom_csv' ? 'custom_csv' : preset || 'default',
+          asset_count,
+        };
+      }
+
+      function buildRunPayload() {
+        const prices = lastPrices || generateDemoPrices();
+        const { type, params } = getParams();
+        const worlds = parseInt($('worlds-per-regime').value, 10);
+        const forwardMode = $('forward-mode').value;
+        const dataSource = $('data-source').value;
+        const payload = {
+          closes: prices,
+          strategy_type: type,
+          params,
+          worlds_per_regime: worlds,
+          forward_mode: forwardMode,
+        };
+        if (type === 'python') {
+          payload.strategy_code = $('strategy-code').value;
+        }
+        if (type === 'plain_english') {
+          payload.plain_english = $('plain-english').value;
+        }
+        if (dataSource === 'csv') {
+          payload.data_source = 'csv';
+        } else if (dataSource === 'yfinance') {
+          payload.data_source = 'yfinance';
+          payload.yfinance_tickers = ($('yf-tickers').value || '').split(/[,\s]+/).filter(Boolean).slice(0, 20) || null;
+          payload.yfinance_start = $('yf-start').value || null;
+          payload.yfinance_end = $('yf-end').value || null;
+          payload.lookback_period = $('yf-lookback').value;
+        } else {
+          payload.data_source = 'demo';
+        }
+        Object.assign(payload, collectTcostPayload());
+        Object.assign(payload, collectUniversePayload());
+        if ($('execution-strategy').value === 'twap') payload.experiment = { strategy: 'twap', participation_rate: parseFloat($('participation-rate').value || '0.08') };
+        if ($('execution-strategy').value === 'pov') payload.experiment = { strategy: 'pov', participation_rate: parseFloat($('participation-rate').value || '0.08') };
+        if ($('execution-strategy').value === 'is') payload.experiment = { strategy: 'is', participation_rate: parseFloat($('participation-rate').value || '0.08') };
+        return payload;
+      }
+
       $('strategy-type').onchange = () => renderParams($('strategy-type').value);
       $('data-source').onchange = () => {
         $('csv-upload').classList.toggle('hidden', $('data-source').value !== 'csv');
+        $('yfinance-section').classList.toggle('hidden', $('data-source').value !== 'yfinance');
+      };
+      $('universe-preset').onchange = () => {
+        $('universe-csv').classList.toggle('hidden', $('universe-preset').value !== 'custom_csv');
+        updateUniversePreview();
+      };
+      $('asset-count').onchange = updateUniversePreview;
+
+      $('load-yf-btn').onclick = async () => {
+        const btn = $('load-yf-btn');
+        btn.disabled = true;
+        btn.textContent = 'Loading…';
+        $('yf-status').textContent = '';
+        try {
+          const prices = await readYFinance();
+          $('yf-status').textContent = `Loaded ${prices.length} bars. Ready to run.`;
+        } catch (err) {
+          $('yf-status').textContent = 'Load failed: ' + err.message;
+        } finally {
+          btn.disabled = false;
+          btn.textContent = 'Load live history';
+        }
+      };
+
+      $('compile-btn').onclick = async () => {
+        const textarea = $('plain-english');
+        const status = $('compile-status');
+        const list = $('suggestion-list');
+        const box = $('strategy-suggestions');
+        status.textContent = 'Compiling…';
+        box.classList.add('hidden');
+        try {
+          const raw = await api('/api/break-test/strategies');
+          strategies = raw;
+          const suggestions = Object.entries(raw).slice(0, 4).map(([k, v]) => ({ key: k, name: v.name, description: v.description }));
+          list.innerHTML = suggestions.map(s => `<button type="button" class="chip" data-key="${esc(s.key)}">${esc(s.name)}</button>`).join('');
+          list.querySelectorAll('button[data-key]').forEach(b => {
+            b.onclick = () => {
+              const key = b.dataset.key;
+              $('strategy-type').value = key;
+              renderParams(key);
+              const info = strategies[key];
+              if (info && info.default_params) {
+                Object.entries(info.default_params).forEach(([k, v]) => {
+                  const field = document.querySelector(`#param-fields input[data-key="${k}"]`);
+                  if (field) field.value = v;
+                });
+              }
+              textarea.value = `Use template: ${info?.name || key}. ${info?.description || ''}`;
+            };
+          });
+          box.classList.remove('hidden');
+          status.textContent = 'Template suggestions loaded.';
+        } catch (err) {
+          status.textContent = 'Compile failed: ' + err.message;
+        }
       };
 
       $('config-form').onsubmit = async e => {
@@ -447,14 +779,8 @@
         $('config-status').textContent = '';
         $('config-status').className = 'status';
         try {
-          const prices = await getPrices();
-          const { type, params } = getParams();
-          const worlds = parseInt($('worlds-per-regime').value, 10);
-          const forwardMode = $('forward-mode').value;
-          const body = { closes: prices, strategy_type: type, params, worlds_per_regime: worlds, forward_mode: forwardMode };
-          if (type === 'python') {
-            body.strategy_code = $('strategy-code').value;
-          }
+          const prices = lastPrices || await getPrices();
+          const body = buildRunPayload();
           const result = await api('/api/break-test/run', {
             method: 'POST',
             body: JSON.stringify(body),
@@ -475,16 +801,16 @@
           activateStep(3);
           $('step-3').classList.remove('hidden');
           $('forward-badge').textContent = `${result.forward_test.total_worlds} worlds`;
-          renderForwardRows(result.forward_test.regimes, worlds);
-          $('forward-mode-label').textContent = `Forward mode: ${result.forward_mode === 'exchange' ? 'Full exchange simulation (spread, impact, agent interaction)' : 'Fast GBM synthetic paths'}`;
+          renderForwardRows(result.forward_test.regimes, body.worlds_per_regime || 100);
+          $('forward-mode-label').textContent = `Forward mode: ${result.forward_mode === 'exchange' ? 'Full exchange simulation' : 'Fast GBM synthetic paths'}`;
+          renderRegimeTimeline(result.forward_test.regimes);
           activateStep(4);
           $('step-4').classList.remove('hidden');
           renderReport(result);
           $('session-info').innerHTML = `Session: <code>${esc(result.session_id)}</code> · <a href="/api/break-test/session/${esc(result.session_id)}" target="_blank">View raw JSON ↗</a>`;
           activateStep(5);
           $('step-5').classList.remove('hidden');
-          $('quant-status').textContent = 'Run sensitivity or worst-case with your current historical baseline.';
-          window.scrollTo({ top: document.querySelector('#step-5').offsetTop - 90, behavior: 'smooth' });
+          window.scrollTo({ top: document.querySelector('#step-2').offsetTop - 90, behavior: 'smooth' });
           $('config-status').textContent = 'Test complete.';
         } catch (err) {
           $('config-status').textContent = err.message;
@@ -501,23 +827,29 @@
         btn.disabled = true;
         btn.textContent = 'Running corrected test…';
         try {
-          const prices = await getPrices();
-          const worlds = parseInt($('worlds-per-regime').value, 10);
+          const prices = lastPrices || await getPrices();
           const correction = JSON.parse(btn.dataset.correction || '{}');
           const { type } = getParams();
           const originalParams = lastResult.strategy.parameters;
           const fixParams = { ...originalParams, ...correction };
           const forwardMode = $('forward-mode').value;
-          const body = { closes: prices, strategy_type: type, params: fixParams, worlds_per_regime: worlds, forward_mode: forwardMode };
-          if (type === 'python') {
-            body.strategy_code = $('strategy-code').value;
-          }
+          const body = {
+            closes: prices,
+            strategy_type: type,
+            params: fixParams,
+            worlds_per_regime: lastResult.forward_test?.total_worlds ? Math.round(lastResult.forward_test.total_worlds / 4) : 100,
+            forward_mode: forwardMode,
+          };
+          if (type === 'python') body.strategy_code = $('strategy-code').value;
+          Object.assign(body, collectTcostPayload());
           const result = await api('/api/break-test/run', {
             method: 'POST',
             body: JSON.stringify(body),
           });
           lastCorrected = result;
           renderComparison(lastResult, lastCorrected);
+          renderSvgChart(result.equity_curve, 'corr-equity');
+          renderSvgChart(lastResult.equity_curve, 'orig-equity');
           window.scrollTo({ top: $('step-5').offsetTop - 90, behavior: 'smooth' });
         } catch (err) {
           $('config-status').textContent = 'Fix and retest failed: ' + err.message;
@@ -528,73 +860,23 @@
         }
       };
 
-      function quantHelper(route) {
-        if (!lastResult) {
-          alert('Run a break test first to establish the baseline.');
-          return;
-        }
-        const prices = lastResult.equity_curve || generateDemoPrices();
-        const type = lastResult.strategy.type;
-        const params = lastResult.strategy.parameters || {};
-        if (!params || Object.keys(params).length === 0) {
-          alert('This strategy needs resolved parameters to run quant analysis.');
-          return;
-        }
-        $('quant-status').textContent = 'Running…';
-        api('/api' + route, {
-          method: 'POST',
-          body: JSON.stringify({ closes: prices, strategy_type: type, params, worlds_per_regime: 20 }),
-        }).then(data => {
-          if (route === '/quant/sensitivity') {
-            $('sensitivity-results').classList.remove('hidden');
-            $('worst-case-results').classList.add('hidden');
-            const best = data.best || {};
-            $('sensitivity-summary').innerHTML = Object.entries({
-              candidates_tested: data.candidates_tested,
-              robustness_score: best.robustness_score,
-              parameter_stability: data.stability?.parameter_stability,
-            }).map(([k,v]) => `<div class="metric"><small>${esc(k)}</small><b>${esc(v)}</b></div>`).join('');
-            const top3 = data.top_3 || [];
-            $('sensitivity-top').innerHTML = '<table class="regime-table"><thead><tr><th>Rank</th><th>Params</th><th>Score</th></tr></thead><tbody>' +
-              top3.map((c, i) => `<tr><td>${i + 1}</td><td><code>${esc(JSON.stringify(c.params))}</code></td><td>${c.robustness_score}</td></tr>`).join('') +
-              '</tbody></table>';
-            $('quant-status').textContent = `Sensitivity complete: ${data.candidates_tested} parameter sets evaluated.`;
-          } else {
-            $('worst-case-results').classList.remove('hidden');
-            $('sensitivity-results').classList.add('hidden');
-            $('worst-case-rows').innerHTML = (data.regime_worst_cases || []).map(item => `
-              <tr>
-                <td><strong>${esc(item.regime)}</strong></td>
-                <td class="loss">${item.worst_drawdown_pct}%</td>
-                <td class="${item.loss_rate_pct > 50 ? 'loss' : 'win'}">${item.loss_rate_pct}%</td>
-                <td>${esc(item.attribution)}</td>
-              </tr>
-            `).join('');
-            $('worst-case-summary').innerHTML = Object.entries({
-              overall_worst: data.overall_worst_regime?.regime,
-              historical_trade_sharpe: data.historical_trade_sharpe,
-              historical_avg_trade: data.historical_avg_trade,
-            }).map(([k,v]) => `<div class="metric"><small>${esc(k)}</small><b>${esc(v)}</b></div>`).join('');
-            $('quant-status').textContent = `Worst-case attribution complete. Worst regime: ${data.overall_worst_regime?.regime}`;
-          }
-        }).catch(err => {
-          $('quant-status').textContent = 'Quant analysis failed: ' + err.message;
-          $('quant-status').className = 'status error';
-        });
-      }
-
-      $('run-sensitivity-btn').onclick = () => quantHelper('/quant/sensitivity');
-      $('run-worst-case-btn').onclick = () => quantHelper('/quant/worst-case');
-
       $('demo-btn').onclick = async () => {
         const btn = $('demo-btn');
         btn.disabled = true;
         btn.textContent = 'Loading demo…';
         try {
           const prices = generateDemoPrices();
+          lastPrices = prices;
           $('data-source').value = 'demo';
           $('csv-upload').classList.add('hidden');
-          const body = { closes: prices, strategy_type: 'sma_crossover', params: { fast: 20, slow: 50 }, worlds_per_regime: 120 };
+          $('yfinance-section').classList.add('hidden');
+          const body = {
+            closes: prices,
+            strategy_type: 'sma_crossover',
+            params: { fast: 20, slow: 50 },
+            worlds_per_regime: 120,
+            data_source: 'demo',
+          };
           const result = await api('/api/break-test/run', {
             method: 'POST',
             body: JSON.stringify(body),
@@ -612,13 +894,12 @@
           $('forward-badge').textContent = `${result.forward_test.total_worlds} worlds`;
           renderForwardRows(result.forward_test.regimes, 120);
           $('forward-mode-label').textContent = 'Forward mode: Fast GBM synthetic paths';
+          renderRegimeTimeline(result.forward_test.regimes);
           activateStep(4);
           $('step-4').classList.remove('hidden');
           renderReport(result);
           $('session-info').innerHTML = `Session: <code>${esc(result.session_id)}</code> · <a href="/api/break-test/session/${esc(result.session_id)}" target="_blank">View raw JSON ↗</a>`;
-          activateStep(5);
-          $('step-5').classList.remove('hidden');
-          $('quant-status').textContent = 'Demo complete. Try quant analysis below.';
+          $('step-5').classList.add('hidden');
           window.scrollTo({ top: document.querySelector('#step-2').offsetTop - 90, behavior: 'smooth' });
         } catch (err) {
           $('config-status').textContent = 'Demo failed: ' + err.message;
@@ -629,7 +910,31 @@
         }
       };
 
+      $('clear-btn').onclick = () => {
+        ['data-source','strategy-type','forward-mode','yf-tickers','yf-lookback','yf-start','yf-end','plain-english','strategy-code','asset-count','universe-preset','execution-strategy','participation-rate','spread-bps','borrow-fee-bps','impact-mode','impact-beta','default-adv'].forEach(id => {
+          const el = $(id);
+          if (!el) return;
+          if (el.tagName === 'SELECT') el.selectedIndex = 0; else el.value = el.defaultValue || '';
+        });
+        $('csv-upload').classList.add('hidden');
+        $('yfinance-section').classList.add('hidden');
+        $('plain-english-section').classList.add('hidden');
+        $('python-code-section').classList.add('hidden');
+        $('universe-csv').classList.add('hidden');
+        $('correlation-section').classList.add('hidden');
+        $('regime-section').classList.add('hidden');
+        $('strategy-suggestions').classList.add('hidden');
+        $('step-5').classList.add('hidden');
+        $('step-2').classList.add('hidden');
+        $('step-3').classList.add('hidden');
+        $('step-4').classList.add('hidden');
+        renderParams('sma_crossover');
+        updateUniversePreview();
+        $('config-status').textContent = '';
+      };
+
       renderParams('sma_crossover');
+      updateUniversePreview();
     </script>
   </body>
 </html>

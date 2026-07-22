@@ -164,9 +164,47 @@ def build_repro_pack(seed: int, prices: list[float], strategy_type: str, params:
     }
 
 
-def reproducibility_metadata(seed: int, prices: list[float], strategy_type: str, params: dict[str, int], payload: dict[str, Any] | None = None, nonce: str = "") -> dict[str, object]:
+def reproducibility_metadata(
+    seed: int,
+    prices: list[float],
+    strategy_type: str,
+    params: dict[str, int],
+    payload: dict[str, Any] | None = None,
+    nonce: str = "",
+    *,
+    exchange_spec: object | None = None,
+    world_spec_mutable: dict[str, Any] | None = None,
+) -> dict[str, object]:
     payload_hash = hash_response_json(payload or {}, nonce)
     pack = build_repro_pack(seed, prices, strategy_type, params, payload_hash)
+    mutable: dict[str, Any] = dict(world_spec_mutable or {})
+    if exchange_spec is not None:
+        try:
+            from app.calibration.exchange_hooks import exchange_mutable_fields
+            from app.schemas import ExchangeSpec
+
+            if isinstance(exchange_spec, ExchangeSpec):
+                mutable["exchange"] = exchange_mutable_fields(exchange_spec)
+            else:
+                mutable["exchange"] = {
+                    key: getattr(exchange_spec, key)
+                    for key in (
+                        "baseline_depth",
+                        "adtv",
+                        "perm_eta",
+                        "temp_epsilon",
+                        "temp_gamma",
+                        "htb_bps_annual",
+                        "htb_schedule",
+                        "toxicity_kappa",
+                        "intraday_volume_profile",
+                        "per_step_volume_cap",
+                    )
+                    if hasattr(exchange_spec, key)
+                }
+        except Exception:
+            mutable["exchange"] = {}
+    mutable_hash = hash_value(mutable) if mutable else None
     return {
         "checkpoint": {
             "version": "repro/v2",
@@ -175,6 +213,8 @@ def reproducibility_metadata(seed: int, prices: list[float], strategy_type: str,
             "strategy_type": strategy_type,
             "params": params,
             "seed": seed,
+            "spec_mutable_fields": mutable,
+            "spec_mutable_hash": mutable_hash,
         },
     }
 

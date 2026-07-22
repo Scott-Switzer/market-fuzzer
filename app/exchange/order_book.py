@@ -33,15 +33,20 @@ class OrderBook:
     def best_ask(self) -> int | None:
         return min(self.ask_levels) if self.ask_levels else None
 
-    def submit(self, order: Order, step: int) -> list[Trade]:
+    def submit(self, order: Order, step: int, *, max_match_quantity: int | None = None) -> list[Trade]:
         self._validate(order)
         if self.is_halted(step):
             raise RuntimeError(f"{self.symbol} is halted until step {self.halted_until_step}")
         self.seen_ids.add(order.order_id)
         self.sequence += 1
         order.sequence = self.sequence
-        trades = self._match(order, step)
+        trades = self._match(order, step, max_match_quantity=max_match_quantity)
         if order.remaining and order.order_type == OrderType.LIMIT:
+            # Volume caps can leave a still-marketable remainder. Never rest a
+            # crossing order onto the book (would violate price-time invariants).
+            if self._crosses(order):
+                self.assert_valid()
+                return trades
             assert order.price_ticks is not None
             levels = self.bid_levels if order.side == Side.BUY else self.ask_levels
             order.displayed_quantity_ahead_at_entry = sum(
@@ -92,15 +97,35 @@ class OrderBook:
             else incoming.price_ticks <= opposite
         )
 
-    def _match(self, incoming: Order, step: int) -> list[Trade]:
+    def _match(
+        self,
+        incoming: Order,
+        step: int,
+        *,
+        max_match_quantity: int | None = None,
+    ) -> list[Trade]:
         trades: list[Trade] = []
+        matched_total = 0
         while incoming.remaining and self._crosses(incoming):
+            if max_match_quantity is not None and matched_total >= max_match_quantity:
+                break
             price = self.best_ask if incoming.side == Side.BUY else self.best_bid
             assert price is not None
             levels = self.ask_levels if incoming.side == Side.BUY else self.bid_levels
             maker_id = levels[price][0]
             maker = self.orders[maker_id]
-            executed = min(incoming.remaining, maker.remaining or 0)
+            # Price-time queue: only the head maker trades. Cap the fill by remaining
+            # step volume so takers receive queue-aware partial fills within the budget.
+            room = (
+                None
+                if max_match_quantity is None
+                else max(0, int(max_match_quantity) - matched_total)
+            )
+            executed = min(incoming.remaining or 0, maker.remaining or 0)
+            if room is not None:
+                executed = min(executed, room)
+            if executed <= 0:
+                break
             incoming.remaining -= executed
             maker.remaining = (maker.remaining or 0) - executed
             self.trade_sequence += 1
@@ -135,6 +160,7 @@ class OrderBook:
             )
             trades.append(trade)
             self.level_executed_quantity[price] += executed
+            matched_total += executed
             self.last_price_ticks = price
             if maker.remaining == 0:
                 levels[price].popleft()
