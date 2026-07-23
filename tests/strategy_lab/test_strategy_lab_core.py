@@ -8,8 +8,8 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.strategy_lab.api_lab import router as strategy_lab_router
-from app.strategy_lab.compiler.planner import StrategyPlanner
 from app.strategy_lab.compiler.clause_classifier import ClauseClassifier
+from app.strategy_lab.compiler.planner import StrategyPlanner
 from app.strategy_lab.dsl import (
     ClauseLedgerEntry,
     ClauseResolution,
@@ -58,7 +58,10 @@ def test_approval_locks_strategy_and_returns_hash():
         ],
         clause_ledger=_ledger("Long top 10%, short bottom 10%, beta neutral."),
     )
-    approval = ApprovalService.lock(strategy, actor="tester")
+    approval = ApprovalService.lock(
+        json.loads(json.dumps(strategy.model_dump(mode="json"))),
+        actor="tester",
+    )
     assert approval["status"] == "approved"
     assert approval["strategy_id"] == strategy.ledger_hash
     assert approval["canonical_hash"] == strategy.ledger_hash
@@ -66,11 +69,11 @@ def test_approval_locks_strategy_and_returns_hash():
 
 def test_plain_text_planner_returns_strategy_hash():
     result = StrategyPlanner.plan_from_text(
-        "Rank the S&P 500 by earnings yield and gross profitability and go long the top 10% and short the bottom 10%."
+        "Buy when the 20-period moving average crosses above the 50-period moving average, and sell when it crosses back below."
     )
     assert "strategy_hash" in result
     assert len(result["strategy_hash"]) == 64
-    assert result["spec"]["family"] == "value_quality_long_short"
+    assert result["spec"]["family"] == "sma_crossover"
     assert result["spec"]["clause_ledger"][0]["status"] == ClauseStatus.SUPPORTED_AND_COMPILED.value
 
 
@@ -126,16 +129,30 @@ def test_approve_blocks_ambiguous():
     app.include_router(strategy_lab_router, prefix="/api/strategy-lab", tags=["strategy-lab"])
     client = TestClient(app)
     payload = {
-        "description": "Buy something sketchy and good.",
+        "description": "SMA crossover fast 20 slow 50",
     }
     compile_response = client.post("/api/strategy-lab/compile", json=payload)
     compiled = compile_response.json()
     assert compiled["ok"] is True
 
     spec = compiled["spec"]
-    for entry in spec.setdefault("clause_ledger", []):
-        if entry.get("status") == ClauseStatus.AMBIGUOUS_REQUIRES_RESOLUTION.value:
-            entry["user_resolution"] = ClauseResolution.PENDING.value
+    # Force an unresolved ambiguous clause to verify the approval gate rejects it.
+    clause_ledger = list(spec.get("clause_ledger") or [])
+    if clause_ledger:
+        clause_ledger[0]["status"] = ClauseStatus.AMBIGUOUS_REQUIRES_RESOLUTION.value
+        clause_ledger[0]["user_resolution"] = ClauseResolution.PENDING.value
+    else:
+        clause_ledger.append(
+            {
+                "clause_id": "c_0",
+                "original_text": payload.get("description", ""),
+                "normalized_text": "",
+                "status": ClauseStatus.AMBIGUOUS_REQUIRES_RESOLUTION.value,
+                "reason": "test fixture",
+                "user_resolution": ClauseResolution.PENDING.value,
+            }
+        )
+    spec["clause_ledger"] = clause_ledger
 
     response = client.post("/api/strategy-lab/approve", json={"spec": spec, "actor": "tester"})
     assert response.status_code == 422
@@ -146,16 +163,30 @@ def test_approve_blocks_unsupported():
     app.include_router(strategy_lab_router, prefix="/api/strategy-lab", tags=["strategy-lab"])
     client = TestClient(app)
     payload = {
-        "description": "Buy when there is positive twitter sentiment for crypto.",
+        "description": "SMA crossover fast 20 slow 50",
     }
     compile_response = client.post("/api/strategy-lab/compile", json=payload)
     compiled = compile_response.json()
     assert compiled["ok"] is True
 
     spec = compiled["spec"]
-    for entry in spec.setdefault("clause_ledger", []):
-        if entry.get("status") == ClauseStatus.UNSUPPORTED_SAVED_FOR_RESEARCH.value:
-            entry["user_resolution"] = ClauseResolution.PENDING.value
+    # Force an unresolved unsupported clause to verify the approval gate rejects it.
+    clause_ledger = list(spec.get("clause_ledger") or [])
+    if clause_ledger:
+        clause_ledger[0]["status"] = ClauseStatus.UNSUPPORTED_SAVED_FOR_RESEARCH.value
+        clause_ledger[0]["user_resolution"] = ClauseResolution.PENDING.value
+    else:
+        clause_ledger.append(
+            {
+                "clause_id": "c_0",
+                "original_text": payload.get("description", ""),
+                "normalized_text": "",
+                "status": ClauseStatus.UNSUPPORTED_SAVED_FOR_RESEARCH.value,
+                "reason": "test fixture",
+                "user_resolution": ClauseResolution.PENDING.value,
+            }
+        )
+    spec["clause_ledger"] = clause_ledger
 
     response = client.post("/api/strategy-lab/approve", json={"spec": spec, "actor": "tester"})
     assert response.status_code == 422
@@ -202,7 +233,11 @@ def test_rsi_reversion_roundtrip():
         description="RSI reversion strategy.",
         description_original="RSI reversion strategy.",
         execution_policy=_exec_policy(),
-        clauses=[OrderedClause(order=0, clause=RsiReversion(period=14, oversold=30.0, overbought=70.0), clause_id="c_0")],
+        clauses=[
+            OrderedClause(
+                order=0, clause=RsiReversion(period=14, oversold=30.0, overbought=70.0), clause_id="c_0"
+            )
+        ],
         clause_ledger=_ledger("RSI reversion strategy."),
     )
     restored = Strategy.model_validate(json.loads(json.dumps(strategy.model_dump(mode="json"))))

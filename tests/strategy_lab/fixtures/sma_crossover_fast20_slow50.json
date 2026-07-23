@@ -1,0 +1,49 @@
+{
+  "original_text": "Buy when the 20-period moving average crosses above the 50-period moving average, and sell when it crosses back below.",
+  "expected_clause_ledger": [
+    {
+      "clause_id": "c_0",
+      "original_text": "Buy when the 20-period moving average crosses above the 50-period moving average, and sell when it crosses back below.",
+      "normalized_text": "Buy when the 20-period moving average crosses above the 50-period moving average, and sell when it crosses back below.",
+      "status": "supported_and_compiled",
+      "reason": null,
+      "user_resolution": "approved",
+      "compiler_confidence": 0.8,
+      "provenance": {}
+    }
+  ],
+  "expected_canonical_schema": {
+    "schema_version": "v1",
+    "family": "sma_crossover",
+    "clauses": [
+      {
+        "order": 0,
+        "clause": {
+          "kind": "Hold",
+          "note": "pre_signal"
+        },
+        "clause_id": "c_0"
+      },
+      {
+        "order": 1,
+        "clause": {
+          "kind": "SmaCrossover",
+          "fast": 20,
+          "slow": 50,
+          "confirmation_bars": 0
+        },
+        "clause_id": "c_1"
+      },
+      {
+        "order": 2,
+        "clause": {
+          "kind": "Hold",
+          "note": "exit_when_crossed"
+        },
+        "clause_id": "c_2"
+      }
+    ]
+  },
+  "expected_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "expected_runtime_behavior": "compile_success"
+}

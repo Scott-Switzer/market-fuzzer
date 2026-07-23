@@ -1,0 +1,42 @@
+{
+  "original_text": "Rank the S&P 500 by earnings yield and gross profitability and go long the top 10% and short the bottom 10%.",
+  "expected_clause_ledger": [
+    {
+      "clause_id": "c_0",
+      "original_text": "Rank the S&P 500 by earnings yield and gross profitability and go long the top 10% and short the bottom 10%.",
+      "normalized_text": "Rank the S&P 500 by earnings yield and gross profitability and go long the top 10% and short the bottom 10%.",
+      "status": "supported_and_compiled",
+      "reason": null,
+      "user_resolution": "approved",
+      "compiler_confidence": 0.8,
+      "provenance": {}
+    }
+  ],
+  "expected_canonical_schema": {
+    "schema_version": "v1",
+    "family": "value_quality_long_short",
+    "clauses": [
+      {
+        "order": 0,
+        "clause": {
+          "kind": "Hold",
+          "note": "pre_signal"
+        },
+        "clause_id": "c_0"
+      },
+      {
+        "order": 1,
+        "clause": {
+          "kind": "ValueQualityLongShort",
+          "long_top_n": 10,
+          "short_bottom_n": 10,
+          "beta_neutralize": false,
+          "hedge_universe": null
+        },
+        "clause_id": "c_1"
+      }
+    ]
+  },
+  "expected_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "expected_runtime_behavior": "compile_success"
+}
