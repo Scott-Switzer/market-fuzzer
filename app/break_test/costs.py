@@ -331,47 +331,60 @@ class TransactionCostModel:
 
 
 # ============================================================================
-# Additional cost model functions for exchange realism tests
+# Heuristic diagnostic functions (exchange-realism TESTS ONLY)
+# ----------------------------------------------------------------------------
+# These are BOUNDED HEURISTICS, not calibrated exchange models. They exist so
+# the exchange-realism test suite can exercise monotonic invariants (impact
+# decays with time; locate failure rises with inventory). Coefficients are
+# illustrative and exposed here for transparency. DO NOT cite these as
+# validated market mechanics.
 # ============================================================================
+
+# Illustrative relaxation rate for the transient-impact decay heuristic.
+# Units are arbitrary test-step units; this is NOT a calibrated half-life.
+TEMP_IMPACT_DECAY_K: float = 0.1
 
 
 def temporary_impact_decay_bps(impact_bps: float, time_elapsed: float) -> float:
-    """Return the temporary impact after decay.
+    """Bounded HEURISTIC decay of a transient market-impact estimate.
 
-    Temporary impact decays over time following a square-root law.
-    This is a simplified model for testing purposes.
+    Diagnostic only. Applies a square-root relaxation so temporary impact
+    shrinks toward zero as time elapses. Used solely to exercise the
+    exchange-realism test invariants.
 
     Args:
-        impact_bps: Initial temporary impact in basis points
-        time_elapsed: Time elapsed since impact event (in arbitrary units)
+        impact_bps: initial transient impact in basis points (>= 0)
+        time_elapsed: elapsed time in arbitrary test-step units (>= 0)
 
     Returns:
-        Decayed temporary impact in basis points
+        Decayed impact in basis points, clamped to [0, impact_bps].
     """
-    if impact_bps == 0 or time_elapsed <= 0:
-        return impact_bps
-    # Square-root decay model
-    decay_factor = 1.0 / (1.0 + 0.1 * (time_elapsed**0.5))
-    return impact_bps * decay_factor
+    if impact_bps <= 0 or time_elapsed <= 0:
+        return max(impact_bps, 0.0)
+    factor = 1.0 / (1.0 + TEMP_IMPACT_DECAY_K * (time_elapsed**0.5))
+    return impact_bps * factor
 
 
 def locate_failure_probability(
     short_inventory: float,
     htb_supply: float = 100_000,
 ) -> float:
-    """Calculate the probability of locate failure for short positions.
+    """Bounded HEURISTIC probability of a short locate failing.
 
-    Higher short inventory relative to available supply increases failure probability.
+    Diagnostic only. Models locate stress as a LINEAR function of the
+    inventory-to-available-supply ratio, clamped to [0, 1]. This is a
+    deliberately simple placeholder; it is NOT a calibrated borrow-failure
+    model and must not be cited as exchange realism.
 
     Args:
-        short_inventory: Absolute value of short inventory (in shares)
-        htb_supply: Available hard-to-borrow supply (in shares)
+        short_inventory: absolute short inventory in shares (>= 0)
+        htb_supply: available hard-to-borrow supply in shares (> 0)
 
     Returns:
-        Probability of locate failure (0.0 to 1.0)
+        Heuristic failure probability in [0, 1].
     """
     if htb_supply <= 0:
         return 1.0
     inventory_ratio = abs(short_inventory) / htb_supply
-    # Exponential model: failure probability increases rapidly with inventory
+    # Linear heuristic: reaches 1.0 when inventory is 2x available supply.
     return min(1.0, inventory_ratio * 2.0)
