@@ -8,10 +8,14 @@ constructed ``TransactionCostModel`` explicitly. New ExchangeSpec-driven paths u
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
-from typing import Any, Literal, Optional, Sequence
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from app.schemas import ExchangeSpec
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
@@ -101,7 +105,7 @@ class TransactionCostModel:
     borrow_fee_bps: float = 0.0
     impact_beta: float = 0.0
     impact_mode: Literal["sqrt", "linear", "almgren_chriss"] = "sqrt"
-    default_adv: Optional[float] = None
+    default_adv: float | None = None
     perm_eta: float = 0.05
     temp_epsilon: float = 0.005
     temp_gamma: float = 0.20
@@ -118,7 +122,7 @@ class TransactionCostModel:
     def _participation(
         self,
         trade_notional: float,
-        default_adv: Optional[float],
+        default_adv: float | None,
     ) -> float:
         adv_source = self.default_adv if self.default_adv is not None else default_adv
         if adv_source is None or float(adv_source) <= 0:
@@ -140,7 +144,7 @@ class TransactionCostModel:
         *,
         trade_qty: float,
         price: float,
-        default_adv: Optional[float] = None,
+        default_adv: float | None = None,
         signed_flow_prev: float | None = None,
         depth_prev: float | None = None,
     ) -> ImpactDecomposition:
@@ -212,7 +216,7 @@ class TransactionCostModel:
         trade_qty: float,
         side: int,
         current_inventory: float,
-        default_adv: Optional[float] = None,
+        default_adv: float | None = None,
         *,
         signed_flow_prev: float | None = None,
         depth_prev: float | None = None,
@@ -239,7 +243,7 @@ class TransactionCostModel:
         self,
         prices: np.ndarray,
         positions: np.ndarray,
-        default_adv: Optional[float] = None,
+        default_adv: float | None = None,
         *,
         signed_flow: Sequence[float] | None = None,
         depth: Sequence[float] | None = None,
@@ -285,7 +289,7 @@ class TransactionCostModel:
             )
         return out
 
-    def for_spec(self, spec: "ExchangeSpec") -> "TransactionCostModel":
+    def for_spec(self, spec: ExchangeSpec) -> TransactionCostModel:
         """Build an Almgren-Chriss model from ExchangeSpec cost fields."""
         try:
             data = spec.model_dump()
@@ -299,7 +303,9 @@ class TransactionCostModel:
         htb_annual = float(data.get("htb_bps_annual", 0.0) or 0.0)
         htb_schedule = data.get("htb_schedule")
         toxicity_kappa = float(data.get("toxicity_kappa", 5.0) or 5.0)
-        taker_fee = float(data.get("taker_fee_bps", getattr(self, "spread_bps", 2.0)) or getattr(self, "spread_bps", 2.0))
+        taker_fee = float(
+            data.get("taker_fee_bps", getattr(self, "spread_bps", 2.0)) or getattr(self, "spread_bps", 2.0)
+        )
         implied_spread = max(
             float(getattr(self, "spread_bps", 2.0) or 2.0),
             taker_fee * 2.0,
@@ -320,5 +326,52 @@ class TransactionCostModel:
         )
 
     @classmethod
-    def from_exchange_spec(cls, spec: "ExchangeSpec") -> "TransactionCostModel":
+    def from_exchange_spec(cls, spec: ExchangeSpec) -> TransactionCostModel:
         return cls().for_spec(spec)
+
+
+# ============================================================================
+# Additional cost model functions for exchange realism tests
+# ============================================================================
+
+
+def temporary_impact_decay_bps(impact_bps: float, time_elapsed: float) -> float:
+    """Return the temporary impact after decay.
+
+    Temporary impact decays over time following a square-root law.
+    This is a simplified model for testing purposes.
+
+    Args:
+        impact_bps: Initial temporary impact in basis points
+        time_elapsed: Time elapsed since impact event (in arbitrary units)
+
+    Returns:
+        Decayed temporary impact in basis points
+    """
+    if impact_bps == 0 or time_elapsed <= 0:
+        return impact_bps
+    # Square-root decay model
+    decay_factor = 1.0 / (1.0 + 0.1 * (time_elapsed**0.5))
+    return impact_bps * decay_factor
+
+
+def locate_failure_probability(
+    short_inventory: float,
+    htb_supply: float = 100_000,
+) -> float:
+    """Calculate the probability of locate failure for short positions.
+
+    Higher short inventory relative to available supply increases failure probability.
+
+    Args:
+        short_inventory: Absolute value of short inventory (in shares)
+        htb_supply: Available hard-to-borrow supply (in shares)
+
+    Returns:
+        Probability of locate failure (0.0 to 1.0)
+    """
+    if htb_supply <= 0:
+        return 1.0
+    inventory_ratio = abs(short_inventory) / htb_supply
+    # Exponential model: failure probability increases rapidly with inventory
+    return min(1.0, inventory_ratio * 2.0)

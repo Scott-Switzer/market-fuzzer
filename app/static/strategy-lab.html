@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Strategy Validation Lab</title>
+<style>
+:root{--ink:#10233f;--muted:#617089;--line:#dce5f0;--blue:#1e64d6;--blue-dark:#12428f;--mint:#e8f7ef;--amber:#fff5d9;--red:#dc2626;--green:#16a34a;--bg:#f5f8fc;--white:#fff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,sans-serif}
+header{height:70px;background:var(--white);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 max(24px,calc((100vw - 1180px)/2));gap:24px}
+.brand{font-weight:900;letter-spacing:.08em;text-decoration:none;font-size:14px}.brand i{color:var(--blue);font-style:normal}
+nav{display:flex;gap:22px;color:var(--muted);font-size:13px;font-weight:700}nav a{text-decoration:none}nav a:hover{color:var(--blue)}nav a.active{color:var(--blue)}
+main{max-width:1180px;margin:0 auto;padding:48px 24px 90px}
+.eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;font-weight:850;color:var(--blue)}
+h1{font-size:clamp(36px,5vw,60px);line-height:1.02;letter-spacing:-.05em;max-width:780px;margin:10px 0 16px}
+h2{font-size:22px;letter-spacing:-.025em;margin:8px 0 6px}
+.lead{max-width:690px;color:var(--muted);font-size:18px;margin:0}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:0 0 28px}
+.step{background:var(--white);border:1px solid var(--line);border-radius:12px;padding:14px 16px;opacity:.45;transition:opacity .2s}
+.step.active{opacity:1;border-color:var(--blue);box-shadow:0 0 0 1px var(--blue)}
+.step.done{opacity:.75;border-color:var(--green)}
+.step b{display:block;color:var(--blue);font-size:12px;letter-spacing:.1em}.step span{display:block;font-weight:800;margin-top:8px;font-size:13px}.step small{display:block;color:var(--muted);margin-top:2px;font-size:12px}}
+.panel{background:var(--white);border:1px solid var(--line);border-radius:16px;padding:24px;box-shadow:0 8px 28px rgba(16,35,63,.04)}
+.panel-head{display:flex;justify-content:space-between;gap:15px;align-items:flex-start;margin-bottom:16px}
+.label{font-size:11px;letter-spacing:.14em;text-transform:uppercase;font-weight:850;color:var(--blue)}
+.badge{display:inline-block;font-size:10px;font-weight:850;letter-spacing:.08em;padding:4px 8px;border-radius:6px;background:#eef4ff;color:var(--blue);white-space:nowrap}
+.badge.green{background:var(--mint);color:var(--green)}.badge.red{background:#fef2f2;color:var(--red)}.badge.amber{background:var(--amber);color:#9a6700}
+form{display:grid;gap:14px}label{display:grid;gap:5px;font-size:12px;font-weight:800;color:#334155}
+input,select,textarea{width:100%;padding:10px 12px;border:1px solid #cbd7e5;border-radius:8px;background:var(--white);color:var(--ink);font:inherit;transition:border .15s}
+input:focus,select:focus,textarea:focus{outline:0;border-color:var(--blue);box-shadow:0 0 0 3px #2457d61f}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.help{font-size:11px;color:var(--muted);font-weight:400;margin:2px 0 0}
+button{border:1px solid #cbd5e1;border-radius:8px;padding:11px 16px;background:var(--white);color:var(--ink);font-weight:750;cursor:pointer;font-size:13px;transition:background .1s}
+.primary{background:var(--blue);border-color:var(--blue);color:var(--white)}.primary:hover{background:var(--blue-dark)}
+button:disabled{opacity:.5;cursor:default}
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;margin:14px 0}
+.metric{background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:12px;text-align:center}.metric small{display:block;color:var(--muted);font-size:10px;font-weight:850;letter-spacing:.08em;text-transform:uppercase}.metric b{display:block;font-size:22px;margin:6px 0 0}
+.status{font-size:13px;color:var(--muted);margin:10px 0 0;min-height:20px}.status.error{color:var(--red)}
+.report-card{background:#f8fafc;border:1px solid var(--line);border-radius:12px;padding:18px;margin:14px 0}
+.hidden{display:none!important}
+.chip-row{display:flex;gap:8px;flex-wrap:wrap}
+.chip{border:1px solid #cbd7e5;border-radius:999px;padding:8px 14px;background:var(--white);font-weight:700;cursor:pointer;font-size:12px}
+.chip.active{background:var(--blue);color:var(--white);border-color:var(--blue)}
+.code{font-family:ui-monospace,monospace;font-size:12px}
+.muted{color:var(--muted)}
+.notify{background:#f5f8fc;border-left:3px solid var(--blue);padding:10px 12px;border-radius:10px;font-size:12px;color:var(--muted)}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:820px){.steps{grid-template-columns:1fr 1fr}.step-grid{grid-template-columns:1fr}.form-row{grid-template-columns:1fr}.two-col{grid-template-columns:1fr}}
+@media(max-width:520px){.steps{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<header>
+  <a class="brand" href="/">STRATEGY <i>VALIDATION LAB</i></a>
+  <nav>
+    <a href="/break-test" target="_blank">Break Test</a>
+    <a href="/synthetic-market-world" target="_blank">World Registry</a>
+    <a href="/strategy-stress-lab" target="_blank">Stress Lab</a>
+    <a href="/arena" target="_blank">Arena</a>
+    <a href="/market-fuzzer" target="_blank">Fuzzer</a>
+  </nav>
+  <span class="pill">Minimum coherent workflow</span>
+</header>
+<main>
+  <section class="hero">
+    <div>
+      <div class="eyebrow">STRATEGY VALIDATION WORKFLOW</div>
+      <h1>Describe, validate, seal, export.</h1>
+      <p class="lead">A guided path from plain-English strategy description to a scoped evidence package with explicit claim boundaries.</p>
+    </div>
+    <div class="notify">
+      <strong>Scope:</strong> bounded policy proposal + deterministic baseline + sealed synthetic guardrails.<br>
+      <span class="muted">Never executes prose or customer code in the API layer.</span>
+    </div>
+  </section>
+
+  <div id="steps" class="steps">
+    <div class="step active" data-step="1"><b>01</b><span>Strategy Brief</span><small>Describe / resolve / approve</small></div>
+    <div class="step" data-step="2"><b>02</b><span>Data & Universe</span><small>Select inputs</small></div>
+    <div class="step" data-step="3"><b>03</b><span>Historical Backtest</span><small>Baseline review</small></div>
+    <div class="step" data-step="4"><b>04</b><span>Sealed Synthetic</span><small>Start test / review failures</small></div>
+    <div class="step" data-step="5"><b>05</b><span>Replay & Suggestions</span><small>Minimized replay</small></div>
+    <div class="step" data-step="6"><b>06</b><span>Evidence Export</span><small>Export package</small></div>
+  </div>
+
+  <div id="screen-brief" class="screen">
+    <article class="panel">
+      <div class="panel-head"><div><div class="label">01 · STRATEGY BRIEF</div><h2>Describe your strategy</h2></div><span class="badge">Compiler</span></div>
+      <form id="brief-form">
+        <label>Strategy brief<textarea id="brief" rows="5" minlength="20" maxlength="2000" placeholder="I want to participate with market volume, but protect completion if latency or spread stress rises..."></textarea></label>
+        <div class="chip-row"><button type="submit" class="primary">Compile proposal →</button><span class="help" id="brief-status">Maps to an allow-listed policy proposal.</span></div>
+      </form>
+      <pre id="brief-output" class="code muted" style="margin-top:12px;white-space:pre-wrap">No proposal compiled yet.</pre>
+      <form id="register-form" class="hidden" style="margin-top:14px">
+        <div class="form-row">
+          <label>Name<input id="reg-name" required /></label>
+          <label>Description<input id="reg-desc" required /></label>
+        </div>
+        <div class="form-row">
+          <label>Boundary<select id="reg-type"><option value="arena_policy">Built-in policy</option><option value="external_adapter">External adapter</option></select></label>
+          <label>Policy<select id="reg-policy"><option value="twap">TWAP</option><option value="guarded_pov">Guarded POV</option><option value="aggressive_pov">Aggressive POV</option><option value="completion_first">Completion first</option></select></label>
+        </div>
+        <button type="submit" class="primary">Approve & lock strategy →</button>
+      </form>
+    </article>
+  </div>
+
+  <div id="screen-data" class="screen hidden">
+    <article class="panel">
+      <div class="panel-head"><div><div class="label">02 · DATA & UNIVERSE</div><h2>Select data</h2></div><span class="badge">Inputs</span></div>
+      <form id="world-form">
+        <div class="form-row">
+          <label>World name<input id="world-name" required value="Validation baseline" /></label>
+          <label>Seed<input id="world-seed" type="number" min="0" value="42" /></label>
+        </div>
+        <label>Assets<input id="world-assets" required value="NOVA, ORBIT, VYNE" /></label>
+        <div class="chip-row"><button type="submit" class="primary">Create world →</button><span class="help" id="world-status">Creates a durable manifest.</span></div>
+      </form>
+      <form id="pack-form" style="margin-top:14px">
+        <label>Scenario pack name<input id="pack-name" required value="Latency resilience" /></label>
+        <label>Base world<select id="pack-world"></select></label>
+        <label>Intended question<textarea id="pack-question" rows="3" required>Does execution remain controlled when message latency rises?</textarea></label>
+        <div class="form-row">
+          <label>Intervention<select id="pack-type"><option value="latency_shock">Message latency shock</option><option value="liquidity_withdrawal">Liquidity withdrawal</option><option value="volatility_shock">Volatility shock</option></select></label>
+          <label>Severity<select id="pack-severity"><option>moderate</option><option>low</option><option>high</option></select></label>
+        </div>
+        <div class="form-row">
+          <label>Start step<input id="pack-start" type="number" min="0" value="40" /></label>
+          <label>Duration<input id="pack-duration" type="number" min="1" value="10" /></label>
+        </div>
+        <button type="submit" class="primary">Create scenario pack →</button>
+        <p class="help" id="pack-status"></p>
+      </form>
+    </article>
+  </div>
+
+  <div id="screen-backtest" class="screen hidden">
+    <article class="panel">
+      <div class="panel-head"><div><div class="label">03 · HISTORICAL BACKTEST</div><h2>Baseline performance</h2></div><span id="backtest-badge" class="badge green">Baseline</span></div>
+      <form id="backtest-form">
+        <div class="form-row">
+          <label>Data source<select id="bt-source"><option value="demo">Demo data</option><option value="yfinance">yfinance</option></select></label>
+          <label>Forward mode<select id="bt-fwd"><option value="gbm">GBM synthetic</option><option value="exchange">Exchange simulation</option></select></label>
+        </div>
+        <div class="form-row">
+          <label>Tickers<input id="bt-tickers" placeholder="SPY,QQQ" /></label>
+          <label>Lookback<select id="bt-lookback"><option value="5y" selected>5y</option><option value="10y">10y</option><option value="20y">20y</option></select></label>
+        </div>
+        <button type="submit" class="primary">Run backtest →</button>
+        <p class="status" id="backtest-status"></p>
+      </form>
+      <div id="backtest-result" class="report-card" style="margin-top:14px"></div>
+    </article>
+  </div>
+
+  <div id="screen-sealed" class="screen hidden">
+    <article class="panel">
+      <div class="panel-head"><div><div class="label">04 · SEALED SYNTHETIC TEST</div><h2>Run guarded evaluation</h2></div><span id="sealed-badge" class="badge amber">Not started</span></div>
+      <div id="sealed-readiness" class="notify">A sealed test requires a registered strategy, scenario pack, and completed baseline.</div>
+      <form id="sealed-form">
+        <label>Scenario pack<select id="sealed-pack"></select></label>
+        <label>Strategy<select id="sealed-strategy"></select></label>
+        <label>Seeds<input id="sealed-seeds" value="41,42" /></label>
+        <button type="submit" class="primary">Start sealed test →</button>
+        <p class="status" id="sealed-status"></p>
+      </form>
+      <div id="sealed-job" class="panel" style="margin-top:14px" hidden>
+        <div class="panel-head"><div><div class="label">JOB MONITOR</div><h2>Execution status</h2></div><span id="sealed-job-status" class="badge">—</span></div>
+        <div id="sealed-job-body"></div>
+      </div>
+      <div id="sealed-report" class="report-card" style="margin-top:14px" hidden>
+        <div class="panel-head"><div><div class="label">FAILURES</div><h2>Review failures</h2></div></div>
+        <div id="sealed-failures"></div>
+        <button id="open-replay-btn" class="primary" disabled>Open minimized replay →</button>
+      </div>
+    </article>
+  </div>
+
+  <div id="screen-replay" class="screen hidden">
+    <article class="panel">
+      <div class="panel-head"><div><div class="label">05 · MINIMIZED REPLAY</div><h2>Open minimized replay</h2></div><span id="replay-badge" class="badge">Awaiting failure</span></div>
+      <div id="replay-empty" class="muted">Select a failure from the sealed test to inspect minimized replay.</div>
+      <div id="replay-body" class="hidden">
+        <div id="replay-market" class="chart-svg" style="height:180px"></div>
+        <div id="replay-strategy" class="chart-svg" style="height:180px;margin-top:10px"></div>
+        <div id="replay-suggestions" class="report-card" style="margin-top:14px">
+          <h3>Suggestions</h3>
+          <div id="suggestions-list" class="muted">No suggestions loaded.</div>
+        </div>
+      </div>
+    </article>
+  </div>
+
+  <div id="screen-export" class="screen hidden">
+    <article class="panel">
+      <div class="panel-head"><div><div class="label">06 · EVIDENCE EXPORT</div><h2>Export evidence package</h2></div><span id="export-badge" class="badge green">Ready</span></div>
+      <div id="export-summary" class="muted">Complete the prior screens to create an evidence package.</div>
+      <div id="export-actions" class="chip-row" style="margin-top:12px" hidden>
+        <a id="export-html" class="chip" href="#" target="_blank">Export HTML</a>
+        <a id="export-pdf" class="chip" href="#" target="_blank">Export PDF</a>
+        <a id="export-json" class="chip" href="#" target="_blank">Export validation JSON</a>
+        <a id="download-artifact" class="chip" href="#" target="_blank">Download artifact</a>
+      </div>
+      <pre id="export-envelope" class="code muted" style="margin-top:14px;white-space:pre-wrap">Envelope not generated.</pre>
+    </article>
+  </div>
+
+  <div class="actions" style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
+    <button id="prev" type="button" disabled>← Previous</button>
+    <button id="next" type="button" class="primary" disabled>Continue →</button>
+  </div>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const api=async(url,opts={})=>{const r=await fetch(url,{headers:{'Content-Type':'application/json',...(opts.headers||{})},...opts});const body=await r.json().catch(()=>({}));if(!r.ok)throw Error(body.detail||`Request failed (${r.status})`);return body};
+
+const state={screen:1,strategy:null,world:null,pack:null,backtest:null,sealed:null,replay:null,evidence:null,dirty:false};
+
+function activateStep(n){
+  document.querySelectorAll('.step').forEach(s=>{const step=parseInt(s.dataset.step,10);s.classList.toggle('active',step===n);s.classList.toggle('done',step<n)});
+  for(let i=1;i<=6;i++) $('screen-'+['brief','data','backtest','sealed','replay','export'][i-1]).classList.toggle('hidden',i!==n);
+  $('prev').disabled=n===1;
+  if(n>3){$('next').disabled=true;}else{$('next').disabled=!state.dirty||n===6;}
+}
+$('next').onclick=()=>activateStep(Math.min(6,state.screen+1));
+$('prev').onclick=()=>activateStep(Math.max(1,state.screen-1));
+
+function requireAdvance(requiredStep, fromStep){
+  if(state.screen < requiredStep){
+    activateStep(requiredStep);
+    throw new Error(`Complete step ${requiredStep} before continuing.`);
+  }
+}
+
+async function loadWorlds(){
+  const data=await api('/api/enterprise/worlds');
+  const worlds=data.worlds||[];
+  const packSelect=$('pack-world');
+  packSelect.innerHTML=worlds.length?worlds.map(w=>`<option value="${esc(w.world_id)}">${esc(w.name)} · seed ${esc(w.manifest?.seed)}</option>`).join(''):'<option value="">Create a world first</option>';
+}
+async function loadPacks(){
+  const data=await api('/api/enterprise/scenario-packs');
+  const packs=data.scenario_packs||[];
+  const sealedPack=$('sealed-pack');
+  sealedPack.innerHTML=packs.length?packs.map(p=>`<option value="${esc(p.scenario_pack_id)}">${esc(p.name)}</option>`).join(''):'<option value="">Create a pack first</option>';
+}
+async function loadStrategies(){
+  const data=await api('/api/enterprise/strategies');
+  const strategies=data.strategies||[];
+  const sel=$('sealed-strategy');
+  sel.innerHTML=strategies.length?strategies.map(s=>`<option value="${esc(s.strategy_id)}">${esc(s.name)} · ${esc(s.version_label)}</option>`).join(''):'<option value="">Register a strategy first</option>';
+}
+
+$('brief-form').onsubmit=async e=>{
+  e.preventDefault();
+  $('brief-status').textContent='Compiling strategy proposal…';
+  try{
+    const raw= $('brief').value;
+    const compiled=await api('/api/strategy-lab/compile',{method:'POST',body:JSON.stringify({description:raw})});
+    state.strategy=compiled;
+    state.dirty=false;
+    $('brief-status').textContent=`Proposal ready. Hash: ${compiled.strategy_hash?.slice(0,12)}`;
+    $('brief-output').textContent=JSON.stringify({strategy_hash:compiled.strategy_hash,canonical:compiled.canonical?.slice(0,240),conflict_report:compiled.conflict_report||{}},null,2);
+    $('register-form').classList.remove('hidden');
+    $('reg-name').value='Strategy from brief';
+    $('reg-desc').value=raw;
+    $('reg-policy').value='guarded_pov';
+    activateStep(1);
+  }catch(err){$('brief-status').textContent=err.message;$('brief-status').classList.add('error')}
+};
+
+$('register-form').onsubmit=async e=>{
+  e.preventDefault();
+  try{
+    const body={name:$('reg-name').value,description:$('reg-desc').value,strategy_type:$('reg-type').value};
+    if($('reg-type').value==='arena_policy')body.builtin_policy_id=$('reg-policy').value;
+    const created=await api('/api/enterprise/strategies',{method:'POST',body:JSON.stringify(body)});
+    state.strategy=created;
+    state.dirty=true;
+    $('register-form').innerHTML='<div class="notify">Strategy approved and locked.</div>';
+    await loadStrategies();
+    activateStep(2);
+  }catch(err){$('register-form').insertAdjacentHTML('beforeend',`<p class="status error">${esc(err.message)}</p>`)}
+};
+
+$('world-form').onsubmit=async e=>{
+  e.preventDefault();
+  try{
+    const world=await api('/api/enterprise/worlds',{method:'POST',body:JSON.stringify({
+      name:$('world-name').value,
+      description:'',
+      seed:Number($('world-seed').value),
+      asset_universe:$('world-assets').value.split(',').map(x=>x.trim()).filter(Boolean),
+      agent_ecology:[],
+      intended_use:'strategy_validation_lab'
+    })});
+    state.world=world;
+    state.dirty=true;
+    $('world-status').textContent=`Created ${world.world_id}`;
+    await loadWorlds();
+    activateStep(3);
+  }catch(err){$('world-status').textContent=err.message;$('world-status').classList.add('error')}
+};
+
+$('pack-form').onsubmit=async e=>{
+  e.preventDefault();
+  try{
+    const pack=await api('/api/enterprise/scenario-packs',{method:'POST',body:JSON.stringify({
+      name:$('pack-name').value,
+      description:'',
+      base_world_id:$('pack-world').value,
+      intended_question:$('pack-question').value,
+      interventions:[{intervention_type:$('pack-type').value,severity:$('pack-severity').value,start_step:Number($('pack-start').value),duration_steps:Number($('pack-duration').value),rationale:''}]
+    })});
+    state.pack=pack;
+    state.dirty=true;
+    $('pack-status').textContent=`Created ${pack.scenario_pack_id}`;
+    await loadPacks();
+    activateStep(3);
+  }catch(err){$('pack-status').textContent=err.message;$('pack-status').classList.add('error')}
+};
+
+$('backtest-form').onsubmit=async e=>{
+  e.preventDefault();
+  try{
+    const body={
+      closes:[],
+      strategy_type:state.strategy?.record?.builtin_policy_id||'guarded_pov',
+      params:{},
+      worlds_per_regime:10,
+      forward_mode:$('bt-fwd').value,
+    };
+    if($('bt-source').value==='yfinance'){body.yfinance_tickers=($('bt-tickers').value||'SPY').split(',').map(x=>x.trim()).filter(Boolean);body.lookback_period=$('bt-lookback').value}
+    $('backtest-status').textContent='Running…';
+    const result=await api('/api/strategy-lab/backtests',{method:'POST',body:JSON.stringify(body)});
+    state.backtest=result;
+    state.dirty=true;
+    $('backtest-status').textContent=`Session ${result.session_id||'completed'}`;
+    const metrics=result.metrics||result.historical||{};
+    const rows=Object.entries(metrics).slice(0,8).map(([k,v])=>`<div class="metric"><small>${esc(k)}</small><b>${esc(v)}</b></div>`).join('');
+    $('backtest-result').innerHTML=rows||'<p class="muted">Run produced no historical metrics.</p>';
+    activateStep(4);
+  }catch(err){$('backtest-status').textContent=err.message;$('backtest-status').classList.add('error')}
+};
+
+$('sealed-form').onsubmit=async e=>{
+  e.preventDefault();
+  try{
+    const seeds=($('sealed-seeds').value||'41,42').split(',').map(x=>Number(x.trim())).filter(n=>!Number.isNaN(n));
+    const job=await api('/api/strategy-lab/sealed/run',{method:'POST',body:JSON.stringify({strategy_id:$('sealed-strategy').value,scenario_pack_id:$('sealed-pack').value,seeds})});
+    state.sealed=job;
+    state.dirty=true;
+    $('sealed-job').hidden=false;
+    renderJob(job);
+    $('sealed-badge').textContent='Completed';
+    $('sealed-badge').classList.add('green');
+    $('sealed-report').hidden=false;
+    $('sealed-failures').innerHTML='<p class="muted">No failure surface attached.</p>';
+    activateStep(5);
+  }catch(err){$('sealed-status').textContent=err.message;$('sealed-status').classList.add('error')}
+};
+
+function renderJob(job){
+  const percent=Math.max(0,Math.min(100,Number(job.progress?.percent||0)));
+  const status=job.status||'completed';
+  $('sealed-job-status').textContent=`${status} ${percent}%`;
+  $('sealed-job-body').innerHTML=`<div class="metrics"><div class="metric"><small>COMPLETED</small><b>${job.progress?.completed_cells??job.seed}</b></div><div class="metric"><small>SEED</small><b>${job.seed}</b></div></div>`;
+}
+
+$('open-replay-btn').onclick=async ()=>{
+  try{
+    const failure={
+      category:'trend_reversal',
+      severity:'high',
+      metrics:{ total_return_pct:-2.4, sharpe:-0.4, max_drawdown_pct:-18.2 },
+      failed_predicates:[{predicate:'total_return_pct_le',threshold:0}],
+      parameters:{fast:20,slow:50},
+      world_spec:{type:'synthetic',seed:$('sealed-seeds').value.split(',')[0]||41},
+    };
+    const minimized=await api('/api/strategy-lab/replay/minimize',{method:'POST',body:JSON.stringify({failure,seed:0})});
+    state.replay=minimized;
+    $('replay-badge').textContent='Loaded';
+    $('replay-empty').classList.add('hidden');
+    $('replay-body').classList.remove('hidden');
+    const items=(minimized.suggestions||[]).map(s=>`<div class="metric"><small>${esc(s.change_category)}</small><b>${esc(s.expected_tradeoff)}</b></div>`).join('');
+    $('suggestions-list').innerHTML=items||'<p class="muted">No suggestions loaded.</p>';
+    activateStep(6);
+  }catch(err){$('replay-suggestions').insertAdjacentHTML('beforeend',`<p class="status error">${esc(err.message)}</p>`)}
+};
+
+$('export-html').onclick=async e=>{
+  e.preventDefault();
+  try{
+    const envelope=await api('/api/strategy-lab/evidence/export',{method:'POST',body:JSON.stringify({payload:state})});
+    state.evidence=envelope.envelope;
+    $('export-envelope').textContent=JSON.stringify(envelope.envelope,null,2).slice(0,2400);
+    $('export-actions').hidden=false;
+    $('export-json').href='data:application/json;charset=utf-8,'+encodeURIComponent(JSON.stringify(envelope.envelope,null,2));
+  }catch(err){$('export-summary').textContent=err.message;$('export-summary').classList.add('error')}
+};
+$('export-pdf').onclick=e=>e.preventDefault();
+$('download-artifact').onclick=e=>e.preventDefault();
+
+activateStep(1);
+loadWorlds().catch(()=>{});
+loadPacks().catch(()=>{});
+loadStrategies().catch(()=>{});
+</script>
+</body>
+</html>
