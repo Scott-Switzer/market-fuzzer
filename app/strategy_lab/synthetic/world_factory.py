@@ -83,7 +83,7 @@ class WorldFactory:
 
         for idx, ticker in enumerate(real_tickers):
             anon_ticker = ticker_map[ticker]
-            path = asset_paths.get(ticker) or asset_paths.get(anon_ticker) or {}
+            path: dict[str, Any] = asset_paths.get(ticker) or asset_paths.get(anon_ticker) or {}  # type: ignore[assignment]
             prices = [float(px) for px in (path.get("prices") or [])]
             returns = [float(rt) for rt in (path.get("returns") or [])]
             if len(prices) < 2:
@@ -123,8 +123,10 @@ class WorldFactory:
             if prices_metric.size > positions_metric.size:
                 prices_metric = prices_metric[: positions_metric.size]
             elif positions_metric.size > prices_metric.size:
-                positions_metric = positions_metric[: prices_metric.size]
+                positions_metric = positions_metric[: positions_metric.size]
 
+            signed_flow_arr = np.full(prices_metric.size - 1, signed_flow_prev, dtype=float)
+            depth_arr = np.full(prices_metric.size - 1, depth_prev, dtype=float)
             metrics = backtest_metrics(
                 prices=prices_metric,
                 positions=positions_metric,
@@ -138,8 +140,8 @@ class WorldFactory:
                     toxicity_kappa=toxicity_kappa,
                 ),
                 default_adv=default_adv,
-                signed_flow=np.full(prices_metric.size - 1, signed_flow_prev, dtype=float),
-                depth=np.full(prices_metric.size - 1, depth_prev, dtype=float),
+                signed_flow=signed_flow_arr.tolist(),
+                depth=depth_arr.tolist(),
                 side="buy",
                 arrival_price=float(prices_metric[0]),
                 average_execution_price=float(np.mean(prices_metric)),
@@ -153,8 +155,8 @@ class WorldFactory:
                         prices_metric,
                         positions_metric,
                         default_adv=default_adv,
-                        signed_flow=np.full(prices_metric.size - 1, signed_flow_prev, dtype=float),
-                        depth=np.full(prices_metric.size - 1, depth_prev, dtype=float),
+                        signed_flow=signed_flow_arr.tolist(),
+                        depth=depth_arr.tolist(),
                     )
                 )
             )

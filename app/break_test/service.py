@@ -3,6 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import platform
+import subprocess
+import sys
 import warnings
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -10,32 +13,12 @@ from uuid import uuid4
 import numpy as np
 
 from app.break_test.exchange_fwd import (
-    _build_world,
-    _build_one_factor_paths_for_assets,
-    _build_correlated_synthetic_paths,
-    DEFAULT_ASSETS,
-    EXPANDED_UNIVERSE_PRESETS,
-    UserStrategyOrderRouter,
-    build_world,
     run_exchange_forward_test,
 )
 from app.break_test.metrics import backtest_metrics, compute_equity_curve
 from app.break_test.regimes import detect_regimes, run_forward_test
 from app.break_test.reporting import build_failure_report
 from app.break_test.strategies import BUILTIN_STRATEGIES, compute_positions
-from app.simulation import run_simulation
-from app.schemas import (
-    AgentPopulation,
-    AgentsSpec,
-    AssetSpec,
-    ClockSpec,
-    ExchangeSpec,
-    ExperimentSpec,
-    InterventionSpec,
-    MacroSpec,
-    ParentOrderSpec,
-    WorldSpec,
-)
 
 if TYPE_CHECKING:
     from app.break_test.costs import TransactionCostModel
@@ -48,6 +31,24 @@ _MIN_BARS = 252 * 5
 _DEFAULT_LOOKBACK = "5y"
 _RECOMMENDED_LOOKBACK = "20y"
 _SESSION_STORE: dict[str, dict[str, Any]] = {}
+
+
+def _git_sha() -> str:
+    try:
+        return (
+            subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
+        )
+    except Exception:
+        return "unknown"
+
+
+def _environment_block(seed_manifest: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "python_version": sys.version.split()[0],
+        "platform": platform.platform(),
+        "git_sha": _git_sha(),
+        "seed_manifest": seed_manifest or {},
+    }
 
 
 def _stable_hash(value: object) -> str:
@@ -86,7 +87,7 @@ def run_break_test(
     forward_mode: str = "gbm",
     strategy_code: str | None = None,
     plain_english: str | None = None,
-    tcost_model: "TransactionCostModel | None" = None,
+    tcost_model: TransactionCostModel | None = None,
     default_adv: float | None = None,
     data_source: str | None = None,
     lookback_period: str | None = None,
@@ -100,9 +101,15 @@ def run_break_test(
     prices = np.asarray(closes, dtype=float)
     if prices.size == 0:
         try:
-            from app.break_test.data_loader import load_yfinance, load_yfinance_bulk
+            from app.break_test.data_loader import load_fenrix, load_yfinance
 
-            if data_source == "yfinance":
+            if data_source == "fenrix":
+                try:
+                    loaded = load_fenrix(None)
+                    prices = np.asarray(list(next(iter(loaded.values()))) if loaded else closes, dtype=float)
+                except Exception as exc:
+                    logger.debug("Fenrix fallback skipped: %s", exc)
+            elif data_source == "yfinance":
                 period = lookback_period or _DEFAULT_LOOKBACK
                 prices = np.asarray(load_yfinance("SPY", period=period), dtype=float)
         except Exception as exc:
@@ -125,7 +132,14 @@ def run_break_test(
 
     if strategy_code:
         historical, equity_curve, regime_analysis, forward_results = _run_custom_strategy(
-            strategy_code, strategy_type, prices, resolved_params, worlds_per_regime, forward_mode, tcost_model, default_adv
+            strategy_code,
+            strategy_type,
+            prices,
+            resolved_params,
+            worlds_per_regime,
+            forward_mode,
+            tcost_model,
+            default_adv,
         )
     else:
         tcost = _resolve_tcost_model(tcost_model)
@@ -158,7 +172,14 @@ def run_break_test(
     if fix_and_retest_params:
         if strategy_code:
             corr_historical, corr_equity, _, corr_forward = _run_custom_strategy(
-                strategy_code, strategy_type, prices, fix_and_retest_params, worlds_per_regime, forward_mode, tcost_model, default_adv
+                strategy_code,
+                strategy_type,
+                prices,
+                fix_and_retest_params,
+                worlds_per_regime,
+                forward_mode,
+                tcost_model,
+                default_adv,
             )
         else:
             tcost = _resolve_tcost_model(tcost_model)
@@ -169,7 +190,7 @@ def run_break_test(
                 tcost_model=tcost,
                 default_adv=default_adv,
             )
-            corr_equity = compute_equity_curve(
+            compute_equity_curve(
                 prices,
                 corr_positions,
                 tcost_model=tcost,
@@ -195,7 +216,12 @@ def run_break_test(
         "failure_analysis": report.get("failure_analysis"),
         "correction_suggestion": report["correction_suggestion"],
         "corrected": corrected,
-        "limitations": _merge_limitations(report.get("limitations"), validation, data_source, lookback_period, fred),
+        "limitations": _merge_limitations(
+            report.get("limitations"), validation, data_source, lookback_period, fred
+        ),
+        "environment": _environment_block(
+            seed_manifest={"session_id": session_id, "strategy_type": strategy_type}
+        ),
     }
     if universe_preset or asset_count:
         result["universe"] = {
@@ -229,7 +255,7 @@ def _validate_prices(prices: np.ndarray, strategy_type: str, params: dict[str, i
         raise ValueError(f"Provide at least {min_len} finite, positive closing prices")
 
 
-def _resolve_tcost_model(tcost_model: "TransactionCostModel | None") -> "TransactionCostModel | None":
+def _resolve_tcost_model(tcost_model: TransactionCostModel | None) -> TransactionCostModel | None:
     if tcost_model is not None:
         return tcost_model
     try:
@@ -267,7 +293,9 @@ def _merge_limitations(
     merged: dict[str, Any] = dict(limitations if isinstance(limitations, dict) else {})
     if validation and validation.get("short_history"):
         merged.setdefault("input_warnings", [])
-        merged["input_warnings"] = list(merged["input_warnings"]) + [validation.get("message", "Short history")]
+        merged["input_warnings"] = list(merged["input_warnings"]) + [
+            validation.get("message", "Short history")
+        ]
     if data_source:
         merged["data_source"] = data_source
     if lookback_period:
@@ -284,7 +312,7 @@ def _run_custom_strategy(
     params: dict[str, int],
     worlds_per_regime: int,
     forward_mode: str,
-    tcost_model: "TransactionCostModel | None" = None,
+    tcost_model: TransactionCostModel | None = None,
     default_adv: float | None = None,
 ) -> tuple[dict[str, float | int], list[float], dict[str, object], list[dict[str, object]]]:
     from app.break_test.python_runner import run_python_strategy_with_np
@@ -335,10 +363,9 @@ def _run_custom_forward_test(
     params: dict[str, int],
     worlds_per_regime: int,
     forward_mode: str,
-    tcost_model: "TransactionCostModel | None" = None,
+    tcost_model: TransactionCostModel | None = None,
     default_adv: float | None = None,
 ) -> list[dict[str, object]]:
-    from app.break_test.python_runner import run_python_strategy_with_np
 
     if forward_mode == "exchange":
         return _run_custom_exchange_forward_test(prices, code, params, worlds_per_regime)
@@ -363,7 +390,7 @@ def _run_custom_forward_test(
         return sampled, float(np.mean(np.abs(returns)))
 
     results: list[dict[str, object]] = []
-    for regime_name, count in zip(regime_specs, [worlds_per_regime // 4] * 4):
+    for regime_name, count in zip(regime_specs, [worlds_per_regime // 4] * 4, strict=False):
         sampled_worlds = []
         for idx in range(max(1, count)):
             sampled, adv = sample_world(regime_name, idx * 1000 + hash(regime_name) % 997)
@@ -375,7 +402,9 @@ def _run_custom_forward_test(
         for sampled, adv in sampled_worlds:
             try:
                 world_positions = _custom_positions_from_code(prices, code, params)
-                metrics = backtest_metrics(sampled, world_positions, tcost_model=tcost, default_adv=default_adv or adv)
+                metrics = backtest_metrics(
+                    sampled, world_positions, tcost_model=tcost, default_adv=default_adv or adv
+                )
             except Exception:
                 metrics = {
                     "total_return_pct": 0.0,
@@ -392,7 +421,9 @@ def _run_custom_forward_test(
                 "regime": regime_name,
                 "regime_num": len(results) + 1,
                 "worlds": count,
-                "loss_rate_pct": round(sum(world_losses) / len(world_losses) * 100, 2) if world_losses else 0.0,
+                "loss_rate_pct": round(sum(world_losses) / len(world_losses) * 100, 2)
+                if world_losses
+                else 0.0,
                 "median_return_pct": round(float(np.median(world_returns)), 2) if world_returns else 0.0,
                 "worst_drawdown_pct": round(float(worst_dd), 2),
                 "best_return_pct": round(float(np.max(world_returns)), 2) if world_returns else 0.0,
@@ -406,7 +437,7 @@ def _run_custom_exchange_forward_test(
     code: str,
     params: dict[str, int],
     worlds_per_regime: int,
-    tcost_model: "TransactionCostModel | None" = None,
+    tcost_model: TransactionCostModel | None = None,
     default_adv: float | None = None,
 ) -> list[dict[str, object]]:
     from app.break_test.python_runner import run_python_strategy_with_np

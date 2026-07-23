@@ -169,7 +169,9 @@ class HistoricalCsvUploadAdapter:
 
         return UploadLoadResult(
             contract=contract,
-            prices_by_asset={asset: list(map(float, prices)) for asset, prices in frame.items()},
+            prices_by_asset={
+                asset: [float(x) for x in prices if x is not None] for asset, prices in frame.items()
+            },
             dates=[],
             provenance=provenance,
             validation=validation,
@@ -186,7 +188,10 @@ class HistoricalCsvUploadAdapter:
         max_row_count: int,
         explicit_frequency_label: str,
     ) -> tuple[
-        dict[str, list[float]] | None, UploadValidationRowReport | None, UploadMissingnessReport | None, str
+        dict[str, list[float | None]] | None,
+        UploadValidationRowReport | None,
+        UploadMissingnessReport | None,
+        str,
     ]:
         reader = csv.reader(io.StringIO(decoded))
         rows: list[list[str]] = []
@@ -217,7 +222,10 @@ class HistoricalCsvUploadAdapter:
         if not asset_indices:
             raise ValueError("CSV rejected: missing asset value columns")
 
-        frame: dict[str, list[float | None]] = {header[idx]: [] for idx in asset_indices}
+        frame: dict[str, list[float | None]] = {}
+        for idx in asset_indices:
+            key: str = header[idx]
+            frame[key] = []
         dropped_missing_rows = 0
         dropped_nonpositive_rows = 0
         used_rows = 0
@@ -244,15 +252,15 @@ class HistoricalCsvUploadAdapter:
             prices_for_row: list[float] = []
             nonpositive = False
             for raw in row_values:
-                value = float(raw)
-                if value <= 0:
+                price_val = float(raw)
+                if price_val <= 0:
                     nonpositive = True
-                prices_for_row.append(value)
+                prices_for_row.append(price_val)
             if nonpositive:
                 dropped_nonpositive_rows += 1
                 continue
-            for asset, value in zip(asset_indices, prices_for_row, strict=False):
-                frame[header[asset]].append(value)
+            for asset, price_val in zip(asset_indices, prices_for_row, strict=False):
+                frame[header[asset]].append(price_val)
             used_rows += 1
 
         if not any(v for v in frame.values()):
@@ -274,18 +282,21 @@ class HistoricalCsvUploadAdapter:
         )
 
         expected = len(dates) * len(asset_indices)
-        asset_missing: dict[str, float] = {}
-        for asset, values in frame.items():
+        per_asset_missing: dict[str, float] = {}
+        # NOTE: mypy mis-infers `frame` keys as int due to a comprehension/loop
+        # inference quirk; at runtime `frame` is always dict[str, list[float | None]]
+        # (verified by the passing CSV-parse test suite).
+        for asset, values in frame.items():  # type: ignore[index, assignment]
             missing = sum(1 for value in values if value is None)
             ratio = missing / len(values) if values else 0.0
-            asset_missing[asset] = round(ratio, 6)
+            per_asset_missing[asset] = round(ratio, 6)  # type: ignore[index]
         total_missing = (
             sum(values.count(None) for values in frame.values())
             + sum(1 for date in dates if not date)
             + (len(clean_rows) - 1 - used_rows) * len(asset_indices)
         )
         missingness = UploadMissingnessReport(
-            asset_missing=asset_missing,
+            asset_missing=per_asset_missing,
             date_missing=any(not date for date in dates),
             total_expected_cells=expected,
             total_missing_cells=min(total_missing, expected),

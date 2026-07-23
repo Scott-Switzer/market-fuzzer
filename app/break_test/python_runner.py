@@ -59,9 +59,9 @@ _STRATEGY_TEMPLATE = '''def strategy(observations, params):
 
 def validate_strategy_code(code: str) -> None:
     try:
-        compile(code, '<strategy>', 'exec')
+        compile(code, "<strategy>", "exec")
     except SyntaxError as exc:
-        raise ValueError(f'Invalid Python syntax: {exc}') from exc
+        raise ValueError(f"Invalid Python syntax: {exc}") from exc
 
 
 def run_python_strategy(
@@ -71,24 +71,24 @@ def run_python_strategy(
 ) -> list[dict[str, Any]]:
     validate_strategy_code(code)
     module_globals: dict[str, Any] = {
-        '__builtins__': _SAFE_BUILTINS,
+        "__builtins__": _SAFE_BUILTINS,
     }
     safe_locals: dict[str, Any] = {}
     try:
         exec(code, module_globals, safe_locals)
     except Exception as exc:
-        raise ValueError(f'Strategy code execution failed: {exc}') from exc
+        raise ValueError(f"Strategy code execution failed: {exc}") from exc
 
-    if 'strategy' not in safe_locals:
-        raise ValueError('Strategy code must define a `strategy(observations, params)` function')
+    if "strategy" not in safe_locals:
+        raise ValueError("Strategy code must define a `strategy(observations, params)` function")
 
     try:
-        result = safe_locals['strategy'](observations, params or {})
+        result = safe_locals["strategy"](observations, params or {})
     except Exception as exc:
-        raise ValueError(f'Strategy function raised: {exc}') from exc
+        raise ValueError(f"Strategy function raised: {exc}") from exc
 
     if not isinstance(result, list):
-        raise ValueError('Strategy function must return a list of actions')
+        raise ValueError("Strategy function must return a list of actions")
     for action in result:
         _validate_action(action)
     return result
@@ -103,32 +103,32 @@ def run_python_strategy_with_np(
     _assert_no_unsafe_imports(code)
     safe_np = _build_numpy_safe()
     module_globals: dict[str, Any] = {
-        '__builtins__': _SAFE_BUILTINS,
-        'np': safe_np,
+        "__builtins__": _SAFE_BUILTINS,
+        "np": safe_np,
     }
     safe_locals: dict[str, Any] = {}
     try:
         exec(code, module_globals, safe_locals)
     except Exception as exc:
-        raise ValueError(f'Strategy code execution failed: {exc}') from exc
+        raise ValueError(f"Strategy code execution failed: {exc}") from exc
 
-    if 'strategy' not in safe_locals:
-        raise ValueError('Strategy code must define a `strategy(observations, params)` function')
+    if "strategy" not in safe_locals:
+        raise ValueError("Strategy code must define a `strategy(observations, params)` function")
 
     try:
-        result = safe_locals['strategy'](observations, params or {})
+        result = safe_locals["strategy"](observations, params or {})
     except Exception as exc:
-        raise ValueError(f'Strategy function raised: {exc}') from exc
+        raise ValueError(f"Strategy function raised: {exc}") from exc
 
     if not isinstance(result, list):
-        raise ValueError('Strategy function must return a list of actions')
+        raise ValueError("Strategy function must return a list of actions")
     for action in result:
         _validate_action(action)
     return result
 
 
 def _build_numpy_safe() -> Any:
-    ns = type('SafeNumpy', (), {})()
+    ns = type("SafeNumpy", (), {})()
     ns.array = np.array
     ns.mean = np.mean
     ns.std = np.std
@@ -170,20 +170,22 @@ def _assert_no_unsafe_imports(code: str) -> None:
     ImportVisitor().visit(tree)
     unexpected = [name for name in imports if name not in _ALLOWED_ALIASES]
     if unexpected:
-        raise ValueError(f'Strategy code uses disallowed imports: {unexpected}. Allowed: {sorted(_ALLOWED_ALIASES)}')
+        raise ValueError(
+            f"Strategy code uses disallowed imports: {unexpected}. Allowed: {sorted(_ALLOWED_ALIASES)}"
+        )
 
 
 def _validate_action(action: Any) -> None:
     if not isinstance(action, dict):
-        raise ValueError(f'Each action must be a dict, got {type(action).__name__}')
-    action_type = action.get('action_type')
-    if action_type not in ('hold', 'market', 'limit'):
-        raise ValueError(f'Invalid action_type: {action_type}')
-    if action_type == 'hold':
+        raise ValueError(f"Each action must be a dict, got {type(action).__name__}")
+    action_type = action.get("action_type")
+    if action_type not in ("hold", "market", "limit"):
+        raise ValueError(f"Invalid action_type: {action_type}")
+    if action_type == "hold":
         return
-    side = action.get('side')
-    if side not in ('buy', 'sell'):
-        raise ValueError(f'market/limit actions require side=buy or sell, got {side}')
-    quantity = action.get('quantity', 0)
+    side = action.get("side")
+    if side not in ("buy", "sell"):
+        raise ValueError(f"market/limit actions require side=buy or sell, got {side}")
+    quantity = action.get("quantity", 0)
     if not isinstance(quantity, int) or quantity < 1:
-        raise ValueError(f'market/limit actions require positive integer quantity, got {quantity}')
+        raise ValueError(f"market/limit actions require positive integer quantity, got {quantity}")

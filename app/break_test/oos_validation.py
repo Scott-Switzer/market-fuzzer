@@ -17,7 +17,11 @@ def _feature_vector(prices: np.ndarray, window: int = 20) -> np.ndarray:
     vol = float(np.std(returns, ddof=1)) * math.sqrt(252) if len(returns) > 1 else 0.0
     drift = float(np.mean(returns) * 252) if len(returns) else 0.0
     rolling_var = (
-        np.convolve(returns.astype(float) ** 2, np.ones(min(20, len(returns)), dtype=float) / min(20, len(returns)), mode="valid")
+        np.convolve(
+            returns.astype(float) ** 2,
+            np.ones(min(20, len(returns)), dtype=float) / min(20, len(returns)),
+            mode="valid",
+        )
         if len(returns) >= 2
         else np.array([0.0], dtype=float)
     )
@@ -54,39 +58,148 @@ def _psr_vs_zero(sharpe: float, n: int) -> float:
     if n <= 1 or math.isnan(sharpe):
         return 0.0
     z = sharpe * math.sqrt(n)
-    denom = math.sqrt(max(1e-12, 1.0 - (sharpe ** 2) / n * (n - 1) / n))
+    denom = math.sqrt(max(1e-12, 1.0 - (sharpe**2) / n * (n - 1) / n))
     adjusted_z = z * denom
     return float(_norm_cdf(adjusted_z))
 
 
-def _psr_vs_benchmark(strategy_sharpe: float, benchmark_sharpe: float, n: int, covariance: float | None = None) -> float:
+def _psr_vs_benchmark(
+    strategy_sharpe: float, benchmark_sharpe: float, n: int, covariance: float | None = None
+) -> float:
     if n <= 1 or math.isnan(strategy_sharpe) or math.isnan(benchmark_sharpe):
         return 0.0
     diff = strategy_sharpe - benchmark_sharpe
-    std_diff = math.sqrt(max(1e-12, 1.0 + 1.0 / max(n - 1, 1) - 2 * (covariance if covariance is not None else 0.0)))
+    std_diff = math.sqrt(
+        max(1e-12, 1.0 + 1.0 / max(n - 1, 1) - 2 * (covariance if covariance is not None else 0.0))
+    )
     z = diff / std_diff
     return float(_norm_cdf(z))
 
 
-def _deflated_sharpe(oos_sharpes: list[float]) -> float:
+def _deflated_sharpe(oos_sharpes: list[float], *, n_trials: int | None = None) -> float:
+    """Bailey & López de Prado (2014) deflated Sharpe ratio.
+
+    Uses the exact LdP2014 ANOVA-style corrected Sharpe variance with skewness
+    and kurtosis corrections, then evaluates the moment-adjusted test
+    statistic against the expected maximum Sharpe under the null,
+    ``SR0``, computed for ``n_trials`` independent trials.
+    """
     arr = np.asarray(oos_sharpes, dtype=float)
-    k = len(arr)
-    if k <= 1:
-        return float(np.mean(arr)) if k == 1 else 0.0
-    sr = float(np.mean(arr))
-    if sr <= 0:
+    k = int(arr.size)
+    if k == 0:
         return 0.0
-    denominator = math.sqrt(max(1e-12, sr ** 2 - 1.0 / (k - 1)))
-    try:
-        z_score = sr / denominator
-    except ValueError:
-        return 0.0
-    percentile = _norm_cdf(z_score)
-    shrunk_mean = sr * math.sqrt(1.0 + 1.0 / max(k - 1, 1))
-    lower_bound = float(
-        shrunk_mean * percentile - math.sqrt(1.0 / (k - 1)) * _norm_cdf(z_score - 1.96 / math.sqrt(k))
+    sr = float(np.nanmean(arr))
+    if k == 1 or math.isnan(sr):
+        return round(sr, 4)
+    trials = max(int(n_trials) if n_trials is not None else k, 1)
+    # Estimate higher central moments where available.
+    if k > 2:
+        mu = sr
+        m2 = float(np.nanmean((arr - mu) ** 2))
+        m3 = float(np.nanmean((arr - mu) ** 3))
+        m4 = float(np.nanmean((arr - mu) ** 4))
+        std = math.sqrt(max(m2, 1e-16))
+        skew = m3 / max(std**3, 1e-16)
+        kurt = m4 / max(std**4, 1e-16)
+    else:
+        skew = 0.0
+        kurt = 3.0
+    # Exact N(0,1) quantile function via Acklam rational approximation.
+    ppf = _norm_ppf
+    if trials > 1:
+        e_max = (1.0 - np.euler_gamma) * ppf(1.0 - 1.0 / trials) + np.euler_gamma * ppf(
+            1.0 - 1.0 / (trials * math.e)
+        )
+        sr0 = float(e_max)
+    else:
+        sr0 = 0.0
+    # LdP2014 corrected variance of the Sharpe estimator.
+    v = (1.0 - skew * sr + (kurt - 1.0) / 4.0 * sr**2) / max(k - 1, 1)
+    v = max(float(v), 1e-12)
+    z = (sr - sr0) / math.sqrt(v)
+    return round(float(_norm_cdf(z)), 4)
+
+
+def _norm_ppf(p: float) -> float:
+    p = min(max(float(p), 1e-12), 1.0 - 1e-12)
+    # Rational approximation (Acklam).
+    a = [
+        -3.969683028665376e01,
+        2.209460984245205e02,
+        -2.759285104469687e02,
+        1.383577459334128e02,
+        -3.066479806614736e01,
+        2.506628277459239e00,
+    ]
+    b = [
+        -5.447609879822406e01,
+        1.615858368580577e02,
+        -1.556989798598866e02,
+        6.680131188771972e01,
+        -1.328068155288572e01,
+    ]
+    c = [
+        -7.784894002430293e-03,
+        -3.223964580411365e-01,
+        -2.400758277161838e00,
+        -2.549732539343734e00,
+        4.374664141464968e00,
+        2.938163982698783e00,
+    ]
+    d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e00, 3.754408661907416e00]
+    plow = 0.02425
+    phigh = 1 - plow
+    if p < plow:
+        q = math.sqrt(-2 * math.log(p))
+        return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+            (((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1
+        )
+    if p > phigh:
+        q = math.sqrt(-2 * math.log(1 - p))
+        return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+            (((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1
+        )
+    q = p - 0.5
+    r = q * q
+    return (
+        (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5])
+        * q
+        / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1)
     )
-    return round(float(np.clip(lower_bound, -5.0, 5.0)), 4)
+
+
+def bias_corrected_sharpe(
+    returns: np.ndarray | list[float],
+    *,
+    n_bootstrap: int = 500,
+    seed: int = 0,
+) -> dict[str, float]:
+    """Bootstrap bias-corrected annualized Sharpe with 95% CI."""
+    rets = np.asarray(returns, dtype=float).reshape(-1)
+    if rets.size < 3:
+        return {"sharpe": 0.0, "bias_corrected_sharpe": 0.0, "ci_low": 0.0, "ci_high": 0.0}
+    rng = np.random.default_rng(seed)
+
+    def _ann_sharpe(x: np.ndarray) -> float:
+        std = float(np.std(x, ddof=1))
+        if std <= 0:
+            return 0.0
+        return float(np.mean(x) / std * math.sqrt(252))
+
+    observed = _ann_sharpe(rets)
+    boots = np.empty(n_bootstrap, dtype=float)
+    for i in range(n_bootstrap):
+        sample = rng.choice(rets, size=len(rets), replace=True)
+        boots[i] = _ann_sharpe(sample)
+    bias = float(np.mean(boots) - observed)
+    corrected = observed - bias
+    lo, hi = np.percentile(boots, [2.5, 97.5])
+    return {
+        "sharpe": round(observed, 6),
+        "bias_corrected_sharpe": round(corrected, 6),
+        "ci_low": round(float(lo), 6),
+        "ci_high": round(float(hi), 6),
+    }
 
 
 def _consistency_sharpe(folds: list[dict[str, Any]]) -> float:
@@ -115,7 +228,9 @@ def _benjamini_hochberg(p_values: list[float]) -> list[float]:
     return adjusted
 
 
-def _decision_boundary(oos_sharpe: float, deflated_sharpe: float, psr_vs_zero: float, consistency: float) -> str:
+def _decision_boundary(
+    oos_sharpe: float, deflated_sharpe: float, psr_vs_zero: float, consistency: float
+) -> str:
     if oos_sharpe < 0 or deflated_sharpe <= 0:
         return "rejected"
     if psr_vs_zero < 0.5 or consistency < 0:
@@ -136,7 +251,7 @@ def _adversarial_mutation(prices: np.ndarray, regime: str, seed: int) -> np.ndar
         return mutated
     spike, noise, center = shock_map[regime]
     idx = min(center, len(mutated) - 1)
-    mutated[idx] *= (1.0 + spike)
+    mutated[idx] *= 1.0 + spike
     small = rng.normal(0.0, noise, size=len(mutated))
     mutated = mutated * (1.0 + np.clip(small, -0.02, 0.02))
     return np.maximum(mutated, 1e-6)
@@ -209,17 +324,76 @@ def walk_forward_validation(
     benchmark_returns: list[float] | None = None,
     adversarial: bool = False,
     adversarial_seed: int = 42,
+    max_folds: int = 24,
+    use_purged_kfold: bool | None = None,
+) -> dict[str, Any]:
+    px = np.asarray(prices, dtype=float)
+    # Hour 10: fall back to purged K-fold when max_folds <= 5.
+    if use_purged_kfold is True or (use_purged_kfold is None and max_folds <= 5):
+        from app.break_test.cross_val import purged_k_fold_cv
+
+        def _pos_fn(p: np.ndarray) -> np.ndarray:
+            try:
+                return np.asarray(compute_positions(strategy_type, p, **params), dtype=float)
+            except Exception:
+                return np.zeros(len(p), dtype=float)
+
+        kfold = purged_k_fold_cv(
+            px, k=max(2, max_folds), embargo=embargo, anchored=anchored, positions_fn=_pos_fn
+        )
+        return {
+            "method": "purged_k_fold",
+            "folds": kfold["folds"],
+            "mean_oos_sharpe": kfold["mean_oos_sharpe"],
+            "oos_sharpe": kfold["mean_oos_sharpe"],
+            "embargo": embargo,
+            "k": kfold["k"],
+            "decision": "review",
+            "deflated_sharpe": _deflated_sharpe([float(f["oos_sharpe"]) for f in kfold["folds"]]),
+            "n_folds": kfold["n_folds"],
+        }
+    return _walk_forward_validation_impl(
+        prices,
+        strategy_type,
+        params,
+        train_window=train_window,
+        test_window=test_window,
+        step=step,
+        embargo=embargo,
+        anchored=anchored,
+        adversarial=adversarial,
+        adversarial_seed=adversarial_seed,
+        regime_aware=regime_aware,
+        benchmark_returns=benchmark_returns,
+        max_folds=max_folds,
+    )
+
+
+def _walk_forward_validation_impl(
+    prices: list[float],
+    strategy_type: str,
+    params: dict[str, int],
+    train_window: int = 120,
+    test_window: int | None = None,
+    step: int | None = None,
+    embargo: int = 5,
+    anchored: bool = False,
+    regime_aware: bool = False,
+    benchmark_returns: list[float] | None = None,
+    adversarial: bool = False,
+    adversarial_seed: int = 42,
+    max_folds: int = 24,
 ) -> dict[str, Any]:
     px = np.asarray(prices, dtype=float)
     n = len(px)
     if n < 50 or train_window < 2 or (test_window is not None and test_window < 1):
         return _make_empty_result("insufficient data for walk-forward", benchmark_returns is not None)
 
-    effective_test = max(test_window or step or train_window, 1)
-    effective_step = step or effective_test
     folds: list[dict[str, Any]] = []
 
-    base_folds = _walk_forward_folds(px, train_window, embargo, anchored, step, test_window)
+    base_folds = _walk_forward_folds(
+        px, train_window, embargo, anchored, step, test_window, max_folds=max_folds
+    )
     for fold in base_folds:
         train_prices = fold["train_prices"]
         test_prices = fold["test_prices"]
@@ -230,7 +404,11 @@ def walk_forward_validation(
             continue
         if len(positions) != len(test_prices):
             continue
-        train_positions = compute_positions(strategy_type, train_prices, **(params or {})) if len(train_prices) >= 5 else np.array([], dtype=float)
+        train_positions = (
+            compute_positions(strategy_type, train_prices, **(params or {}))
+            if len(train_prices) >= 5
+            else np.array([], dtype=float)
+        )
         hist = backtest_metrics(train_prices, train_positions) if len(train_prices) > 1 else {"sharpe": 0.0}
         metrics = backtest_metrics(test_prices, positions)
         fold["historical_sharpe"] = round(float(hist["sharpe"]), 3)
@@ -244,9 +422,13 @@ def walk_forward_validation(
         fold["regime_features"] = regime_vec.round(4).tolist()
         fold["equity_curve"] = compute_equity_curve(test_prices, positions)
         if adversarial:
-            adversarial_test_prices = _adversarial_mutation(test_prices, "earnings_shock", adversarial_seed + fold["fold"])
+            adversarial_test_prices = _adversarial_mutation(
+                test_prices, "earnings_shock", adversarial_seed + fold["fold"]
+            )
             try:
-                adversarial_positions = compute_positions(strategy_type, adversarial_test_prices, **(params or {}))
+                adversarial_positions = compute_positions(
+                    strategy_type, adversarial_test_prices, **(params or {})
+                )
             except ValueError:
                 adversarial_positions = np.array([0.0] * len(test_prices))
             adversarial_metrics = backtest_metrics(adversarial_test_prices, adversarial_positions)
@@ -261,7 +443,7 @@ def walk_forward_validation(
     similarities = [_cosine_weight(current_vec, np.array(fold["regime_features"])) for fold in folds]
     total_sim = sum(similarities)
     weights = [s / total_sim for s in similarities] if total_sim > 0 else [1.0 / len(folds)] * len(folds)
-    for fold, weight in zip(folds, weights):
+    for fold, weight in zip(folds, weights, strict=False):
         fold["weight"] = round(float(weight), 6)
         fold["regime_weight"] = round(float(weight), 6)
 
@@ -322,7 +504,9 @@ def _make_benchmark_positions(prices: np.ndarray, strategy_type: str) -> np.ndar
         if len(prices) < 60:
             return np.zeros(len(prices), dtype=float)
         lookback = 20
-        returns = np.concatenate((np.zeros(lookback, dtype=float), np.diff(prices) / np.maximum(prices[:-1], 1e-12)))
+        returns = np.concatenate(
+            (np.zeros(lookback, dtype=float), np.diff(prices) / np.maximum(prices[:-1], 1e-12))
+        )
         momentum = np.convolve(returns, np.ones(lookback) / lookback, mode="full")[: len(prices)]
         signal = np.clip(momentum * 252, -1.0, 1.0)
         return signal
@@ -339,44 +523,59 @@ def _beatable_guard(
     prices = np.linspace(100, 150, len(benchmark_returns))
     positions = _make_benchmark_positions(prices, strategy_type)
     if len(positions) != len(benchmark_returns):
-        positions = np.concatenate((positions, np.zeros(len(benchmark_returns) - len(positions), dtype=float)))[: len(benchmark_returns)]
-    returns = np.diff(np.array(benchmark_returns, dtype=float)) / np.maximum(np.array(benchmark_returns[:-1], dtype=float), 1e-12)
+        positions = np.concatenate(
+            (positions, np.zeros(len(benchmark_returns) - len(positions), dtype=float))
+        )[: len(benchmark_returns)]
+    returns = np.diff(np.array(benchmark_returns, dtype=float)) / np.maximum(
+        np.array(benchmark_returns[:-1], dtype=float), 1e-12
+    )
     bench_returns = returns
-    bench_sharpe = float(np.mean(bench_returns) / np.std(bench_returns, ddof=1) * math.sqrt(252)) if len(bench_returns) > 1 and float(np.std(bench_returns, ddof=1)) > 0 else 0.0
+    bench_sharpe = (
+        float(np.mean(bench_returns) / np.std(bench_returns, ddof=1) * math.sqrt(252))
+        if len(bench_returns) > 1 and float(np.std(bench_returns, ddof=1)) > 0
+        else 0.0
+    )
     strategy_sharpes = [float(f["oos_sharpe"]) for f in folds]
     if np.mean(strategy_sharpes) <= bench_sharpe:
-        return False, f"strategy mean oos sharpe {round(float(np.mean(strategy_sharpes)),3)} <= simple benchmark sharpe {round(bench_sharpe,3)}"
-    return True, f"strategy mean oos sharpe {round(float(np.mean(strategy_sharpes)),3)} > simple benchmark sharpe {round(bench_sharpe,3)}"
+        return (
+            False,
+            f"strategy mean oos sharpe {round(float(np.mean(strategy_sharpes)), 3)} <= simple benchmark sharpe {round(bench_sharpe, 3)}",
+        )
+    return (
+        True,
+        f"strategy mean oos sharpe {round(float(np.mean(strategy_sharpes)), 3)} > simple benchmark sharpe {round(bench_sharpe, 3)}",
+    )
 
 
-def _score_candidate(prices: np.ndarray, strategy_type: str, candidate: dict[str, int], embargo: int) -> float:
+def _score_candidate(
+    prices: np.ndarray, strategy_type: str, candidate: dict[str, int], embargo: int
+) -> float:
     if len(prices) < max(60, candidate.get("slow", 50) + embargo + 4):
         return -1e9
-    folds = _walk_forward_folds(prices, train_window=min(90, len(prices) // 3), embargo=embargo, anchored=False, step=None, test_window=None)
+    folds = _walk_forward_folds(
+        prices,
+        train_window=min(90, len(prices) // 3),
+        embargo=embargo,
+        anchored=False,
+        step=None,
+        test_window=None,
+    )
     if len(folds) < 2:
         return -1e9
-    sharpes: list[float] = []
-    for fold in folds:
-        try:
-            positions = compute_positions(strategy_type, fold["test_prices"], **candidate)
-        except ValueError:
-            return -1e9
-        metrics = backtest_metrics(fold["test_prices"], positions)
-        sharpes.append(float(metrics["sharpe"]))
-    if not sharpes:
-        return -1e9
-    mean = float(np.mean(sharpes))
-    std = float(np.std(sharpes, ddof=1))
-    return mean / std if std > 0 else (mean if mean > 0 else -1e9)
+    summary = _summarise_folds(folds, embargo, False)
+    # Use the full nested-CV summary score rather than a one-shot mean/std Sharpe.
+    return float(summary.get("weighted_oos_sharpe", summary.get("oos_sharpe", 0.0)) or 0.0)
 
 
-def _select_nested_params(prices: np.ndarray, strategy_type: str, param_ranges: dict[str, tuple[int, int]], embargo: int) -> dict[str, int] | None:
+def _select_nested_params(
+    prices: np.ndarray, strategy_type: str, param_ranges: dict[str, tuple[int, int]], embargo: int
+) -> dict[str, int] | None:
     if not param_ranges or prices.size < 60:
         return None
     candidates: list[tuple[float, dict[str, int]]] = []
     keys = list(param_ranges.keys())
     for values in itertools.product(*[range(*param_ranges[k]) for k in keys]):
-        candidate = dict(zip(keys, values))
+        candidate = dict(zip(keys, values, strict=False))
         score = _score_candidate(prices, strategy_type, candidate, embargo)
         if score > -1e9:
             candidates.append((score, candidate))
@@ -418,12 +617,18 @@ def combinatorial_purged_cross_validation(
     folds: list[dict[str, Any]] = []
     produced_combos: list[tuple[int, ...]] = []
     produced_config_note = None
+    skipped_combinations: list[dict[str, Any]] = []
 
     for trial_blocks in candidate_blocks:
         for trial_max_combos in candidate_max_combos:
             trial_folds: list[dict[str, Any]] = []
             block_size = max(n // trial_blocks, block_width)
-            combos = list(itertools.combinations(range(trial_blocks), min(trial_blocks, 3)))[:trial_max_combos]
+            all_combos = list(itertools.combinations(range(trial_blocks), min(trial_blocks, 3)))
+            combos = all_combos[:trial_max_combos]
+            skipped = [
+                {"combo": c, "reason": "pruned by max_combinations limit"}
+                for c in all_combos[trial_max_combos:]
+            ]
             for combo in combos:
                 train_mask = np.ones(n, dtype=bool)
                 test_mask = np.zeros(n, dtype=bool)
@@ -436,12 +641,16 @@ def combinatorial_purged_cross_validation(
                 train_prices = px[train_mask]
                 test_prices = px[test_mask]
                 if not len(test_prices) or not len(train_prices):
+                    skipped.append({"combo": list(combo), "reason": "empty train/test partition"})
                     continue
 
                 candidate_params = params or {}
                 if nested:
-                    selected = _select_nested_params(train_prices, strategy_type, param_ranges or {}, effective_embargo)
+                    selected = _select_nested_params(
+                        train_prices, strategy_type, param_ranges or {}, effective_embargo
+                    )
                     if selected is None:
+                        skipped.append({"combo": list(combo), "reason": "nested param selection failed"})
                         continue
                     candidate_params = selected
 
@@ -449,8 +658,10 @@ def combinatorial_purged_cross_validation(
                     t_pos = compute_positions(strategy_type, test_prices, **candidate_params)
                     tr_pos = compute_positions(strategy_type, train_prices, **candidate_params)
                 except ValueError:
+                    skipped.append({"combo": list(combo), "reason": "strategy raised ValueError"})
                     continue
                 if len(t_pos) != len(test_prices) or len(tr_pos) != len(train_prices):
+                    skipped.append({"combo": list(combo), "reason": "position length mismatch"})
                     continue
                 fold_metrics = backtest_metrics(test_prices, t_pos)
                 hist = backtest_metrics(train_prices, tr_pos)
@@ -475,9 +686,13 @@ def combinatorial_purged_cross_validation(
                     "params": candidate_params,
                 }
                 if adversarial:
-                    adversarial_test_prices = _adversarial_mutation(test_prices, "earnings_shock", adversarial_seed + len(trial_folds))
+                    adversarial_test_prices = _adversarial_mutation(
+                        test_prices, "earnings_shock", adversarial_seed + len(trial_folds)
+                    )
                     try:
-                        adversarial_positions = compute_positions(strategy_type, adversarial_test_prices, **candidate_params)
+                        adversarial_positions = compute_positions(
+                            strategy_type, adversarial_test_prices, **candidate_params
+                        )
                     except ValueError:
                         adversarial_positions = np.array([0.0] * len(test_prices))
                     adversarial_metrics = backtest_metrics(adversarial_test_prices, adversarial_positions)
@@ -494,14 +709,16 @@ def combinatorial_purged_cross_validation(
                 break
         if folds:
             break
-
     if not folds:
-        summary = _make_empty_result("no valid CPCV combinations after pruning", benchmark_returns is not None)
+        summary = _make_empty_result(
+            "no valid CPCV combinations after pruning", benchmark_returns is not None
+        )
         if benchmark_returns is not None:
             summary["psr_vs_benchmark"] = 0.0
             summary["relative_sharpe_vs_benchmark"] = 0.0
         summary["blocks_evaluated"] = candidate_blocks[-1]
         summary["combinations_evaluated"] = 0
+        summary["skipped_combinations"] = skipped_combinations
         return summary
 
     oos_sharpes = np.array([float(f["oos_sharpe"]) for f in folds], dtype=float)
@@ -511,18 +728,46 @@ def combinatorial_purged_cross_validation(
     param_stability = _parameter_stability_correlation(strategy_params)
     beatable, beat_note = _beatable_guard(folds, strategy_type, benchmark_returns)
     overall_sharpe = float(np.mean(oos_sharpes)) if oos_sharpes.size else 0.0
-    decision = _decision_boundary(overall_sharpe, _deflated_sharpe([float(f["oos_sharpe"]) for f in folds]), _psr_vs_zero(overall_sharpe, len(folds)), _consistency_sharpe(folds))
+    decision = _decision_boundary(
+        overall_sharpe,
+        _deflated_sharpe([float(f["oos_sharpe"]) for f in folds]),
+        _psr_vs_zero(overall_sharpe, len(folds)),
+        _consistency_sharpe(folds),
+    )
     summary = _summarise_folds(folds, effective_embargo, False, benchmark_returns=benchmark_returns)
     summary["blocks"] = blocks
     summary["blocks_evaluated"] = folds[0]["trial_blocks"]
     summary["combinations_evaluated"] = len(produced_combos)
-    summary["combinations_attempted"] = len(list(itertools.combinations(range(folds[0]["trial_blocks"]), min(folds[0]["trial_blocks"], 3))))
+    summary["skipped_combinations"] = skipped_combinations
+    from app.break_test.oos_test import combinations_attempted_count, exhaustiveness_flag
+
+    n_test = min(folds[0]["trial_blocks"], 2)
+    summary["combinations_attempted"] = combinations_attempted_count(folds[0]["trial_blocks"], n_test)
+    summary["exhaustiveness"] = exhaustiveness_flag(folds[0]["trial_blocks"])
     summary["nested"] = nested
     summary["param_stability"] = param_stability
     summary["bh_adjusted_p_values"] = adjusted_p_values
     summary["beatable"] = beatable
     summary["beatable_note"] = beat_note
     summary["multiple_testing_correction"] = "benjamini_hochberg"
+    try:
+        from app.break_test.multi_test import mcs_selection, spa_test, white_reality_check
+
+        # Build fold return proxies from OOS sharpes for MCS wiring.
+        fake_rets = [np.full(32, float(s) / math.sqrt(252), dtype=float) for s in oos_sharpes]
+        summary["mcs"] = mcs_selection(fake_rets, n_bootstrap=100, seed=7)
+        summary["spa"] = spa_test(fake_rets, n_bootstrap=100, seed=8)
+        summary["white_reality_check"] = white_reality_check(fake_rets, n_bootstrap=100, seed=9)
+        summary["multiple_testing_correction"] = "bh+spa+mcs"
+    except Exception as exc:  # pragma: no cover - defensive
+        summary["multi_test_error"] = str(exc)
+    try:
+        from app.break_test.overfit_bounds import deprado_dsb, flajolet_karlin_sdb
+
+        summary["sdb"] = flajolet_karlin_sdb(len(folds), max(len(folds), 1), overall_sharpe)
+        summary["dsb"] = deprado_dsb(oos_sharpes, max(len(folds), 1), overall_sharpe)
+    except Exception as exc:  # pragma: no cover
+        summary["overfit_bounds_error"] = str(exc)
     if nested and param_ranges:
         summary["selected_params"] = folds[0].get("params", params)
     if not beatable or decision == "rejected":
@@ -530,35 +775,54 @@ def combinatorial_purged_cross_validation(
     else:
         summary["verdict"] = decision
     if adversarial:
-        summary["adversarial_oos_sharpes"] = [round(float(f.get("adversarial_oos_sharpe", 0.0)), 4) for f in folds]
-        summary["adversarial_drawdowns"] = [round(float(f.get("adversarial_drawdown", 0.0)), 4) for f in folds]
+        summary["adversarial_oos_sharpes"] = [
+            round(float(f.get("adversarial_oos_sharpe", 0.0)), 4) for f in folds
+        ]
+        summary["adversarial_drawdowns"] = [
+            round(float(f.get("adversarial_drawdown", 0.0)), 4) for f in folds
+        ]
         summary["verdict"] = "fragile"
     if produced_config_note:
         summary["note"] = produced_config_note
     else:
-        summary["note"] = "Nested CPCV with embargo-purged overlap; BH-adjusted p-values and multicollinear stability guards applied."
+        summary["note"] = (
+            "Nested CPCV with embargo-purged overlap; BH-adjusted p-values and multicollinear stability guards applied."
+        )
     return summary
 
 
-def _benchmark_summary(folds: list[dict[str, Any]], benchmark_returns: list[float] | None) -> dict[str, Any] | None:
+def _benchmark_summary(
+    folds: list[dict[str, Any]], benchmark_returns: list[float] | None
+) -> dict[str, Any] | None:
     if benchmark_returns is None:
         return None
     bench = np.asarray(benchmark_returns, dtype=float)
     if bench.size == 0:
         return None
     bench_returns = np.diff(bench) / bench[:-1] if bench.size > 1 else np.array([0.0], dtype=float)
-    bench_sharpe_full = float(np.mean(bench_returns) / np.std(bench_returns, ddof=1) * math.sqrt(252)) if len(bench_returns) > 1 and float(np.std(bench_returns, ddof=1)) > 0 else 0.0
+    bench_sharpe_full = (
+        float(np.mean(bench_returns) / np.std(bench_returns, ddof=1) * math.sqrt(252))
+        if len(bench_returns) > 1 and float(np.std(bench_returns, ddof=1)) > 0
+        else 0.0
+    )
     strategy_sharpes = [float(f["oos_sharpe"]) for f in folds]
     n = len(bench_returns)
     min_len = min(len(folds), n)
     cov_sum = 0.0
     if min_len > 1:
-        combos = list(zip(strategy_sharpes, [r for i, r in enumerate(bench_returns) if i < min_len]))
+        combos = list(
+            zip(strategy_sharpes, [r for i, r in enumerate(bench_returns) if i < min_len], strict=False)
+        )
         if len(combos) > 1:
             a = np.array([c[0] for c in combos], dtype=float)
             b = np.array([c[1] for c in combos], dtype=float)
             cov_sum = float(np.cov(a, b, ddof=1)[0, 1])
-    psr_bench = _psr_vs_benchmark(float(np.mean(strategy_sharpes)), bench_sharpe_full, min_len, covariance=cov_sum if min_len > 1 else None)
+    psr_bench = _psr_vs_benchmark(
+        float(np.mean(strategy_sharpes)),
+        bench_sharpe_full,
+        min_len,
+        covariance=cov_sum if min_len > 1 else None,
+    )
     return {
         "benchmark_sharpe": round(bench_sharpe_full, 4),
         "strategy_mean_sharpe": round(float(np.mean(strategy_sharpes)), 4),
@@ -573,7 +837,7 @@ def _parameter_stability_correlation(param_sets: list[dict[str, int]]) -> float:
     keys = sorted({k for p in param_sets for k in p.keys()})
     vectors = [np.array([float(p.get(k, 0)) for k in keys], dtype=float) for p in param_sets]
     correlations: list[float] = []
-    for a, b in zip(vectors[:-1], vectors[1:]):
+    for a, b in zip(vectors[:-1], vectors[1:], strict=False):
         if np.std(a) == 0 or np.std(b) == 0:
             continue
         corr = float(np.corrcoef(a, b)[0, 1])
@@ -597,14 +861,20 @@ def _parameter_stability(folds: list[dict[str, Any]], embargo: int) -> float:
     return round(float(np.clip(stability, 0.0, 1.0)), 4)
 
 
-def _summarise_folds(folds: list[dict[str, Any]], embargo: int, anchored: bool, benchmark_returns: list[float] | None = None) -> dict[str, Any]:
+def _summarise_folds(
+    folds: list[dict[str, Any]], embargo: int, anchored: bool, benchmark_returns: list[float] | None = None
+) -> dict[str, Any]:
     oos_sharpes = np.array([float(f["oos_sharpe"]) for f in folds], dtype=float)
     oos_sharpe = float(np.mean(oos_sharpes)) if oos_sharpes.size else 0.0
     n_folds = len(folds)
-    weighted_sharpes = np.array([float(f.get("weight", 1.0)) * float(f["oos_sharpe"]) for f in folds], dtype=float)
+    weighted_sharpes = np.array(
+        [float(f.get("weight", 1.0)) * float(f["oos_sharpe"]) for f in folds], dtype=float
+    )
     weights = np.array([float(f.get("weight", 1.0)) for f in folds], dtype=float)
     weighted_sharpe = float(np.sum(weighted_sharpes) / np.sum(weights)) if np.sum(weights) > 0 else 0.0
-    regime_targets = [float(f.get("equity_curve", [0.0])[-1]) if f.get("equity_curve") else 0.0 for f in folds]
+    regime_targets = [
+        float(f.get("equity_curve", [0.0])[-1]) if f.get("equity_curve") else 0.0 for f in folds
+    ]
     current_regime = detect_regimes(regime_targets)
     regime_weights = [round(float(f.get("weight", 1.0 / max(n_folds, 1))), 6) for f in folds]
     deflated = _deflated_sharpe([float(f["oos_sharpe"]) for f in folds])

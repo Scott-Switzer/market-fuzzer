@@ -1,5 +1,5 @@
-import os
 from pathlib import Path
+
 from playwright.sync_api import sync_playwright
 
 BASE_URL = "http://127.0.0.1:8001/break-test"
@@ -33,11 +33,15 @@ def run():
         results.append(("load_page_and_form_visible", "PASS", save(page, "01_page_loaded.png")))
 
         # 2. Submit strategy form (defaults: sma_crossover, demo data)
-        with page.expect_response(lambda r: r.url.endswith("/api/break-test/run") and r.status == 200, timeout=120000) as resp:
+        with page.expect_response(
+            lambda r: r.url.endswith("/api/break-test/run") and r.status == 200, timeout=120000
+        ) as resp:
             page.click("#run-btn")
         run_json = resp.value.json()
         assert isinstance(run_json, dict), "run response should be JSON object"
-        assert any(k in run_json for k in ("historical", "historical_metrics", "forward_test", "session")), f"unexpected run payload keys: {list(run_json)[:10]}"
+        assert any(k in run_json for k in ("historical", "historical_metrics", "forward_test", "session")), (
+            f"unexpected run payload keys: {list(run_json)[:10]}"
+        )
         page.wait_for_timeout(500)
         results.append(("strategy_form_submits", "PASS", save(page, "02_after_run.png")))
 
@@ -54,7 +58,9 @@ def run():
 
         # 4. Verify /api/quant/oos from the browser context
         oos_page = context.new_page()
-        with oos_page.expect_response(lambda r: r.url.endswith("/api/quant/oos") and r.method.upper() == "POST") as oos_resp:
+        with oos_page.expect_response(
+            lambda r: r.url.endswith("/api/quant/oos") and r.method.upper() == "POST"
+        ) as oos_resp:
             oos_page.evaluate("""async () => {
               await fetch('/api/quant/oos', {
                 method: 'POST',
@@ -72,7 +78,14 @@ def run():
               });
             }""")
         oos_status = oos_resp.value.status
-        results.append(("quant_oos_callable", "PASS" if oos_status == 200 else "INFO", f"status={oos_status}", save(oos_page, "04_quant_oos_check.png")))
+        results.append(
+            (
+                "quant_oos_callable",
+                "PASS" if oos_status == 200 else "INFO",
+                f"status={oos_status}",
+                save(oos_page, "04_quant_oos_check.png"),
+            )
+        )
 
         browser.close()
 

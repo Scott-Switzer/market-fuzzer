@@ -69,16 +69,16 @@ class TestRegimes:
         assert "regime" in analysis
         assert "high_vol_periods_pct" in analysis
         assert analysis["regime"] in (
-          "low-vol / likely trend or range",
-          "normal-vol / mixed",
-          "elevated-vol / stress risk",
-          "crisis-vol / tail risk",
-      )
+            "low-vol / likely trend or range",
+            "normal-vol / mixed",
+            "elevated-vol / stress risk",
+            "crisis-vol / tail risk",
+        )
 
     def test_forward_test_returns_all_regimes(self) -> None:
         prices = np.array(_demo_prices(100))
         results = run_forward_test(prices, "sma_crossover", {"fast": 10, "slow": 30}, worlds_per_regime=5)
-        assert len(results) == 4
+        assert len(results) == 7
         for r in results:
             assert "regime" in r
             assert "loss_rate_pct" in r
@@ -103,7 +103,7 @@ class TestService:
         assert "failure_summary" in result
         assert "correction_suggestion" in result
         assert result["strategy"]["type"] == "sma_crossover"
-        assert result["forward_test"]["total_worlds"] == 40
+        assert result["forward_test"]["total_worlds"] == 70
 
     def test_run_break_test_with_fix_and_retest(self) -> None:
         prices = _demo_prices(120)

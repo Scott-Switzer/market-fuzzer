@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import sys
 import os
+import sys
 
 # Ensure we use project env packages, not the injected Hermes PYTHONPATH.
 os.environ.pop("PYTHONPATH", None)
@@ -9,6 +9,7 @@ os.environ.pop("PYTHONPATH", None)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "app"))
 
 from fastapi.testclient import TestClient
+
 from app.api.app import app
 
 

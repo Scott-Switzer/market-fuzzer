@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Sequence
 
 import numpy as np
 
 from app.break_test.strategies import compute_positions
 from app.exchange import (
     EventKernelV2,
-    ImmutableEventLedgerV2,
     OrderCommandV2,
     OrderTypeV2,
     RunManifestV2,
@@ -85,7 +84,9 @@ class DeterministicUserStrategyBridge:
     def _stable_hash(self, value: object) -> str:
         return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
 
-    def _make_manifest(self, world_id: str, seed: int, strategy_type: str, params: dict[str, int]) -> RunManifestV2:
+    def _make_manifest(
+        self, world_id: str, seed: int, strategy_type: str, params: dict[str, int]
+    ) -> RunManifestV2:
         spec_digest = self._stable_hash({"world_id": world_id, "seed": seed, "lot_size": self.lot_size})
         strategy_digest = self._stable_hash({"type": strategy_type, "params": params})
         return RunManifestV2(
@@ -93,11 +94,15 @@ class DeterministicUserStrategyBridge:
             strategy_artifact_digest=strategy_digest,
             generator_bundle_digest=self._stable_hash({"generator": "exchange_fwd_bridge"}),
             campaign_commitment=self._stable_hash({"seed": seed, "world_id": world_id}),
-            seed_material_digest=self._stable_hash({"seed": seed, "strategy": strategy_type, "params": params}),
+            seed_material_digest=self._stable_hash(
+                {"seed": seed, "strategy": strategy_type, "params": params}
+            ),
             protocol_version="event-kernel-v2",
         )
 
-    def _make_kernel(self, world_id: str, seed: int, strategy_type: str, params: dict[str, int]) -> tuple[EventKernelV2, RunManifestV2]:
+    def _make_kernel(
+        self, world_id: str, seed: int, strategy_type: str, params: dict[str, int]
+    ) -> tuple[EventKernelV2, RunManifestV2]:
         manifest = self._make_manifest(world_id, seed, strategy_type, params)
         return EventKernelV2(manifest), manifest
 
@@ -272,9 +277,15 @@ class DeterministicUserStrategyBridge:
 
         def cancel(self, request: CancelRequest, symbol: str) -> None:
             order = self.books[symbol].cancel(request.order_id, request.agent_id)
-            effective_step = request.effective_step if request.effective_step is not None else request.submitted_step
-            request_time = request.request_time_ms if request.request_time_ms is not None else request.submitted_step
-            effective_time = request.effective_time_ms if request.effective_time_ms is not None else effective_step
+            effective_step = (
+                request.effective_step if request.effective_step is not None else request.submitted_step
+            )
+            request_time = (
+                request.request_time_ms if request.request_time_ms is not None else request.submitted_step
+            )
+            effective_time = (
+                request.effective_time_ms if request.effective_time_ms is not None else effective_step
+            )
             if effective_step < request.submitted_step or effective_time < request_time:
                 raise ValueError("cancel effective time cannot precede its request")
             self.cancel_log.append(
@@ -291,7 +302,15 @@ class DeterministicUserStrategyBridge:
                 }
             )
 
-        def cancel_pending(self, order: Order, *, request_step: int, request_time_ms: int, effective_step: int, effective_time_ms: int) -> None:
+        def cancel_pending(
+            self,
+            order: Order,
+            *,
+            request_step: int,
+            request_time_ms: int,
+            effective_step: int,
+            effective_time_ms: int,
+        ) -> None:
             if effective_time_ms < request_time_ms:
                 raise ValueError("cancel effective time cannot precede its request")
             log_index = self._pending_log_indexes.pop(order.order_id)
@@ -325,7 +344,9 @@ class DeterministicUserStrategyBridge:
                 for order_id in {trade.maker_order_id, trade.taker_order_id}:
                     fills[order_id] = fills.get(order_id, 0) + int(trade.quantity)
             cancellations = {row["order_id"]: row for row in self.cancel_log}
-            live_orders = {order_id: order for book in self.books.values() for order_id, order in book.orders.items()}
+            live_orders = {
+                order_id: order for book in self.books.values() for order_id, order in book.orders.items()
+            }
             for row in self.order_log:
                 order_id = row["order_id"]
                 quantity = int(row["quantity"])
@@ -372,7 +393,7 @@ class DeterministicUserStrategyBridge:
 
     def _seed_book_with_market_makers(self, exchange: _Exchange, initial_mid: int) -> None:
         exchange.register(Account(self.MM_ACCOUNT_ID, self.MM_CAPITAL_CENTS, {self.symbol: 0}))
-        book = exchange.books[self.symbol]
+        exchange.books[self.symbol]
         for level in range(1, self.MM_LEVELS + 1):
             bid_price = max(1, initial_mid - level * 3)
             ask_price = initial_mid + level * 3
@@ -422,11 +443,13 @@ class DeterministicUserStrategyBridge:
     ) -> UserStrategyResult:
         kernel, manifest = self._make_kernel(world_id, seed, strategy_type, params)
         local_accounts: dict[str, Account] = {
-            self.USER_ACCOUNT_ID: Account(self.USER_ACCOUNT_ID, self.USER_INITIAL_CASH_CENTS, {self.symbol: self.USER_INITIAL_INVENTORY}),
+            self.USER_ACCOUNT_ID: Account(
+                self.USER_ACCOUNT_ID, self.USER_INITIAL_CASH_CENTS, {self.symbol: self.USER_INITIAL_INVENTORY}
+            ),
             self.MM_ACCOUNT_ID: Account(self.MM_ACCOUNT_ID, self.MM_CAPITAL_CENTS, {self.symbol: 0}),
         }
         exchange = self._Exchange(self.symbol, self.lot_size, local_accounts)
-        user_account = local_accounts[self.USER_ACCOUNT_ID]
+        local_accounts[self.USER_ACCOUNT_ID]
         self._seed_book_with_market_makers(exchange, initial_mid=int(round(float(prices[0]))))
         current_inventory = 0
         current_cash = self.USER_INITIAL_CASH_CENTS
@@ -436,7 +459,7 @@ class DeterministicUserStrategyBridge:
         cash_history: list[int] = [current_cash]
         mid_history: list[float] = [float(self._snapshot_mid(exchange))]
         order_sequence: list[str] = []
-        for step, price in enumerate(prices):
+        for step, _price in enumerate(prices):
             mid = self._snapshot_mid(exchange)
             prices_seq = [float(p) for p in prices[: step + 1]]
             orders = self._translate_strategy_to_orders(
@@ -454,7 +477,9 @@ class DeterministicUserStrategyBridge:
                         account_id=order.agent_id,
                         instrument_id=order.symbol,
                         side=SideV2.BUY if order.side == Side.BUY else SideV2.SELL,
-                        order_type=OrderTypeV2.MARKET if order.order_type == OrderType.MARKET else OrderTypeV2.LIMIT,
+                        order_type=OrderTypeV2.MARKET
+                        if order.order_type == OrderType.MARKET
+                        else OrderTypeV2.LIMIT,
                         quantity=order.quantity,
                         exchange_time_ns=step * 1_000_000_000,
                         venue_sequence=step,
@@ -480,8 +505,12 @@ class DeterministicUserStrategyBridge:
                             seller_id=trade.seller_id,
                             maker_order_id=trade.maker_order_id,
                             taker_order_id=trade.taker_order_id,
-                            maker_fee_cents=sell_fee_cents if trade.maker_id == trade.seller_id else buy_fee_cents,
-                            taker_fee_cents=buy_fee_cents if trade.taker_id == trade.buyer_id else sell_fee_cents,
+                            maker_fee_cents=sell_fee_cents
+                            if trade.maker_id == trade.seller_id
+                            else buy_fee_cents,
+                            taker_fee_cents=buy_fee_cents
+                            if trade.taker_id == trade.buyer_id
+                            else sell_fee_cents,
                         )
                     )
                 filled = sum(t.quantity for t in trades)
@@ -529,7 +558,9 @@ class DeterministicUserStrategyBridge:
         current_inventory: int,
         exchange: _Exchange,
     ) -> list[Order]:
-        if prices.size <= max(2, params.get("slow", 50), params.get("entry_lookback", 20), params.get("period", 14)):
+        if prices.size <= max(
+            2, params.get("slow", 50), params.get("entry_lookback", 20), params.get("period", 14)
+        ):
             return []
         try:
             positions = compute_positions(strategy_type, prices, **params)
@@ -559,9 +590,6 @@ class DeterministicUserStrategyBridge:
 
 
 __all__ = [
-    "DeterministicUserStrategyOrderRouter",
     "DeterministicUserStrategyBridge",
     "BridgeTrade",
-    "BridgeOrderLog",
-    "UserStrategyResult",
 ]

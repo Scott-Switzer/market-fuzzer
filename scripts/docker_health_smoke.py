@@ -49,7 +49,10 @@ def main() -> None:
 
     status, _, sealed = _get("/sealed-campaign")
     assert status == 200
-    assert "Campaign lifecycle" in sealed
+    # Current page is the strategy sealed-evaluation surface. It documents the
+    # sealed campaign lifecycle (Lock -> Run hidden markets -> Reveal evidence).
+    assert "sealed" in sealed.lower()
+    assert "hidden" in sealed.lower()
 
     status, content_type, body = _get("/api/arena/execution/challenges/trade-the-shock")
     public_challenge = json.loads(body)

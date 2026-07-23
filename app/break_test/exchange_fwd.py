@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -15,8 +16,8 @@ from app.break_test.synthetic_market import (
 )
 from app.schemas import (
     AgentPopulation,
-    AssetSpec,
     AgentsSpec,
+    AssetSpec,
     ClockSpec,
     ExchangeSpec,
     ExperimentSpec,
@@ -29,6 +30,7 @@ from app.schemas import (
 try:
     from app.simulation import run_simulation
 except ImportError:  # pragma: no cover
+
     def run_simulation(*args, **kwargs):
         raise RuntimeError("app.simulation is unavailable from exchange_fwd.py")
 
@@ -110,67 +112,213 @@ DEFAULT_ASSETS: tuple[AssetFactorConfig, ...] = (
     ),
 )
 
-EIGHT_ASSET_UNIVERSE = tuple(list(DEFAULT_ASSETS) + [
-    AssetFactorConfig(ticker="XLK", company_name="Technology Select Sector", sector="Technology",
-                      initial_price_ticks=18_000, shares_outstanding=80_000_000,
-                      initial_fundamental_value_ticks=18_000, macro_beta=0.78, idiosyncratic_volatility=0.0018,
-                      liquidity_profile="deep", event_sensitivity=1.05, mean_reversion=0.018, price_cache_factor_loading=0.76),
-    AssetFactorConfig(ticker="XLF", company_name="Financial Select Sector", sector="Financials",
-                      initial_price_ticks=16_500, shares_outstanding=70_000_000,
-                      initial_fundamental_value_ticks=16_500, macro_beta=0.68, idiosyncratic_volatility=0.0016,
-                      liquidity_profile="deep", event_sensitivity=0.98, mean_reversion=0.021, price_cache_factor_loading=0.70),
-    AssetFactorConfig(ticker="XLE", company_name="Energy Select Sector", sector="Energy",
-                      initial_price_ticks=15_200, shares_outstanding=40_000_000,
-                      initial_fundamental_value_ticks=15_200, macro_beta=0.58, idiosyncratic_volatility=0.0022,
-                      liquidity_profile="normal", event_sensitivity=1.15, mean_reversion=0.025, price_cache_factor_loading=0.62),
-    AssetFactorConfig(ticker="RATES", company_name="Rates Proxy", sector="Macro/Rates",
-                      initial_price_ticks=12_000, shares_outstanding=100_000_000,
-                      initial_fundamental_value_ticks=12_000, macro_beta=0.22, idiosyncratic_volatility=0.0012,
-                      liquidity_profile="deep", event_sensitivity=0.85, mean_reversion=0.03, price_cache_factor_loading=0.35),
-    AssetFactorConfig(ticker="FX", company_name="FX Proxy", sector="Macro/FX",
-                      initial_price_ticks=11_500, shares_outstanding=90_000_000,
-                      initial_fundamental_value_ticks=11_500, macro_beta=0.18, idiosyncratic_volatility=0.0013,
-                      liquidity_profile="normal", event_sensitivity=0.80, mean_reversion=0.032, price_cache_factor_loading=0.32),
-])
+EIGHT_ASSET_UNIVERSE = tuple(
+    list(DEFAULT_ASSETS)
+    + [
+        AssetFactorConfig(
+            ticker="XLK",
+            company_name="Technology Select Sector",
+            sector="Technology",
+            initial_price_ticks=18_000,
+            shares_outstanding=80_000_000,
+            initial_fundamental_value_ticks=18_000,
+            macro_beta=0.78,
+            idiosyncratic_volatility=0.0018,
+            liquidity_profile="deep",
+            event_sensitivity=1.05,
+            mean_reversion=0.018,
+            price_cache_factor_loading=0.76,
+        ),
+        AssetFactorConfig(
+            ticker="XLF",
+            company_name="Financial Select Sector",
+            sector="Financials",
+            initial_price_ticks=16_500,
+            shares_outstanding=70_000_000,
+            initial_fundamental_value_ticks=16_500,
+            macro_beta=0.68,
+            idiosyncratic_volatility=0.0016,
+            liquidity_profile="deep",
+            event_sensitivity=0.98,
+            mean_reversion=0.021,
+            price_cache_factor_loading=0.70,
+        ),
+        AssetFactorConfig(
+            ticker="XLE",
+            company_name="Energy Select Sector",
+            sector="Energy",
+            initial_price_ticks=15_200,
+            shares_outstanding=40_000_000,
+            initial_fundamental_value_ticks=15_200,
+            macro_beta=0.58,
+            idiosyncratic_volatility=0.0022,
+            liquidity_profile="normal",
+            event_sensitivity=1.15,
+            mean_reversion=0.025,
+            price_cache_factor_loading=0.62,
+        ),
+        AssetFactorConfig(
+            ticker="RATES",
+            company_name="Rates Proxy",
+            sector="Macro/Rates",
+            initial_price_ticks=12_000,
+            shares_outstanding=100_000_000,
+            initial_fundamental_value_ticks=12_000,
+            macro_beta=0.22,
+            idiosyncratic_volatility=0.0012,
+            liquidity_profile="deep",
+            event_sensitivity=0.85,
+            mean_reversion=0.03,
+            price_cache_factor_loading=0.35,
+        ),
+        AssetFactorConfig(
+            ticker="FX",
+            company_name="FX Proxy",
+            sector="Macro/FX",
+            initial_price_ticks=11_500,
+            shares_outstanding=90_000_000,
+            initial_fundamental_value_ticks=11_500,
+            macro_beta=0.18,
+            idiosyncratic_volatility=0.0013,
+            liquidity_profile="normal",
+            event_sensitivity=0.80,
+            mean_reversion=0.032,
+            price_cache_factor_loading=0.32,
+        ),
+    ]
+)
 
-TWELVE_ASSET_UNIVERSE = tuple(list(DEFAULT_ASSETS) + [
-    AssetFactorConfig(ticker="XLK", company_name="Technology Select Sector", sector="Technology",
-                      initial_price_ticks=18_000, shares_outstanding=80_000_000,
-                      initial_fundamental_value_ticks=18_000, macro_beta=0.78, idiosyncratic_volatility=0.0018,
-                      liquidity_profile="deep", event_sensitivity=1.05, mean_reversion=0.018, price_cache_factor_loading=0.76),
-    AssetFactorConfig(ticker="XLF", company_name="Financial Select Sector", sector="Financials",
-                      initial_price_ticks=16_500, shares_outstanding=70_000_000,
-                      initial_fundamental_value_ticks=16_500, macro_beta=0.68, idiosyncratic_volatility=0.0016,
-                      liquidity_profile="deep", event_sensitivity=0.98, mean_reversion=0.021, price_cache_factor_loading=0.70),
-    AssetFactorConfig(ticker="XLE", company_name="Energy Select Sector", sector="Energy",
-                      initial_price_ticks=15_200, shares_outstanding=40_000_000,
-                      initial_fundamental_value_ticks=15_200, macro_beta=0.58, idiosyncratic_volatility=0.0022,
-                      liquidity_profile="normal", event_sensitivity=1.15, mean_reversion=0.025, price_cache_factor_loading=0.62),
-    AssetFactorConfig(ticker="RATES", company_name="Rates Proxy", sector="Macro/Rates",
-                      initial_price_ticks=12_000, shares_outstanding=100_000_000,
-                      initial_fundamental_value_ticks=12_000, macro_beta=0.22, idiosyncratic_volatility=0.0012,
-                      liquidity_profile="deep", event_sensitivity=0.85, mean_reversion=0.03, price_cache_factor_loading=0.35),
-    AssetFactorConfig(ticker="FX", company_name="FX Proxy", sector="Macro/FX",
-                      initial_price_ticks=11_500, shares_outstanding=90_000_000,
-                      initial_fundamental_value_ticks=11_500, macro_beta=0.18, idiosyncratic_volatility=0.0013,
-                      liquidity_profile="normal", event_sensitivity=0.80, mean_reversion=0.032, price_cache_factor_loading=0.32),
-    AssetFactorConfig(ticker="XLV", company_name="Health Care Select Sector", sector="Health Care",
-                      initial_price_ticks=17_000, shares_outstanding=55_000_000,
-                      initial_fundamental_value_ticks=17_000, macro_beta=0.65, idiosyncratic_volatility=0.0017,
-                      liquidity_profile="deep", event_sensitivity=1.00, mean_reversion=0.019, price_cache_factor_loading=0.68),
-    AssetFactorConfig(ticker="XLI", company_name="Industrial Select Sector", sector="Industrials",
-                      initial_price_ticks=14_800, shares_outstanding=45_000_000,
-                      initial_fundamental_value_ticks=14_800, macro_beta=0.72, idiosyncratic_volatility=0.0020,
-                      liquidity_profile="normal", event_sensitivity=1.08, mean_reversion=0.023, price_cache_factor_loading=0.66),
-    AssetFactorConfig(ticker="S12", company_name="Mid-Cap Growth Proxy", sector="Synthetic",
-                      initial_price_ticks=12_500, shares_outstanding=30_000_000,
-                      initial_fundamental_value_ticks=12_500, macro_beta=0.52, idiosyncratic_volatility=0.0024,
-                      liquidity_profile="normal", event_sensitivity=1.10, mean_reversion=0.028, price_cache_factor_loading=0.55),
-    AssetFactorConfig(ticker="S13", company_name="Small-Cap Value Proxy", sector="Synthetic",
-                      initial_price_ticks=10_000, shares_outstanding=20_000_000,
-                      initial_fundamental_value_ticks=10_000, macro_beta=0.42, idiosyncratic_volatility=0.0028,
-                      liquidity_profile="thin", event_sensitivity=1.18, mean_reversion=0.031, price_cache_factor_loading=0.45),
-])
+TWELVE_ASSET_UNIVERSE = tuple(
+    list(DEFAULT_ASSETS)
+    + [
+        AssetFactorConfig(
+            ticker="XLK",
+            company_name="Technology Select Sector",
+            sector="Technology",
+            initial_price_ticks=18_000,
+            shares_outstanding=80_000_000,
+            initial_fundamental_value_ticks=18_000,
+            macro_beta=0.78,
+            idiosyncratic_volatility=0.0018,
+            liquidity_profile="deep",
+            event_sensitivity=1.05,
+            mean_reversion=0.018,
+            price_cache_factor_loading=0.76,
+        ),
+        AssetFactorConfig(
+            ticker="XLF",
+            company_name="Financial Select Sector",
+            sector="Financials",
+            initial_price_ticks=16_500,
+            shares_outstanding=70_000_000,
+            initial_fundamental_value_ticks=16_500,
+            macro_beta=0.68,
+            idiosyncratic_volatility=0.0016,
+            liquidity_profile="deep",
+            event_sensitivity=0.98,
+            mean_reversion=0.021,
+            price_cache_factor_loading=0.70,
+        ),
+        AssetFactorConfig(
+            ticker="XLE",
+            company_name="Energy Select Sector",
+            sector="Energy",
+            initial_price_ticks=15_200,
+            shares_outstanding=40_000_000,
+            initial_fundamental_value_ticks=15_200,
+            macro_beta=0.58,
+            idiosyncratic_volatility=0.0022,
+            liquidity_profile="normal",
+            event_sensitivity=1.15,
+            mean_reversion=0.025,
+            price_cache_factor_loading=0.62,
+        ),
+        AssetFactorConfig(
+            ticker="RATES",
+            company_name="Rates Proxy",
+            sector="Macro/Rates",
+            initial_price_ticks=12_000,
+            shares_outstanding=100_000_000,
+            initial_fundamental_value_ticks=12_000,
+            macro_beta=0.22,
+            idiosyncratic_volatility=0.0012,
+            liquidity_profile="deep",
+            event_sensitivity=0.85,
+            mean_reversion=0.03,
+            price_cache_factor_loading=0.35,
+        ),
+        AssetFactorConfig(
+            ticker="FX",
+            company_name="FX Proxy",
+            sector="Macro/FX",
+            initial_price_ticks=11_500,
+            shares_outstanding=90_000_000,
+            initial_fundamental_value_ticks=11_500,
+            macro_beta=0.18,
+            idiosyncratic_volatility=0.0013,
+            liquidity_profile="normal",
+            event_sensitivity=0.80,
+            mean_reversion=0.032,
+            price_cache_factor_loading=0.32,
+        ),
+        AssetFactorConfig(
+            ticker="XLV",
+            company_name="Health Care Select Sector",
+            sector="Health Care",
+            initial_price_ticks=17_000,
+            shares_outstanding=55_000_000,
+            initial_fundamental_value_ticks=17_000,
+            macro_beta=0.65,
+            idiosyncratic_volatility=0.0017,
+            liquidity_profile="deep",
+            event_sensitivity=1.00,
+            mean_reversion=0.019,
+            price_cache_factor_loading=0.68,
+        ),
+        AssetFactorConfig(
+            ticker="XLI",
+            company_name="Industrial Select Sector",
+            sector="Industrials",
+            initial_price_ticks=14_800,
+            shares_outstanding=45_000_000,
+            initial_fundamental_value_ticks=14_800,
+            macro_beta=0.72,
+            idiosyncratic_volatility=0.0020,
+            liquidity_profile="normal",
+            event_sensitivity=1.08,
+            mean_reversion=0.023,
+            price_cache_factor_loading=0.66,
+        ),
+        AssetFactorConfig(
+            ticker="S12",
+            company_name="Mid-Cap Growth Proxy",
+            sector="Synthetic",
+            initial_price_ticks=12_500,
+            shares_outstanding=30_000_000,
+            initial_fundamental_value_ticks=12_500,
+            macro_beta=0.52,
+            idiosyncratic_volatility=0.0024,
+            liquidity_profile="normal",
+            event_sensitivity=1.10,
+            mean_reversion=0.028,
+            price_cache_factor_loading=0.55,
+        ),
+        AssetFactorConfig(
+            ticker="S13",
+            company_name="Small-Cap Value Proxy",
+            sector="Synthetic",
+            initial_price_ticks=10_000,
+            shares_outstanding=20_000_000,
+            initial_fundamental_value_ticks=10_000,
+            macro_beta=0.42,
+            idiosyncratic_volatility=0.0028,
+            liquidity_profile="thin",
+            event_sensitivity=1.18,
+            mean_reversion=0.031,
+            price_cache_factor_loading=0.45,
+        ),
+    ]
+)
 
 EXPANDED_UNIVERSE_PRESETS: dict[str, tuple[AssetFactorConfig, ...]] = {
     "eight_assets": EIGHT_ASSET_UNIVERSE,
@@ -182,9 +330,9 @@ EXPANDED_UNIVERSE_PRESETS: dict[str, tuple[AssetFactorConfig, ...]] = {
 def _resolve_asset_universe(
     asset_count: int = 3,
     universe_preset: str | None = None,
-    universe_csv: "str | Path | None" = None,
+    universe_csv: str | Path | None = None,
     strategy_asset: str = "SYNTH",
-) -> "tuple[tuple[AssetFactorConfig, ...], str]":
+) -> tuple[tuple[AssetFactorConfig, ...], str]:
     if asset_count < 1:
         raise ValueError("asset_count must be >= 1")
     if universe_csv:
@@ -192,10 +340,12 @@ def _resolve_asset_universe(
         if not source.exists():
             raise FileNotFoundError(f"Universe CSV not found: {universe_csv}")
         asset_lines = source.read_text(encoding="utf-8").splitlines()
-        asset_lines = [line.strip() for line in asset_lines if line.strip() and not line.strip().startswith("#")]
+        asset_lines = [
+            line.strip() for line in asset_lines if line.strip() and not line.strip().startswith("#")
+        ]
         if not asset_lines:
             raise ValueError(f"No asset definitions found in {universe_csv}")
-        asset_specs = [_parse_universe_csv_row(line) for line in asset_lines[1:asset_count + 1]]
+        asset_specs = [_parse_universe_csv_row(line) for line in asset_lines[1 : asset_count + 1]]
         if not any(asset.ticker == strategy_asset for asset in asset_specs):
             asset_specs[0] = AssetFactorConfig(
                 ticker=strategy_asset,
@@ -297,7 +447,17 @@ def _parse_universe_csv_row(line: str) -> AssetFactorConfig:
     fields = [field.strip() for field in line.replace("\t", ",").split(",") if field.strip()]
     if len(fields) < 9:
         raise ValueError(f"Universe CSV row requires at least 9 fields; got {fields!r}")
-    ticker, company_name, sector, price_tick_str, shares_str, fv_str, beta_str, idios_vol_str, liquidity_profile = fields[:9]
+    (
+        ticker,
+        company_name,
+        sector,
+        price_tick_str,
+        shares_str,
+        fv_str,
+        beta_str,
+        idios_vol_str,
+        liquidity_profile,
+    ) = fields[:9]
     return AssetFactorConfig(
         ticker=ticker.upper(),
         company_name=company_name,
@@ -319,10 +479,10 @@ def build_world(
     seed: int,
     target_asset: str = "SYNTH",
     asset_count: int = 3,
-    universe_preset: "str | None" = None,
-    universe_csv: "str | Path | None" = None,
-    price_cache: "dict[str, Sequence[float]] | None" = None,
-    prices_cache: "dict[str, Sequence[float]] | None" = None,
+    universe_preset: str | None = None,
+    universe_csv: str | Path | None = None,
+    price_cache: dict[str, Sequence[float]] | None = None,
+    prices_cache: dict[str, Sequence[float]] | None = None,
     use_price_cache: bool = False,
     one_factor_gbm_config: OneFactorGBMConfig | None = None,
     calibration_pack: Any = None,
@@ -390,7 +550,9 @@ def build_world(
         interventions=InterventionSpec(forced_seller_quantity=0),
         calibration_pack_id=getattr(calibration_pack, "pack_id", None),
         calibration_parameter_set_id=(
-            f"local-{getattr(calibration_pack, 'pack_id', 'none')[:12]}" if calibration_pack is not None else None
+            f"local-{getattr(calibration_pack, 'pack_id', 'none')[:12]}"
+            if calibration_pack is not None
+            else None
         ),
     )
     return world
@@ -534,8 +696,8 @@ def _build_correlated_synthetic_paths(
     regime_key: str,
     seed: int,
     length: int,
-    price_cache: "dict[str, Sequence[float]] | None",
-    prices_cache: "dict[str, Sequence[float]] | None",
+    price_cache: dict[str, Sequence[float]] | None,
+    prices_cache: dict[str, Sequence[float]] | None,
     use_price_cache: bool,
 ) -> dict[str, dict[str, object]]:
     generator = ResearchSyntheticMarketGenerator()
@@ -545,7 +707,11 @@ def _build_correlated_synthetic_paths(
     regime_keys_tuple = (regime_key,) * len(assets)
     target_assets = [asset.ticker for asset in assets]
     correlations = [
-        float(asset.price_cache_factor_loading if asset.price_cache_factor_loading is not None else max(0.05, 0.9 - 0.03 * index))
+        float(
+            asset.price_cache_factor_loading
+            if asset.price_cache_factor_loading is not None
+            else max(0.05, 0.9 - 0.03 * index)
+        )
         for index, asset in enumerate(assets)
     ]
     return generator.generate_correlated_paths(
@@ -565,8 +731,8 @@ def _build_one_factor_paths_for_assets(
     regime_key: str,
     seed: int,
     length: int,
-    price_cache: "dict[str, Sequence[float]] | None",
-    prices_cache: "dict[str, Sequence[float]] | None",
+    price_cache: dict[str, Sequence[float]] | None,
+    prices_cache: dict[str, Sequence[float]] | None,
     use_price_cache: bool,
     gbm_config: OneFactorGBMConfig | None,
 ) -> dict[str, dict[str, object]]:
@@ -607,7 +773,7 @@ class UserStrategyOrderRouter:
         lot_size: int = 1,
         base_quantity: int = 100,
         order_type: str = "limit",
-        order_ttl_steps: "int | None" = None,
+        order_ttl_steps: int | None = None,
     ) -> None:
         if side not in {"buy", "sell"}:
             raise ValueError("side must be buy/sell")
@@ -636,7 +802,6 @@ class UserStrategyOrderRouter:
         if len(history) < 3:
             return {"action_type": "hold"}
 
-        inventory = int(observation.get("inventory") or 0)
         remaining = int(observation.get("remaining_quantity") or 0)
         if remaining <= 0:
             return {"action_type": "hold"}
@@ -684,7 +849,9 @@ class UserStrategyOrderRouter:
             if symbol == self.target_symbol:
                 history = list(observation.get("recent_prices") or [])
                 session_history = observation_history.setdefault(symbol, list(history))
-                session_history.extend(x for x in history[len(session_history):] if isinstance(x, (int, float)))
+                session_history.extend(
+                    x for x in history[len(session_history) :] if isinstance(x, (int, float))
+                )
                 if "mid_ticks" in observation and observation["mid_ticks"]:
                     mid = float(observation["mid_ticks"])
                     if not observation_history[symbol] or observation_history[symbol][-1] != mid:
@@ -703,7 +870,9 @@ class UserStrategyOrderRouter:
                 "action_type": submit_action_type,
                 "side": side_value,
                 "quantity": action["quantity"],
-                "limit_price_ticks": action.get("limit_price_ticks") if submit_action_type == "limit" else None,
+                "limit_price_ticks": action.get("limit_price_ticks")
+                if submit_action_type == "limit"
+                else None,
                 "rationale_code": "forward_execution_router",
             }
 
@@ -712,11 +881,7 @@ class UserStrategyOrderRouter:
 
 def _strategy_agent_id(sim: Any) -> str:
     return next(
-        (
-            row["agent_id"]
-            for row in getattr(sim, "agent_states", [])
-            if row.get("agent_type") == "execution"
-        ),
+        (row["agent_id"] for row in getattr(sim, "agent_states", []) if row.get("agent_type") == "execution"),
         "execution-01",
     )
 
@@ -749,7 +914,9 @@ def _simulate_forward_world(job: dict[str, Any]) -> dict[str, Any] | None:
     if job.get("forward_execution_mode") == "real":
         router = UserStrategyOrderRouter(
             target_symbol=job["resolved_target"],
-            side=str(getattr(world.experiment.parent_order.side, "value", world.experiment.parent_order.side)),
+            side=str(
+                getattr(world.experiment.parent_order.side, "value", world.experiment.parent_order.side)
+            ),
             strategy_type=job["strategy_type"],
             params=job["params"],
             lot_size=int(getattr(world.exchange, "lot_size", 1) or 1),
@@ -823,10 +990,10 @@ def run_exchange_forward_test(
     params: dict[str, int],
     worlds_per_regime: int = 10,
     asset_count: int = 3,
-    universe_preset: "str | None" = None,
-    universe_csv: "str | Path | None" = None,
+    universe_preset: str | None = None,
+    universe_csv: str | Path | None = None,
     forward_execution_mode: str = "real",
-    order_ttl_steps: "int | None" = None,
+    order_ttl_steps: int | None = None,
     exchange_engine: str = DEFAULT_EXCHANGE_ENGINE,
     collect_timeline: bool = True,
     collect_agent_states: bool = True,
@@ -914,42 +1081,52 @@ def run_exchange_forward_test(
         losses = sum(1 for value in regime_returns if value < 0)
         fill_sets = [(int(row["fill_qty"]), int(row["fill_count"])) for row in world_rows]
         inventory_sets = [int(row["inventory"]) for row in world_rows]
-        results.append({
-            "regime": label_map.get(regime_key, regime_key),
-            "worlds": len(regime_returns),
-            "loss_rate_pct": round(float(losses) / len(regime_returns) * 100, 1),
-            "median_return_pct": round(float(np.median(regime_returns)), 2),
-            "mean_return_pct": round(float(np.mean(regime_returns)), 2),
-            "worst_drawdown_pct": round(float(np.min(regime_drawdowns)), 2),
-            "best_return_pct": round(float(np.max(regime_returns)), 2),
-            "fill_worlds": sum(1 for fills, count in fill_sets if count > 0),
-            "total_fills": sum(count for _, count in fill_sets),
-            "total_quantity": sum(qty for qty, _ in fill_sets),
-            "inventory_changed_worlds": sum(
-                1 for idx, inventory in enumerate(inventory_sets) if fill_sets[idx][0] > 0 and inventory != 0
-            ),
-            "order_execution_mode": forward_execution_mode,
-            "exchange_engine": exchange_engine,
-            "workers": worker_count,
-            "slippage_vs_vwap": round(float(np.nanmean([row.get("slippage_vs_vwap") or 0.0 for row in world_rows])), 4),
-            "slippage_vs_arrival": round(
-                float(np.nanmean([row.get("slippage_vs_arrival") or 0.0 for row in world_rows])), 4
-            ),
-            "opportunity_cost": round(
-                float(np.nanmean([row.get("opportunity_cost") or 0.0 for row in world_rows])), 4
-            ),
-            "completion_rate_penalty_bps": round(
-                float(np.nanmean([row.get("completion_rate_penalty_bps") or 0.0 for row in world_rows])), 4
-            ),
-        })
+        results.append(
+            {
+                "regime": label_map.get(regime_key, regime_key),
+                "worlds": len(regime_returns),
+                "loss_rate_pct": round(float(losses) / len(regime_returns) * 100, 1),
+                "median_return_pct": round(float(np.median(regime_returns)), 2),
+                "mean_return_pct": round(float(np.mean(regime_returns)), 2),
+                "worst_drawdown_pct": round(float(np.min(regime_drawdowns)), 2),
+                "best_return_pct": round(float(np.max(regime_returns)), 2),
+                "fill_worlds": sum(1 for fills, count in fill_sets if count > 0),
+                "total_fills": sum(count for _, count in fill_sets),
+                "total_quantity": sum(qty for qty, _ in fill_sets),
+                "inventory_changed_worlds": sum(
+                    1
+                    for idx, inventory in enumerate(inventory_sets)
+                    if fill_sets[idx][0] > 0 and inventory != 0
+                ),
+                "order_execution_mode": forward_execution_mode,
+                "exchange_engine": exchange_engine,
+                "workers": worker_count,
+                "slippage_vs_vwap": round(
+                    float(np.nanmean([row.get("slippage_vs_vwap") or 0.0 for row in world_rows])), 4
+                ),
+                "slippage_vs_arrival": round(
+                    float(np.nanmean([row.get("slippage_vs_arrival") or 0.0 for row in world_rows])), 4
+                ),
+                "opportunity_cost": round(
+                    float(np.nanmean([row.get("opportunity_cost") or 0.0 for row in world_rows])), 4
+                ),
+                "completion_rate_penalty_bps": round(
+                    float(np.nanmean([row.get("completion_rate_penalty_bps") or 0.0 for row in world_rows])),
+                    4,
+                ),
+            }
+        )
     return results
 
 
-def _build_position_series_from_sim(sim: Any, strategy_id: str, target_symbol: str, target_length: int) -> np.ndarray:
+def _build_position_series_from_sim(
+    sim: Any, strategy_id: str, target_symbol: str, target_length: int
+) -> np.ndarray:
     series = np.zeros(target_length, dtype=float)
     executed = 0
     target_trades = [
-        trade for trade in sim.trades
+        trade
+        for trade in sim.trades
         if trade.get("symbol") == target_symbol
         and (trade.get("buyer_id") == strategy_id or trade.get("seller_id") == strategy_id)
     ]

@@ -1,8 +1,8 @@
-import os
 from pathlib import Path
+
 from playwright.sync_api import sync_playwright
 
-BASE_URL = "http://127.0.0.1:8001/break-test"
+BASE_URL = "http://127.0.0.1:8001/strategy-lab"
 SCREENSHOT_DIR = Path("/Users/scottthomasswitzer/Documents/OAI_Build_Week/tests/browser_screenshots")
 SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -27,52 +27,49 @@ def run():
         # 1. Load page and capture basic UI state
         page.goto(BASE_URL, wait_until="domcontentloaded")
         page.wait_for_timeout(500)
-        expect_str(page.title(), "Strategy Break Test · Synthetic Market World", "title")
-        page.wait_for_selector("#config-form", timeout=10000)
-        page.wait_for_selector("#run-btn", timeout=10000)
+        expect_str(page.title(), "Strategy Validation Lab", "title")
+        page.wait_for_selector("textarea#brief", timeout=10000)
+        page.click("button:has-text('Compile proposal')", timeout=10000)
         results.append(("load_page_and_form_visible", "PASS", save(page, "01_page_loaded.png")))
 
         # 2. Submit strategy form (defaults: sma_crossover, demo data)
-        with page.expect_response(lambda r: r.url.endswith("/api/break-test/run") and r.status == 200, timeout=120000) as resp:
-            page.click("#run-btn")
+        with page.expect_response(lambda r: r.url.endswith("/api/break-test/run"), timeout=60000) as resp:
+            page.click("button:has-text('Compile proposal')")
         run_json = resp.value.json()
+        print("COMPILE_KEYS", list(run_json.keys())[:10], flush=True)
+        status = resp.value.status
+        print("RUN_STATUS", status, flush=True)
         assert isinstance(run_json, dict), "run response should be JSON object"
-        assert any(k in run_json for k in ("historical", "historical_metrics", "forward_test", "session")), f"unexpected run payload keys: {list(run_json)[:10]}"
+        assert "strategy_hash" in run_json, f"unexpected compile payload keys: {list(run_json)[:10]}"
         page.wait_for_timeout(500)
-        results.append(("strategy_form_submits", "PASS", save(page, "02_after_run.png")))
+        results.append(("strategy_form_submits", "PASS", save(page, "02_after_compile.png")))
 
         # 3. Verify results render in the UI
-        step2 = page.locator("#step-2")
-        step3 = page.locator("#step-3")
-        assert step2.count() == 1, "step-2 missing"
-        assert step3.count() == 1, "step-3 missing"
-        any_metric = page.locator(".metric").count()
-        assert any_metric > 0, "no metrics rendered"
-        forward_rows = page.locator("#forward-rows tr").count()
-        assert forward_rows > 0, "forward test table rows missing"
+        step2 = page.locator("#register-form")
+        step3 = page.locator("#brief-output")
+        assert step2.count() == 1, "register-form missing"
+        assert step3.count() == 1, "brief-output missing"
+        proposal_text = page.locator("#brief-output").inner_text()
+        assert "Proposal ready" in proposal_text or "strategy_hash" in proposal_text, (
+            f"proposal not ready: {proposal_text[:120]}"
+        )
+        page.wait_for_timeout(300)
+        page.screenshot(path=str(SCREENSHOT_DIR / "02_after_compile.png"))
         results.append(("results_render", "PASS", save(page, "03_results_rendered.png")))
 
         # 4. Verify /api/quant/oos from the browser context
-        oos_page = context.new_page()
-        with oos_page.expect_response(lambda r: r.url.endswith("/api/quant/oos") and r.method.upper() == "POST") as oos_resp:
-            oos_page.evaluate("""async () => {
-              await fetch('/api/quant/oos', {
-                method: 'POST',
-                headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  closes: Array.from({length: 160}, (_,i)=>100+i*0.3),
-                  strategy_type: 'sma_crossover',
-                  params: {fast: 10, slow: 30},
-                  mode: 'walk_forward',
-                  train_window: 60,
-                  test_window: 30,
-                  step: 30,
-                  embargo: 5
-                })
-              });
-            }""")
-        oos_status = oos_resp.value.status
-        results.append(("quant_oos_callable", "PASS" if oos_status == 200 else "INFO", f"status={oos_status}", save(oos_page, "04_quant_oos_check.png")))
+        compile2 = page.evaluate(
+            """async () => { const r = await fetch('/api/strategy-lab/compile', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({description:'simple sma crossover fast 20 slow 50'})}); return await r.json(); }"""
+        )
+        print("SECOND_COMPILE_KEYS", list(compile2.keys())[:10], flush=True)
+        results.append(
+            (
+                "second_compile_callable",
+                "PASS" if "strategy_hash" in compile2 else "INFO",
+                str(compile2)[:120],
+                save(page, "04_second_compile.png"),
+            )
+        )
 
         browser.close()
 

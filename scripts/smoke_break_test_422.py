@@ -1,9 +1,14 @@
 from __future__ import annotations
-import os, sys
+
+import os
+import sys
+
 os.environ.pop("PYTHONPATH", None)
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'app'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 from fastapi.testclient import TestClient
+
 from app.api.app import app
+
 client = TestClient(app)
 body = {
     "closes": [100.0 + i * 0.1 for i in range(260)],

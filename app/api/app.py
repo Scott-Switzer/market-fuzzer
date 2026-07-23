@@ -14,8 +14,11 @@ from datetime import UTC, date, datetime, timedelta
 from functools import lru_cache
 from ipaddress import ip_address
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from app.break_test.costs import TransactionCostModel
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
@@ -38,6 +41,11 @@ from app.arena import (
     public_dataset,
     validate_submission_csv,
 )
+from app.break_test.oos_validation import (
+    combinatorial_purged_cross_validation,
+    walk_forward_validation,
+)
+from app.break_test.quant_validation import sensitivity_analysis
 from app.break_test.service import get_available_strategies, get_session, run_break_test
 from app.calibration import (
     CalibrationPackV1,
@@ -88,15 +96,6 @@ from app.product import (
     scenario_hash,
     stable_id,
 )
-from app.break_test.quant_validation import sensitivity_analysis, worst_case_attribution
-from app.break_test.oos_validation import (
-    adversarial_validation_summary,
-    beatable_guard,
-    combinatorial_purged_cross_validation,
-    nested_combinatorial_purged_cross_validation,
-    parameter_instability_score,
-    walk_forward_validation,
-)
 from app.robustness_product import evaluate_sma_robustness
 from app.scenario_studio import compile_scenario_pack
 from app.schemas import WorldSpec
@@ -143,7 +142,7 @@ _REQUEST_LOG = logging.getLogger("arena.requests")
 request_logger = _REQUEST_LOG
 
 
-def _build_tcost_model(payload: BreakTestRequest) -> "TransactionCostModel | None":
+def _build_tcost_model(payload: BreakTestRequest) -> TransactionCostModel | None:
     if all(value is None for value in [payload.spread_bps, payload.borrow_fee_bps, payload.impact_beta]):
         return None
     from app.break_test.costs import TransactionCostModel
@@ -159,7 +158,6 @@ def _build_tcost_model(payload: BreakTestRequest) -> "TransactionCostModel | Non
 
 def _resolve_closes(payload: BreakTestRequest) -> tuple:
     from app.break_test.data_loader import (
-        load_yfinance,
         load_yfinance_bulk,
         suggest_lookback,
         validate_prices_after_source,
@@ -204,7 +202,12 @@ def _build_cost_and_macro_payload(payload: BreakTestRequest) -> tuple:
         try:
             from app.break_test.data_loader import load_fred_series
 
-            default_start = __import__("datetime").date.today().replace(year=__import__("datetime").date.today().year - 5).isoformat()
+            default_start = (
+                __import__("datetime")
+                .date.today()
+                .replace(year=__import__("datetime").date.today().year - 5)
+                .isoformat()
+            )
             fred_payload = load_fred_series(
                 [s for s in payload.fred_series if s],
                 start=payload.yfinance_start or default_start,
@@ -225,7 +228,13 @@ def _fred_to_regime_hints(fred_payload: dict) -> dict:
         regime = "crisis-vol / tail risk"
     elif isinstance(vix, float) and vix >= 22.0:
         regime = "elevated-vol / stress risk"
-    elif isinstance(vix, float) and vix < 15.0 and isinstance(cpi, tuple) and len(cpi) == 2 and isinstance(cpi[1], float):
+    elif (
+        isinstance(vix, float)
+        and vix < 15.0
+        and isinstance(cpi, tuple)
+        and len(cpi) == 2
+        and isinstance(cpi[1], float)
+    ):
         regime = "low-vol / likely trend or range"
     return {
         "regime": regime,
@@ -471,6 +480,19 @@ def index() -> FileResponse:
     return FileResponse(ROOT / "static" / "break-test.html")
 
 
+app.include_router(
+    __import__("app.strategy_lab.service", fromlist=["router"]).router,
+    prefix="/api/strategy-lab",
+    tags=["strategy-lab"],
+)
+
+
+@app.get("/strategy-lab")
+def strategy_lab() -> FileResponse:
+    """Strategy Validation Lab entry point."""
+    return FileResponse(ROOT / "static" / "strategy-lab.html")
+
+
 @app.get("/legacy-start")
 def legacy_start() -> FileResponse:
     """Previous start page retained for reference."""
@@ -541,6 +563,7 @@ def readiness() -> dict[str, Any]:
 @app.get("/sealed-campaign")
 def sealed_campaign_ui() -> FileResponse:
     return FileResponse(ROOT / "static" / "sealed-campaign.html")
+
 
 @app.get("/start")
 def guided_start_ui() -> FileResponse:
@@ -634,6 +657,7 @@ class OOSValidationRequest(BaseModel):
     worlds_per_regime: int = Field(default=40, ge=10, le=200)
     benchmark_returns: list[float] | None = Field(default=None, max_length=50_000)
 
+
 def _to_jsonable(value):
     if isinstance(value, dict):
         return {str(k): _to_jsonable(v) for k, v in value.items()}
@@ -645,6 +669,7 @@ def _to_jsonable(value):
     if isinstance(value, numpy.generic):
         return value.item()
     return value
+
 
 @app.post("/api/quant/oos")
 def quant_oos_validation(payload: OOSValidationRequest) -> dict[str, object]:
@@ -713,14 +738,6 @@ def break_test_strategies() -> dict[str, StrategyInfo]:
 @app.post("/api/break-test/run")
 def break_test_run(payload: BreakTestRequest) -> dict[str, object]:
     try:
-        from app.break_test.data_loader import (
-            load_yfinance,
-            load_yfinance_bulk,
-            load_fred_series,
-            suggest_lookback,
-            warn_on_short_history,
-        )
-
         closes, default_lookback, validation = _resolve_closes(payload)
         if validation.get("short_history"):
             request_logger.info("Short history warning: %s", validation)
@@ -748,6 +765,7 @@ def break_test_run(payload: BreakTestRequest) -> dict[str, object]:
         raise HTTPException(422, str(exc)) from exc
     except Exception as exc:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(500, f"break-test failed: {exc}") from exc
 

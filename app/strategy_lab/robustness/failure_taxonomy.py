@@ -83,7 +83,7 @@ def build_predicates(specs: Sequence[ThresholdPredicate]) -> list[Callable[[dict
         fn = PREDICATE_REGISTRY.get(f"{spec.metric}_{spec.comparator}")
         if fn is None:
             raise KeyError(f"Unsupported predicate {spec.metric}_{spec.comparator}")
-        out.append(lambda metrics, _fn=fn, _th=spec.threshold: _fn(metrics, _th))
+        out.append(lambda metrics, _fn=fn, _th=spec.threshold: _fn(metrics, _th))  # type: ignore[misc]
     return out
 
 

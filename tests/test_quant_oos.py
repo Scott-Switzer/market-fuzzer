@@ -16,7 +16,9 @@ _live_base_url = os.environ.get("BREAK_TEST_LIVE_URL", "http://127.0.0.1:8000")
 
 def test_walk_forward_validation_returns_summary():
     closes = [100 + i * 0.25 for i in range(300)]
-    result = walk_forward_validation(closes, "sma_crossover", {"fast": 10, "slow": 30}, train_window=60, test_window=20, step=20, embargo=2)
+    result = walk_forward_validation(
+        closes, "sma_crossover", {"fast": 10, "slow": 30}, train_window=60, test_window=20, step=20, embargo=2
+    )
     assert "folds" in result
     assert "oos_sharpe" in result
     assert "note" in result
@@ -24,7 +26,9 @@ def test_walk_forward_validation_returns_summary():
 
 def test_cpcv_validation_returns_summary():
     closes = [100 + i * 0.3 for i in range(300)]
-    result = combinatorial_purged_cross_validation(closes, "sma_crossover", {"fast": 10, "slow": 30}, embargo=2, nested=False)
+    result = combinatorial_purged_cross_validation(
+        closes, "sma_crossover", {"fast": 10, "slow": 30}, embargo=2, nested=False
+    )
     assert "folds" in result
     assert "blocks" in result
 
@@ -58,6 +62,7 @@ def test_live_oos_endpoint_returns_summary_or_skip():
         import httpx
     except ImportError:
         import pytest
+
         pytest.skip("httpx not available")
 
     client = httpx.Client(base_url=_live_base_url, timeout=30)
@@ -80,6 +85,7 @@ def test_live_oos_endpoint_returns_summary_or_skip():
         r = client.post("/api/quant/oos", json=payload)
         if r.status_code == 404:
             import pytest
+
             pytest.skip("live server not running this app")
         assert r.status_code == 200, r.text
         data = r.json()

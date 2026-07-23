@@ -290,10 +290,10 @@ $('world-form').onsubmit=async e=>{
   try{
     const world=await api('/api/enterprise/worlds',{method:'POST',body:JSON.stringify({
       name:$('world-name').value,
-      description:'',
+      description:'Local browser E2E world created from the strategy-lab UI.',
       seed:Number($('world-seed').value),
       asset_universe:$('world-assets').value.split(',').map(x=>x.trim()).filter(Boolean),
-      agent_ecology:[],
+      agent_ecology:['market_maker'],
       intended_use:'strategy_validation_lab'
     })});
     state.world=world;

@@ -75,17 +75,20 @@ class ExchangeSpec(StrictModel):
         description="optional hard cap on matched shares per symbol per simulation step",
     )
     # Transaction cost model inputs (backward-compatible).
-    adtv: int = Field(default=1_000_000, ge=1, le=10_000_000_000, description="average daily volume in shares")
+    adtv: int = Field(
+        default=1_000_000, ge=1, le=10_000_000_000, description="average daily volume in shares"
+    )
     perm_eta: float = Field(default=0.05, ge=0.0, le=1.0, description="permanent impact coefficient")
     temp_epsilon: float = Field(default=0.005, ge=0.0, le=1.0, description="temporary base cost coefficient")
     temp_gamma: float = Field(default=0.20, ge=0.0, le=5.0, description="temporary urgency coefficient")
-    locate_fee_bps_annual: float = Field(default=200.0, ge=0.0, le=5_000.0, description="annual locates fee bps")
+    locate_fee_bps_annual: float = Field(
+        default=200.0, ge=0.0, le=5_000.0, description="annual locates fee bps"
+    )
     htb_bps_annual: float = Field(default=0.0, ge=0.0, le=10_000.0, description="annual HTB fee bps")
     htb_schedule: list[dict[str, float | int]] | None = Field(
         default=None,
         description=(
-            "ordered tiered HTB schedule: "
-            "{'threshold_cents': int, 'htb_bps_annual': float} by short notional"
+            "ordered tiered HTB schedule: {'threshold_cents': int, 'htb_bps_annual': float} by short notional"
         ),
     )
     toxicity_kappa: float = Field(

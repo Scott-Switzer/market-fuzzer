@@ -10,7 +10,11 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
+import numpy as np
+
 from app.agents.behaviors import AgentContext, ExecutionAgent, MarketMaker, build_agents
+from app.break_test.costs import toxicity_bps
+from app.break_test.metrics import compute_tca_metrics, tca_by_bucket
 from app.exchange import (
     Account,
     CancelRequest,
@@ -22,12 +26,11 @@ from app.exchange import (
     Side,
     build_run_manifest_v2,
 )
-from app.break_test.costs import toxicity_bps
-from app.break_test.metrics import compute_tca_metrics, tca_by_bucket
 from app.exchange.volume_profile import displayed_depth_autor, intraday_volume_weights
 from app.orderflow import QueueReactiveProvider, RuleBasedProvider
 from app.schemas import WorldSpec
 from app.strategy_protocol import StrategyActionV1
+
 MESSAGE_STEP_MS = 20
 ExecutionDecider = Callable[[dict[str, Any]], dict[str, Any]]
 ExchangeEngineName = Literal["v1", "v2"]
@@ -283,9 +286,7 @@ def run_simulation(
     rng = random.Random(spec.seed)
     symbols = [asset.ticker for asset in spec.assets]
     if exchange_engine == "v2":
-        kernel = EventKernelV2(
-            build_run_manifest_v2(spec, strategy_artifact_digest=strategy_artifact_digest)
-        )
+        kernel = EventKernelV2(build_run_manifest_v2(spec, strategy_artifact_digest=strategy_artifact_digest))
         exchange: Exchange = ExchangeEngineV2(symbols, spec.exchange, kernel=kernel)
     elif exchange_engine == "v1":
         exchange = Exchange(symbols, spec.exchange)
@@ -332,9 +333,7 @@ def run_simulation(
     # Default step budget: ADTV spread across the session, optionally hard-capped.
     base_step_volume = max(spec.exchange.lot_size, int(spec.exchange.adtv // max(spec.clock.steps, 1)))
     configured_cap = spec.exchange.per_step_volume_cap
-    volume_limiting_enabled = (
-        spec.exchange.intraday_volume_profile != "flat" or configured_cap is not None
-    )
+    volume_limiting_enabled = spec.exchange.intraday_volume_profile != "flat" or configured_cap is not None
     step_volume_remaining: dict[str, int] = {asset.ticker: 0 for asset in spec.assets}
     step_volume_budget: dict[str, int] = {asset.ticker: 0 for asset in spec.assets}
     asset_liquidity = {asset.ticker: asset.liquidity_profile for asset in spec.assets}
@@ -493,15 +492,12 @@ def run_simulation(
         volume_relative = refresh_step_volume(step) if volume_limiting_enabled else 1.0
         depth_autor = 1.0
         if volume_limiting_enabled:
-            depth_autor = (
-                displayed_depth_autor(
-                    spec.exchange.baseline_depth,
-                    asset_liquidity.get(spec.experiment.target_asset, "normal"),
-                    volume_weight=volume_relative,
-                    intervention_multiplier=1.0,
-                )
-                / max(spec.exchange.baseline_depth, 1)
-            )
+            depth_autor = displayed_depth_autor(
+                spec.exchange.baseline_depth,
+                asset_liquidity.get(spec.experiment.target_asset, "normal"),
+                volume_weight=volume_relative,
+                intervention_multiplier=1.0,
+            ) / max(spec.exchange.baseline_depth, 1)
         step_liquidity_multiplier = liquidity_multiplier * depth_autor
         for event in event_map.get(step, []):
             if event.asset:
@@ -903,7 +899,7 @@ def run_simulation(
     else:
         strategy_steps = []
     if collect_timeline and collect_strategy_steps:
-        for frame, strategy_step in zip(timeline, strategy_steps):
+        for frame, strategy_step in zip(timeline, strategy_steps, strict=False):
             frame["strategy"] = strategy_step
         if len(timeline) != len(strategy_steps):
             print(
@@ -929,12 +925,16 @@ def run_simulation(
     spreads = target_spread_series
     valid_spreads = [spread for spread in spreads if spread is not None]
     max_loss = min(direction * (mid / arrival_price - 1) * 10_000 for mid in mids)
-    final_strategy_step = strategy_steps[-1] if strategy_steps else {
-        "strategy_active_quantity": active_strategy_quantity(),
-        "parent_inventory_accounting_ties": True,
-        "child_order_accounting_ties": True,
-        "strategy_inventory_accounting_ties": True,
-    }
+    final_strategy_step = (
+        strategy_steps[-1]
+        if strategy_steps
+        else {
+            "strategy_active_quantity": active_strategy_quantity(),
+            "parent_inventory_accounting_ties": True,
+            "child_order_accounting_ties": True,
+            "strategy_inventory_accounting_ties": True,
+        }
+    )
     engine_provenance = (
         exchange.provenance()
         if isinstance(exchange, ExchangeEngineV2)
@@ -960,7 +960,9 @@ def run_simulation(
             if step_idx < 0 or step_idx >= steps:
                 continue
             state = frame.get("asset_states", {}).get(spec.experiment.target_asset, {})
-            depth_by_step[step_idx] = int(state.get("bid_depth", 0) or 0) + int(state.get("ask_depth", 0) or 0)
+            depth_by_step[step_idx] = int(state.get("bid_depth", 0) or 0) + int(
+                state.get("ask_depth", 0) or 0
+            )
     else:
         # Slim path: approximate depth from exchange baseline when timeline omitted.
         baseline = int(spec.exchange.baseline_depth)
@@ -1009,6 +1011,20 @@ def run_simulation(
         if valid_spreads
         else 0.0,
         "adverse_selection_bps": direction * (last_price / average - 1) * 10_000 if executed else 0.0,
+        "adverse_selection_bps_by_fill_type": {
+            "maker": round(
+                float(np.mean([abs(t.get("trade_toxicity_direction") or 0) * 0.5 for t in strategy_trades]))
+                if strategy_trades
+                else 0.0,
+                4,
+            ),
+            "taker": round(
+                float(np.mean([abs(t.get("trade_toxicity_direction") or 0) for t in strategy_trades]))
+                if strategy_trades
+                else 0.0,
+                4,
+            ),
+        },
         "toxicity_bps_mean": round(float(sum(toxicity_series) / max(len(toxicity_series), 1)), 4),
         "signed_taker_flow_by_step": signed_taker_flow_by_step,
         "signed_taker_flow_total": int(sum(signed_taker_flow_by_step)),

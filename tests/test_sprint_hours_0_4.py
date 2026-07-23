@@ -57,7 +57,7 @@ def test_world_prototype_cache_clones_seed_only():
 
 
 def test_u_shaped_volume_and_step_cap_partial_fills():
-    from app.break_test.synthetic_market import displayed_depth_autor, u_shaped_intraday_volume_weights
+    from app.exchange.volume_profile import displayed_depth_autor, u_shaped_intraday_volume_weights
     from app.schemas import WorldSpec
 
     weights = u_shaped_intraday_volume_weights(12)
@@ -80,7 +80,9 @@ def test_almgren_chriss_and_toxicity_cost_model():
     from app.break_test.costs import TransactionCostModel, almgren_chriss_impact_bps, toxicity_bps
     from app.schemas import ExchangeSpec
 
-    permanent, temporary = almgren_chriss_impact_bps(0.1, 0.02, perm_eta=0.05, temp_epsilon=0.005, temp_gamma=0.2)
+    permanent, temporary = almgren_chriss_impact_bps(
+        0.1, 0.02, perm_eta=0.05, temp_epsilon=0.005, temp_gamma=0.2
+    )
     assert permanent > 0
     assert temporary > permanent
     assert toxicity_bps(1_000, 500, kappa=5.0) > toxicity_bps(10, 500, kappa=5.0)
@@ -119,7 +121,9 @@ def test_calibration_pack_mutates_exchange_and_repro_metadata():
     world = build_demo_world(9)
     pack = build_demo_calibration_pack(seed=7, rows=60)
     calibrated = apply_calibration_pack_to_exchange(world.exchange, pack)
-    assert calibrated.baseline_depth != world.exchange.baseline_depth or calibrated.adtv != world.exchange.adtv
+    assert (
+        calibrated.baseline_depth != world.exchange.baseline_depth or calibrated.adtv != world.exchange.adtv
+    )
     meta = reproducibility_metadata(
         9,
         [100.0, 101.0, 102.0],

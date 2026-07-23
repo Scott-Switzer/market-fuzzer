@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import pathlib
-
-import pytest
+import numpy as np
 
 from app.break_test.metrics import backtest_metrics
 from app.break_test.quant_validation import (
@@ -10,8 +8,6 @@ from app.break_test.quant_validation import (
     sensitivity_analysis,
     worst_case_attribution,
 )
-from app.break_test.strategies import compute_positions
-import numpy as np
 
 
 def _prices() -> np.ndarray:
@@ -74,30 +70,50 @@ class TestStrategiesMetadata:
         assert result["stability"]["parameter_stability"] in {"stable", "moderate", "unstable"}
 
     def test_worst_case_regime_count(self) -> None:
-        result = worst_case_attribution(_prices().tolist(), "sma_crossover", {"fast": 20, "slow": 50}, worlds_per_regime=20)
-        assert len(result["regime_worst_cases"]) == 4
+        result = worst_case_attribution(
+            _prices().tolist(), "sma_crossover", {"fast": 20, "slow": 50}, worlds_per_regime=20
+        )
+        assert len(result["regime_worst_cases"]) == 7
 
 
 class TestBreakTestAPI:
     def test_strategies_endpoint(self) -> None:
         from fastapi.testclient import TestClient
+
         from app.api.app import app
+
         response = TestClient(app).get("/api/break-test/strategies")
         assert response.status_code == 200
         body = response.json()
         assert "sma_crossover" in body
-        assert body["sma_crossover"]["param_ranges"]["fast"]["min"] < body["sma_crossover"]["param_ranges"]["fast"]["max"]
+        assert (
+            body["sma_crossover"]["param_ranges"]["fast"]["min"]
+            < body["sma_crossover"]["param_ranges"]["fast"]["max"]
+        )
 
     def test_run_requires_minimum_prices(self) -> None:
         from fastapi.testclient import TestClient
+
         from app.api.app import app
-        response = TestClient(app).post("/api/break-test/run", json={"closes": [100, 101], "strategy_type": "sma_crossover"})
+
+        response = TestClient(app).post(
+            "/api/break-test/run", json={"closes": [100, 101], "strategy_type": "sma_crossover"}
+        )
         assert response.status_code == 422
 
     def test_session_roundtrip(self) -> None:
         from fastapi.testclient import TestClient
+
         from app.api.app import app
-        run = TestClient(app).post("/api/break-test/run", json={"closes": _prices().tolist(), "strategy_type": "sma_crossover", "params": {"fast": 20, "slow": 50}})
+
+        run = TestClient(app).post(
+            "/api/break-test/run",
+            json={
+                "closes": _prices().tolist(),
+                "strategy_type": "sma_crossover",
+                "params": {"fast": 20, "slow": 50},
+            },
+        )
         assert run.status_code == 200
         session_id = run.json()["session_id"]
         session = TestClient(app).get(f"/api/break-test/session/{session_id}")
@@ -105,8 +121,33 @@ class TestBreakTestAPI:
         body = session.json()
         assert body["strategy"]["type"] == "sma_crossover"
         assert "failure_analysis" in body
-        assert sorted(body["historical"].keys()) == sorted([
-            "total_return_pct","max_drawdown_pct","max_dd_duration_days","sharpe","sortino","calmar",
-            "trades","turnover","win_rate_pct","profit_factor","benchmark_total_return_pct",
-            "benchmark_sharpe","alpha","beta","avg_trade_return_pct","expectancy","var_95_pct","cvar_95_pct"
-        ])
+        historical_keys = set(body["historical"].keys())
+        expected_core = {
+            "total_return_pct",
+            "max_drawdown_pct",
+            "max_dd_duration_days",
+            "sharpe",
+            "sortino",
+            "calmar",
+            "trades",
+            "turnover",
+            "win_rate_pct",
+            "profit_factor",
+            "benchmark_total_return_pct",
+            "benchmark_sharpe",
+            "alpha",
+            "beta",
+            "avg_trade_return_pct",
+            "expectancy",
+            "var_95_pct",
+            "cvar_95_pct",
+        }
+        assert expected_core.issubset(historical_keys)
+        for key in (
+            "completion_rate_penalty_bps",
+            "opportunity_cost",
+            "slippage_vs_arrival",
+            "slippage_vs_vwap",
+            "tca_by_bucket",
+        ):
+            assert key in historical_keys, f"missing historical key: {key}"

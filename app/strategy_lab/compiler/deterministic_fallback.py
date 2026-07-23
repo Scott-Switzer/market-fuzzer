@@ -31,6 +31,7 @@ class DeterministicFallbackCompiler:
     @classmethod
     def classify(cls, text: str) -> dict[str, Any]:
         lowered = text.lower()
+        defaults: dict[str, Any]
         if "sma" in lowered or "moving average" in lowered or "crossover" in lowered:
             template_key = "sma_crossover"
             defaults = {"fast": 20, "slow": 50}

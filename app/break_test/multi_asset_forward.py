@@ -1,20 +1,22 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
 
 import numpy as np
 
 from app.break_test.exchange_fwd import (
     DEFAULT_ASSETS,
     EXPANDED_UNIVERSE_PRESETS,
-    _build_one_factor_paths_for_assets,
     _build_correlated_synthetic_paths,
-    build_world,
+    _build_one_factor_paths_for_assets,
 )
 from app.break_test.metrics import backtest_metrics
 from app.break_test.strategies import compute_positions
-from app.break_test.synthetic_market import AssetFactorConfig, OneFactorGBMConfig, ResearchSyntheticMarketGenerator
+from app.break_test.synthetic_market import (
+    AssetFactorConfig,
+    OneFactorGBMConfig,
+)
 
 
 def _resolve_asset_universe(
@@ -30,10 +32,12 @@ def _resolve_asset_universe(
         if not source.exists():
             raise FileNotFoundError(f"Universe CSV not found: {universe_csv}")
         asset_lines = source.read_text(encoding="utf-8").splitlines()
-        asset_lines = [line.strip() for line in asset_lines if line.strip() and not line.strip().startswith("#")]
+        asset_lines = [
+            line.strip() for line in asset_lines if line.strip() and not line.strip().startswith("#")
+        ]
         if not asset_lines:
             raise ValueError(f"No asset definitions found in {universe_csv}")
-        asset_specs = [_parse_universe_csv_row(line) for line in asset_lines[1:asset_count + 1]]
+        asset_specs = [_parse_universe_csv_row(line) for line in asset_lines[1 : asset_count + 1]]
         if not any(asset.ticker == strategy_asset for asset in asset_specs):
             asset_specs[0] = AssetFactorConfig(
                 ticker=strategy_asset,
@@ -114,7 +118,17 @@ def _parse_universe_csv_row(line: str) -> AssetFactorConfig:
     fields = [field.strip() for field in line.replace("\t", ",").split(",") if field.strip()]
     if len(fields) < 9:
         raise ValueError(f"Universe CSV row requires at least 9 fields; got {fields!r}")
-    ticker, company_name, sector, price_tick_str, shares_str, fv_str, beta_str, idios_vol_str, liquidity_profile = fields[:9]
+    (
+        ticker,
+        company_name,
+        sector,
+        price_tick_str,
+        shares_str,
+        fv_str,
+        beta_str,
+        idios_vol_str,
+        liquidity_profile,
+    ) = fields[:9]
     return AssetFactorConfig(
         ticker=ticker.upper(),
         company_name=company_name,
@@ -183,7 +197,12 @@ def build_multi_asset_forward_results(
                     use_price_cache=use_price_cache,
                 )
             syn_prices = np.array(paths.get(target_asset, {}).get("prices", []), dtype=float)
-            if syn_prices.size < max(10, params.get("slow", 50) if strategy_type == "sma_crossover" else params.get("entry_lookback", 20)):
+            if syn_prices.size < max(
+                10,
+                params.get("slow", 50)
+                if strategy_type == "sma_crossover"
+                else params.get("entry_lookback", 20),
+            ):
                 continue
             syn_positions = compute_positions(strategy_type, syn_prices, **params)
             metrics = backtest_metrics(syn_prices, syn_positions)

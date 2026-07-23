@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 def _canonical(obj: object) -> str:
     if isinstance(obj, Strategy):
         data = obj.model_dump(mode="json", exclude_none=True)
-        for key in ["strategy_id", "approval", "provenance", "conflict_report"]:
+        for key in ["strategy_id", "approval", "provenance", "conflict_report", "is_locked"]:
             data.pop(key, None)
         return json.dumps(data, sort_keys=True, separators=(",", ":"), default=str)
     return json.dumps(
@@ -83,7 +83,7 @@ class AbstractCondition(BaseModel, frozen=True):
     model_config = ConfigDict(extra="forbid")
 
 
-class Above(AbstractCondition):
+class Above(AbstractCondition):  # type: ignore[misc]
     kind: Literal["Above"] = "Above"
     indicator: Literal["sma", "rsi", "ema", "close", "volatility_regime", "rates_change", "credit_spread"] = (
         "sma"
@@ -91,7 +91,7 @@ class Above(AbstractCondition):
     threshold: float = Field(description="numeric threshold")
 
 
-class Below(AbstractCondition):
+class Below(AbstractCondition):  # type: ignore[misc]
     kind: Literal["Below"] = "Below"
     indicator: Literal["sma", "rsi", "ema", "close", "volatility_regime", "rates_change", "credit_spread"] = (
         "sma"
@@ -99,33 +99,33 @@ class Below(AbstractCondition):
     threshold: float
 
 
-class CrossedAbove(AbstractCondition):
+class CrossedAbove(AbstractCondition):  # type: ignore[misc]
     kind: Literal["CrossedAbove"] = "CrossedAbove"
     fast: Literal["sma", "rsi", "ema", "close"] = "sma"
     slow: Literal["sma", "rsi", "ema", "close"] = "sma"
     confirmation_bars: Uint = 0
 
 
-class CrossedBelow(AbstractCondition):
+class CrossedBelow(AbstractCondition):  # type: ignore[misc]
     kind: Literal["CrossedBelow"] = "CrossedBelow"
     fast: Literal["sma", "rsi", "ema", "close"] = "sma"
     slow: Literal["sma", "rsi", "ema", "close"] = "sma"
     confirmation_bars: Uint = 0
 
 
-class And(AbstractCondition):
+class And(AbstractCondition):  # type: ignore[misc]
     kind: Literal["And"] = "And"
     left: Condition
     right: Condition
 
 
-class Or(AbstractCondition):
+class Or(AbstractCondition):  # type: ignore[misc]
     kind: Literal["Or"] = "Or"
     left: Condition
     right: Condition
 
 
-class Not(AbstractCondition):
+class Not(AbstractCondition):  # type: ignore[misc]
     kind: Literal["Not"] = "Not"
     inner: Condition
 
@@ -156,13 +156,13 @@ class AbstractClause(BaseModel, frozen=True):
     model_config = ConfigDict(extra="forbid")
 
 
-class Hold(AbstractClause):
+class Hold(AbstractClause):  # type: ignore[misc]
     kind: Literal["Hold"] = "Hold"
     when: Condition | None = None
     note: str | None = None
 
 
-class SmaCrossover(AbstractClause):
+class SmaCrossover(AbstractClause):  # type: ignore[misc]
     kind: Literal["SmaCrossover"] = "SmaCrossover"
     fast: Uint = Field(ge=2, le=500)
     slow: Uint = Field(ge=2, le=500)
@@ -175,14 +175,14 @@ class SmaCrossover(AbstractClause):
         return self
 
 
-class RsiReversion(AbstractClause):
+class RsiReversion(AbstractClause):  # type: ignore[misc]
     kind: Literal["RsiReversion"] = "RsiReversion"
     period: Uint = Field(ge=2, le=200)
     oversold: float = Field(ge=0, le=100)
     overbought: float = Field(ge=0, le=100)
 
 
-class ValueQualityLongShort(AbstractClause):
+class ValueQualityLongShort(AbstractClause):  # type: ignore[misc]
     kind: Literal["ValueQualityLongShort"] = "ValueQualityLongShort"
     long_top_n: Uint = Field(ge=0)
     short_bottom_n: Uint = Field(ge=0)
@@ -190,14 +190,14 @@ class ValueQualityLongShort(AbstractClause):
     hedge_universe: str | None = None
 
 
-class BetaNeutralFactor(AbstractClause):
+class BetaNeutralFactor(AbstractClause):  # type: ignore[misc]
     kind: Literal["BetaNeutralFactor"] = "BetaNeutralFactor"
     target_beta: float = Field(ge=-2, le=2)
     lookback: Uint = Field(ge=20, le=252)
     hedge_universe: str = Field(min_length=1)
 
 
-class MacroGate(AbstractClause):
+class MacroGate(AbstractClause):  # type: ignore[misc]
     kind: Literal["MacroGate"] = "MacroGate"
     indicator: Literal["volatility_regime", "rates_change", "credit_spread"] = "volatility_regime"
     threshold: float
@@ -206,13 +206,13 @@ class MacroGate(AbstractClause):
     note: str | None = None
 
 
-class LiquidityFallback(AbstractClause):
+class LiquidityFallback(AbstractClause):  # type: ignore[misc]
     kind: Literal["LiquidityFallback"] = "LiquidityFallback"
     min_adv: Uint = Field(ge=1)
     fallback_symbol: str = Field(default="CASH", min_length=1)
 
 
-class CostCap(AbstractClause):
+class CostCap(AbstractClause):  # type: ignore[misc]
     kind: Literal["CostCap"] = "CostCap"
     max_bps: Pct
 
@@ -281,6 +281,7 @@ class Strategy(BaseModel, frozen=True, extra="forbid"):
     name: str | None = None
     description: str | None = None
     description_original: str | None = None
+    is_locked: bool = False
     execution_policy: ExecutionPolicy
     clauses: Sequence[OrderedClause]
     approval: dict[str, Any] | None = None

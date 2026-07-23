@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from app.break_test.oos_validation import (
     combinatorial_purged_cross_validation,
     walk_forward_validation,
@@ -20,8 +18,12 @@ class TestWalkForwardValidation:
         assert all("oos_sharpe" in f for f in result["folds"])
 
     def test_anchored_vs_rolling(self) -> None:
-        anchored = walk_forward_validation(_prices(), "sma_crossover", {"fast": 20, "slow": 50}, anchored=True)
-        rolling = walk_forward_validation(_prices(), "sma_crossover", {"fast": 20, "slow": 50}, anchored=False)
+        anchored = walk_forward_validation(
+            _prices(), "sma_crossover", {"fast": 20, "slow": 50}, anchored=True
+        )
+        rolling = walk_forward_validation(
+            _prices(), "sma_crossover", {"fast": 20, "slow": 50}, anchored=False
+        )
         assert anchored["anchored"] is True
         assert rolling["anchored"] is False
         assert anchored["n_folds"] == rolling["n_folds"]
@@ -51,7 +53,9 @@ class TestWalkForwardValidation:
 
 class TestCombinatorialPurgedCrossValidation:
     def test_requires_enough_data(self) -> None:
-        result = combinatorial_purged_cross_validation([100.0, 101.0], "sma_crossover", {"fast": 20, "slow": 50})
+        result = combinatorial_purged_cross_validation(
+            [100.0, 101.0], "sma_crossover", {"fast": 20, "slow": 50}
+        )
         assert result["n_folds"] == 0
 
     def test_returns_summary_fields(self) -> None:

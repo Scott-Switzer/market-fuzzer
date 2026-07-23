@@ -8,7 +8,9 @@ from app.break_test.metrics import backtest_metrics
 from app.break_test.strategies import compute_positions
 
 
-def _compute_world_metrics(prices: np.ndarray, strategy_type: str, params: dict[str, int]) -> dict[str, float | int]:
+def _compute_world_metrics(
+    prices: np.ndarray, strategy_type: str, params: dict[str, int]
+) -> dict[str, float | int]:
     return backtest_metrics(prices, compute_positions(strategy_type, prices, **params))
 
 

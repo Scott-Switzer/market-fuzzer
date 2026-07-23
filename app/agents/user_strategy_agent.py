@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
 
 from app.agents.behaviors import AgentContext, BaseAgent
 from app.break_test.strategies import compute_positions
-from app.exchange import Order, OrderType, Side
+from app.exchange import Order, Side
 
 
 @dataclass
@@ -20,9 +19,7 @@ class UserStrategyAgent(BaseAgent):
     target_symbol: str = "ASSET"
     lot_size: int = 1
 
-    def decide(
-        self, context: AgentContext, rng: random.Random, inventory: int
-    ) -> list[Order]:
+    def decide(self, context: AgentContext, rng: random.Random, inventory: int) -> list[Order]:
         recent = list(context.recent_prices)
         if context.mid_ticks > 0:
             if not recent:

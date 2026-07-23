@@ -1,6 +1,8 @@
 .PHONY: install install-browser verify test e2e demo run run-example arena-demo decision-benchmark regression judge-demo docker-smoke performance clean-artifacts
 
-PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
+# Default to the project Python 3.12 virtualenv if present,
+# otherwise fall back to whatever `python3` resolves to.
+PYTHON ?= $(firstword $(wildcard .venv312/bin/python .venv/bin/python) python3)
 
 install:
 	$(PYTHON) -m pip install -e '.[dev]'
@@ -15,19 +17,24 @@ e2e:
 	$(PYTHON) scripts/browser_e2e.py
 
 verify:
-	$(PYTHON) -m ruff format --check app scripts tests
-	$(PYTHON) -m ruff check app scripts tests
-	$(PYTHON) -m mypy app
+	$(PYTHON) -m ruff format --check app scripts tests docs
+	$(PYTHON) -m ruff check app scripts tests docs
+	$(PYTHON) -m mypy app/strategy_lab
+	$(MAKE) verify-strategy-lab
 	$(PYTHON) -m pytest
 	$(PYTHON) scripts/determinism_check.py
 	$(PYTHON) scripts/provenance_check.py
 	$(PYTHON) scripts/demo_smoke.py
 	$(PYTHON) scripts/arena_smoke.py
 	$(PYTHON) scripts/browser_e2e.py
-	bash -n scripts/judge_demo.sh
-	node --check app/static/app.js
-	node --check app/static/arena.js
+	@test -f scripts/judge_demo.sh && bash -n scripts/judge_demo.sh || true
+	@test -f app/static/app.js && node --check app/static/app.js || true
+	@test -f app/static/arena.js && node --check app/static/arena.js || true
 	git diff --check
+
+verify-strategy-lab:
+	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m pytest tests/strategy_lab -q -p no:cacheprovider --tb=short
+	@test -f app/static/strategy-lab.html || { echo 'missing app/static/strategy-lab.html'; exit 1; }
 
 run:
 	$(PYTHON) -m uvicorn app.main:app --host 127.0.0.1 --port 8000

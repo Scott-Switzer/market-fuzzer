@@ -7,14 +7,12 @@ from typing import Any
 if any(part.startswith("/Users/scottthomasswitzer/.hermes") or ".hermes" in part for part in sys.path if "site-packages" in part):
     sys.path = [part for part in sys.path if not (".hermes" in part and "site-packages" in part)]
 
-import hashlib
-
-import yfinance as yf
 
 import numpy as np
+import yfinance as yf
 
 from app.break_test.data_loader import load_yfinance
-from app.break_test.exchange_fwd import REGIME_CONFIGS, EXPANDED_UNIVERSE_PRESETS
+from app.break_test.exchange_fwd import EXPANDED_UNIVERSE_PRESETS, REGIME_CONFIGS
 from app.break_test.metrics import backtest_metrics, compute_equity_curve
 from app.break_test.regimes import detect_regimes
 from app.break_test.reporting import build_failure_report
@@ -51,7 +49,7 @@ _FORCE_SYNTHETIC_PRIMARY = os.environ.get("OAI_DEMO_FORCE_SYNTHETIC_PRIMARY", ""
 def _fmt(target: Any) -> str:
     import datetime as dt
 
-    return target.astimezone(dt.timezone.utc).strftime("%Y-%m-%d")
+    return target.astimezone(dt.UTC).strftime("%Y-%m-%d")
 
 
 def _fallback_path(ticker: str) -> str:
@@ -73,7 +71,7 @@ def _read_fallback_csv(ticker: str) -> list[float]:
     if not os.path.exists(path):
         return []
     values: list[float] = []
-    with open(path, "r", encoding="utf-8") as handle:
+    with open(path, encoding="utf-8") as handle:
         for line in handle:
             stripped = line.strip()
             if not stripped or stripped.lower().startswith("close"):
@@ -193,7 +191,7 @@ def build_world_demo(regime: str, seed: int, minutes: int = 60) -> WorldSpec:
     vol_labels = ["low", "normal", "elevated", "crisis"]
     vol_label = vol_labels[min(int(cfg["vol_label_idx"]), 3)]
     import datetime as dt
-    start_base = dt.datetime(2026, 1, 5, 14, 30, tzinfo=dt.timezone.utc)
+    start_base = dt.datetime(2026, 1, 5, 14, 30, tzinfo=dt.UTC)
     asset_count = 8
     assets_raw = list(EXPANDED_UNIVERSE_PRESETS.get("eight_assets", tuple()))[:asset_count]
     tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "JPM"]
@@ -211,7 +209,7 @@ def build_world_demo(regime: str, seed: int, minutes: int = 60) -> WorldSpec:
             event_sensitivity=a.event_sensitivity,
             mean_reversion=a.mean_reversion,
         )
-        for a, t in zip(assets_raw, tickers)
+        for a, t in zip(assets_raw, tickers, strict=False)
     ]
 
     populations = [
@@ -270,7 +268,7 @@ def main() -> None:
     params = {"fast": 20, "slow": 50}
     hist_positions = compute_positions("sma_crossover", primary, **params)
     historical = backtest_metrics(primary, hist_positions)
-    equity = compute_equity_curve(primary, hist_positions)
+    compute_equity_curve(primary, hist_positions)
     regime_detect = detect_regimes(primary.tolist())
 
     current_signal = "LONG" if hist_positions[-1] > 0.5 else "FLAT"

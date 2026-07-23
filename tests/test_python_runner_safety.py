@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 
 from app.break_test.python_runner import (
-    _assert_no_unsafe_imports,
     run_python_strategy_with_np,
 )
 

@@ -56,7 +56,8 @@ def apply_calibration_pack_to_world(
         update={
             "exchange": exchange,
             "calibration_pack_id": pack.pack_id,
-            "calibration_parameter_set_id": world.calibration_parameter_set_id or f"local-{pack.pack_id[:12]}",
+            "calibration_parameter_set_id": world.calibration_parameter_set_id
+            or f"local-{pack.pack_id[:12]}",
         },
         deep=True,
     )

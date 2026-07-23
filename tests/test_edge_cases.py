@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from app.break_test.service import run_break_test
-from app.break_test.strategy_compiler import StrategyCompiler, classify_strategy
+from app.break_test.strategy_compiler import classify_strategy
 
 
 def _prices() -> list[float]:
@@ -13,7 +13,7 @@ def _prices() -> list[float]:
 
 class TestCustomPythonStrategies:
     def test_missing_strategy_function_raises(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 - coverage guard for invalid python strategy paths
             run_break_test(_prices(), strategy_type="python", strategy_code="x=1", worlds_per_regime=10)
 
     def test_valid_python_strategy_runs(self) -> None:
@@ -30,7 +30,7 @@ def strategy(observations, params):
 def strategy(observations, params):
     return [{'action_type': 'unknown'} for _ in observations]
 """
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 - coverage guard for invalid python strategy paths
             run_break_test(_prices(), strategy_type="python", strategy_code=code, worlds_per_regime=10)
 
     def test_python_strategy_forward_mode_exchange(self) -> None:
@@ -47,6 +47,7 @@ def strategy(observations, params):
         )
         assert result["forward_mode"] == "exchange"
         assert "forward_test" in result
+
 
 class TestPlainEnglishCompilerRouting:
     def test_pairs_relative_value_routes_before_trending(self) -> None:
@@ -117,7 +118,9 @@ class TestPlainEnglishCompilerMeta:
 
 class TestPlainEnglishCompilerExecution:
     def test_trending_momentum_classification(self) -> None:
-        out = classify_strategy("Buy when price crosses above its moving average and exit when it falls below")
+        out = classify_strategy(
+            "Buy when price crosses above its moving average and exit when it falls below"
+        )
         assert out["template_key"] == "trending_momentum"
         assert "code" in out
 
@@ -141,7 +144,9 @@ class TestPlainEnglishCompilerExecution:
         assert "forward_test" in result
 
     def test_plain_english_classification_outputs_auditable_template_code(self) -> None:
-        out = classify_strategy("Buy when price crosses above its moving average and exit when it falls below")
+        out = classify_strategy(
+            "Buy when price crosses above its moving average and exit when it falls below"
+        )
         assert out["template_key"] == "trending_momentum"
         assert out["match_method"] == "ordered_cluster"
         template_code = out["template_code"]

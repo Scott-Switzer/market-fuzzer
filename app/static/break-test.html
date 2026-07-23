@@ -86,6 +86,7 @@
                     <option value="demo">Demo data (synthetic)</option>
                     <option value="csv">Upload CSV</option>
                     <option value="yfinance">yfinance (free live)</option>
+                    <option value="fenrix">Fenrix anonymized bundle</option>
                   </select>
                   <span class="help">Choose synthetic demo, a local CSV, or live history via yfinance.</span>
                 </label>
@@ -118,6 +119,9 @@
                 </div>
                 <button id="load-yf-btn" class="primary" type="button">Load live history</button>
                 <p class="help" id="yf-status">Loads adjusted closes for the primary ticker and reuses them as the price series for this run.</p>
+              </div>
+              <div id="fenrix-section" class="hidden">
+                <p class="help">Uses the local Fenrix anonymized bundle at <code>~/Documents/scott-brain/22_Fenrix/anonymized_bundle.zip</code>. No upload needed; select Fenrix and run.</p>
               </div>
             </div>
 
@@ -287,6 +291,15 @@
             <button id="fix-and-retest-btn" class="primary" disabled>Fix and retest →</button>
           </div>
           <p id="session-info" class="help" style="margin-top:12px"></p>
+          <div class="actions" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+            <button type="button" id="copy-repro-btn" class="ghost">Copy repro / env</button>
+            <button type="button" id="export-html-btn" class="ghost">Export HTML report</button>
+            <button type="button" id="export-pdf-btn" class="primary">Export PDF / Report</button>
+          </div>
+          <div id="repro-env" class="card" style="margin-top:10px;font-size:12px">
+            <div class="label">ENVIRONMENT / REPRO</div>
+            <div id="repro-env-body" class="muted">Run a break test to populate session metadata.</div>
+          </div>
         </section>
 
         <!-- Step 5: Comparison -->
@@ -409,6 +422,7 @@
         const src = $('data-source').value;
         if (src === 'demo') return generateDemoPrices();
         if (src === 'yfinance') return readYFinance();
+        if (src === 'fenrix') return [];
         return readCSV();
       }
 
@@ -699,6 +713,9 @@
           payload.yfinance_start = $('yf-start').value || null;
           payload.yfinance_end = $('yf-end').value || null;
           payload.lookback_period = $('yf-lookback').value;
+        } else if (dataSource === 'fenrix') {
+          payload.data_source = 'fenrix';
+          payload.fenrix_zip = '';
         } else {
           payload.data_source = 'demo';
         }
@@ -714,6 +731,7 @@
       $('data-source').onchange = () => {
         $('csv-upload').classList.toggle('hidden', $('data-source').value !== 'csv');
         $('yfinance-section').classList.toggle('hidden', $('data-source').value !== 'yfinance');
+        $('fenrix-section').classList.toggle('hidden', $('data-source').value !== 'fenrix');
       };
       $('universe-preset').onchange = () => {
         $('universe-csv').classList.toggle('hidden', $('universe-preset').value !== 'custom_csv');
@@ -808,6 +826,15 @@
           $('step-4').classList.remove('hidden');
           renderReport(result);
           $('session-info').innerHTML = `Session: <code>${esc(result.session_id)}</code> · <a href="/api/break-test/session/${esc(result.session_id)}" target="_blank">View raw JSON ↗</a>`;
+          const reproEnvBody = $('repro-env-body');
+          if (reproEnvBody && result.environment) {
+            const env = result.environment || {};
+            const gitSha = env.git_sha || env.commit || '';
+            const reproCmd = `curl -sH 'X-Session-Id: ${esc(result.session_id)}' http://localhost:8001/api/break-test/session/${esc(result.session_id)}/export?format=pdf -o repro-${esc(result.session_id)}.pdf`;
+            reproEnvBody.innerHTML = `<div>session_id: <code>${esc(result.session_id)}</code></div>` +
+              (gitSha ? `<div>git_sha: <code>${esc(gitSha)}</code></div>` : '') +
+              `<div class="code" style="margin-top:6px">${esc(reproCmd)}</div>`;
+          }
           activateStep(5);
           $('step-5').classList.remove('hidden');
           window.scrollTo({ top: document.querySelector('#step-2').offsetTop - 90, behavior: 'smooth' });
@@ -899,6 +926,15 @@
           $('step-4').classList.remove('hidden');
           renderReport(result);
           $('session-info').innerHTML = `Session: <code>${esc(result.session_id)}</code> · <a href="/api/break-test/session/${esc(result.session_id)}" target="_blank">View raw JSON ↗</a>`;
+          const reproEnvBodyDemo = $('repro-env-body');
+          if (reproEnvBodyDemo) {
+            const env = (result.environment || {});
+            const gitSha = env.git_sha || env.commit || '';
+            const reproCmd = `curl -sH 'X-Session-Id: ${esc(result.session_id)}' http://localhost:8001/api/break-test/session/${esc(result.session_id)}/export?format=pdf -o repro-${esc(result.session_id)}.pdf`;
+            reproEnvBodyDemo.innerHTML = `<div>session_id: <code>${esc(result.session_id)}</code></div>` +
+              (gitSha ? `<div>git_sha: <code>${esc(gitSha)}</code></div>` : '') +
+              `<div class="code" style="margin-top:6px">${esc(reproCmd)}</div>`;
+          }
           $('step-5').classList.add('hidden');
           window.scrollTo({ top: document.querySelector('#step-2').offsetTop - 90, behavior: 'smooth' });
         } catch (err) {
@@ -909,6 +945,31 @@
           btn.textContent = 'Try demo';
         }
       };
+
+      async function copyReproEnv() {
+        if (!lastResult) return;
+        const env = lastResult.environment || {};
+        const payload = {
+          session_id: lastResult.session_id,
+          strategy: lastResult.strategy,
+          environment: env,
+          docs: '/docs',
+          openapi: '/openapi.json',
+        };
+        await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+        $('config-status').textContent = 'Copied repro/env JSON to clipboard.';
+        $('config-status').className = 'status';
+      }
+      function exportReport(fmt) {
+        if (!lastResult || !lastResult.session_id) return;
+        window.open(`/api/break-test/session/${encodeURIComponent(lastResult.session_id)}/export?format=${fmt}`, '_blank');
+      }
+      const copyBtn = $('copy-repro-btn');
+      if (copyBtn) copyBtn.onclick = () => { copyReproEnv().catch(err => { $('config-status').textContent = err.message; $('config-status').className = 'status error'; }); };
+      const htmlBtn = $('export-html-btn');
+      if (htmlBtn) htmlBtn.onclick = () => exportReport('html');
+      const pdfBtn = $('export-pdf-btn');
+      if (pdfBtn) pdfBtn.onclick = () => exportReport('pdf');
 
       $('clear-btn').onclick = () => {
         ['data-source','strategy-type','forward-mode','yf-tickers','yf-lookback','yf-start','yf-end','plain-english','strategy-code','asset-count','universe-preset','execution-strategy','participation-rate','spread-bps','borrow-fee-bps','impact-mode','impact-beta','default-adv'].forEach(id => {

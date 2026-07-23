@@ -402,7 +402,7 @@ class EvidencePackager:
             }
             for item in failures
         ]
-        data_provenance = {
+        data_provenance: dict[str, Any] = {
             "campaign_id": campaign.get("campaign_id"),
             "strategy_id": campaign.get("strategy_id"),
             "source": "strategy_lab_historical_backtest",

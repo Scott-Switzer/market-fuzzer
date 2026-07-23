@@ -9,7 +9,6 @@ from app.break_test.metrics import backtest_metrics
 from app.break_test.strategies import compute_positions
 from app.break_test.synthetic_market import ResearchSyntheticMarketGenerator
 
-
 _GENERATOR = ResearchSyntheticMarketGenerator()
 _REGIME_KEYS = tuple(r.key for r in _GENERATOR.regimes)
 _REGIME_LABELS = {r.key: r.label for r in _GENERATOR.regimes}
@@ -18,6 +17,9 @@ _REGIME_SPECS: dict[str, dict[str, Any]] = {
     "sideways_choppy": {"drift": 0.0, "vol": 0.22, "reversal": -0.35},
     "high_volatility": {"drift": 0.0, "vol": 0.65, "reversal": 0.0},
     "sudden_selloff": {"drift": -0.25, "vol": 0.85, "reversal": 0.15},
+    "low_vol": {"drift": 0.06, "vol": 0.10, "reversal": 0.0},
+    "high_vol": {"drift": 0.0, "vol": 0.65, "reversal": 0.0},
+    "crisis": {"drift": -0.30, "vol": 1.10, "reversal": 0.20},
 }
 
 # Public aliases preserved for downstream modules such as quant_validation.

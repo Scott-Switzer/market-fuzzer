@@ -213,7 +213,7 @@ def deterministic_world_generation(
         }
     )
     anonymization_manifest = build_anonymization_manifest(list(instruments), heldout_sectors)
-    asset_manifest = {
+    asset_manifest: dict[str, Any] = {
         "asset_count": len(instruments),
         "real_ticker_count": len(instruments),
         "synthetic_asset_count": 0,
@@ -724,4 +724,4 @@ class SealedCampaignEngineV1:
     ) -> SealedCampaignDraftV1:
         if campaign.state == "passed" and new_state != "passed":
             raise SealedCampaignEngineError("passed campaigns cannot regress")
-        return replace(campaign, state=new_state, updated_at=_utcnow_iso(), **updates)
+        return replace(campaign, state=new_state, updated_at=_utcnow_iso(), **updates)  # type: ignore[arg-type]

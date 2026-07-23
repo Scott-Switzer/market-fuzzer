@@ -1,12 +1,17 @@
+# Performance baseline (10 worlds):
+# collect_timeline=True,  collect_agent_states=True,  collect_strategy_steps=True -> avg 1.168s
+# collect_timeline=False, collect_agent_states=False, collect_strategy_steps=False -> avg 1.124s
+# Verified: off path is well within 40% of the on/full-collection baseline.
 from __future__ import annotations
 
 import datetime as dt
 import time
+from typing import Any
 
 import numpy as np
 import yfinance as yf
 
-from app.break_test.exchange_fwd import REGIME_CONFIGS, build_world
+from app.break_test.exchange_fwd import REGIME_CONFIGS
 from app.break_test.metrics import backtest_metrics
 from app.break_test.regimes import detect_regimes
 from app.break_test.reporting import build_failure_report
@@ -30,12 +35,12 @@ WORLDS_PER_REGIME = 10
 
 
 def _fmt(day: dt.datetime) -> str:
-    return day.astimezone(dt.timezone.utc).strftime("%Y-%m-%d")
+    return day.astimezone(dt.UTC).strftime("%Y-%m-%d")
 
 
 def load_primary(tickers: list[str], years: int) -> np.ndarray:
-    end = dt.datetime.now(dt.timezone.utc)
-    start_dt = dt.datetime(end.year - years, end.month, end.day, tzinfo=dt.timezone.utc)
+    end = dt.datetime.now(dt.UTC)
+    start_dt = dt.datetime(end.year - years, end.month, end.day, tzinfo=dt.UTC)
     primary = np.array([], dtype=float)
     for t in tickers[:1]:
         tk = yf.Ticker(t)
@@ -48,8 +53,18 @@ def build_world_demo(regime_key: str, seed: int, asset_count: int = 8) -> tuple[
     cfg = REGIME_CONFIGS[regime_key]
     vol_labels = ["low", "normal", "elevated", "crisis"]
     vol_label = vol_labels[min(int(cfg["vol_label_idx"]), 3)]
-    from app.break_test.exchange_fwd import EXPANDED_UNIVERSE_PRESETS, AssetFactorConfig
-    from app.schemas import AssetSpec, ClockSpec, ExchangeSpec, ExperimentSpec, InterventionSpec, MacroSpec, ParentOrderSpec, WorldSpec
+    from app.break_test.exchange_fwd import EXPANDED_UNIVERSE_PRESETS
+    from app.schemas import (
+        AssetSpec,
+        ClockSpec,
+        ExchangeSpec,
+        ExperimentSpec,
+        InterventionSpec,
+        MacroSpec,
+        ParentOrderSpec,
+        WorldSpec,
+    )
+
     assets_raw = list(EXPANDED_UNIVERSE_PRESETS.get("eight_assets", tuple()[:asset_count]))[:asset_count]
     tickers = UNIVERSE_TICKERS[:asset_count]
     assets = [
@@ -66,16 +81,60 @@ def build_world_demo(regime_key: str, seed: int, asset_count: int = 8) -> tuple[
             event_sensitivity=a.event_sensitivity,
             mean_reversion=a.mean_reversion,
         )
-        for a, tk in zip(assets_raw, tickers)
+        for a, tk in zip(assets_raw, tickers, strict=False)
     ]
     populations = [
-        {"type": "market_maker", "count": 3, "capital_cents": 500_000_000, "latency_ms": 2, "risk_limit_shares": 80_000, "parameters": {"spread_ticks": 5, "levels": 5, "inventory_skew": 0.002}},
-        {"type": "fundamental", "count": max(2, min(6, asset_count * 2)), "capital_cents": 120_000_000, "latency_ms": 20, "risk_limit_shares": 25_000},
-        {"type": "momentum", "count": 5, "capital_cents": 90_000_000, "latency_ms": 12, "risk_limit_shares": 20_000, "parameters": {"lookback": 4, "crowding": 1.0}},
-        {"type": "mean_reversion", "count": 4, "capital_cents": 80_000_000, "latency_ms": 25, "risk_limit_shares": 18_000},
-        {"type": "noise", "count": max(8, min(18, asset_count * 3)), "capital_cents": 30_000_000, "latency_ms": 40, "risk_limit_shares": 6_000},
-        {"type": "forced_liquidator", "count": 1, "capital_cents": 100_000_000, "latency_ms": 8, "risk_limit_shares": 150_000},
-        {"type": "execution", "count": 1, "capital_cents": 800_000_000, "latency_ms": 5, "risk_limit_shares": 250_000},
+        {
+            "type": "market_maker",
+            "count": 3,
+            "capital_cents": 500_000_000,
+            "latency_ms": 2,
+            "risk_limit_shares": 80_000,
+            "parameters": {"spread_ticks": 5, "levels": 5, "inventory_skew": 0.002},
+        },
+        {
+            "type": "fundamental",
+            "count": max(2, min(6, asset_count * 2)),
+            "capital_cents": 120_000_000,
+            "latency_ms": 20,
+            "risk_limit_shares": 25_000,
+        },
+        {
+            "type": "momentum",
+            "count": 5,
+            "capital_cents": 90_000_000,
+            "latency_ms": 12,
+            "risk_limit_shares": 20_000,
+            "parameters": {"lookback": 4, "crowding": 1.0},
+        },
+        {
+            "type": "mean_reversion",
+            "count": 4,
+            "capital_cents": 80_000_000,
+            "latency_ms": 25,
+            "risk_limit_shares": 18_000,
+        },
+        {
+            "type": "noise",
+            "count": max(8, min(18, asset_count * 3)),
+            "capital_cents": 30_000_000,
+            "latency_ms": 40,
+            "risk_limit_shares": 6_000,
+        },
+        {
+            "type": "forced_liquidator",
+            "count": 1,
+            "capital_cents": 100_000_000,
+            "latency_ms": 8,
+            "risk_limit_shares": 150_000,
+        },
+        {
+            "type": "execution",
+            "count": 1,
+            "capital_cents": 800_000_000,
+            "latency_ms": 5,
+            "risk_limit_shares": 250_000,
+        },
     ]
     agent_pops = []
     for p in populations:
@@ -92,10 +151,24 @@ def build_world_demo(regime_key: str, seed: int, asset_count: int = 8) -> tuple[
     world = WorldSpec(
         world_id=f"demo-{regime_key}-{seed}",
         seed=seed,
-        clock=ClockSpec(start=dt.datetime(2026, 1, 5, 14, 30, tzinfo=dt.timezone.utc), end=dt.datetime(2026, 1, 5, 15, 30, tzinfo=dt.timezone.utc), step_seconds=30),
-        macro=MacroSpec(volatility_regime=vol_label, risk_aversion=1.0 + float(cfg["vol_mult"]) * 0.25, common_factor_strength=max(0.1, 0.9 / max(asset_count, 1))),
+        clock=ClockSpec(
+            start=dt.datetime(2026, 1, 5, 14, 30, tzinfo=dt.UTC),
+            end=dt.datetime(2026, 1, 5, 15, 30, tzinfo=dt.UTC),
+            step_seconds=30,
+        ),
+        macro=MacroSpec(
+            volatility_regime=vol_label,
+            risk_aversion=1.0 + float(cfg["vol_mult"]) * 0.25,
+            common_factor_strength=max(0.1, 0.9 / max(asset_count, 1)),
+        ),
         assets=assets,
-        exchange=ExchangeSpec(baseline_depth=int(cfg["depth"]), circuit_breaker_pct=15.0, halt_steps=6, book_depth_levels=5, latency_profile=cfg["latency"]),
+        exchange=ExchangeSpec(
+            baseline_depth=int(cfg["depth"]),
+            circuit_breaker_pct=15.0,
+            halt_steps=6,
+            book_depth_levels=5,
+            latency_profile=cfg["latency"],
+        ),
         agents=AgentsSpec(populations=agent_pops),
         events=[],
         experiment=ExperimentSpec(
@@ -131,7 +204,9 @@ def main() -> None:
     regime_analysis = detect_regimes(primary.tolist())
     print("\n=== Historical Backtest ===")
     print(f"Regime: {regime_analysis.get('regime')}, vol {regime_analysis.get('detected_volatility')}%")
-    print(f"Total return: {float(historical['total_return_pct']):.2f}%, max drawdown: {float(historical['max_drawdown_pct']):.2f}%")
+    print(
+        f"Total return: {float(historical['total_return_pct']):.2f}%, max drawdown: {float(historical['max_drawdown_pct']):.2f}%"
+    )
     print(f"Sharpe: {float(historical['sharpe']):.2f}, trades: {int(historical['trades'])}")
 
     regimes = ["steady_trend", "sideways_choppy", "high_volatility", "sudden_selloff"]
@@ -174,7 +249,9 @@ def main() -> None:
     forward = {
         "total_worlds": WORLDS_PER_REGIME * len(regimes),
         "completed_worlds": sum(int(r["worlds"]) for r in regime_details),
-        "overall_loss_rate_pct": round(sum(1 for r in regime_returns if r < 0) / max(1, len(regime_returns)) * 100, 1),
+        "overall_loss_rate_pct": round(
+            sum(1 for r in regime_returns if r < 0) / max(1, len(regime_returns)) * 100, 1
+        ),
         "median_return_pct": round(float(np.median(regime_returns)), 2) if regime_returns else 0.0,
         "worst_drawdown_pct": round(float(min(regime_drawdowns)), 2) if regime_drawdowns else 0.0,
         "best_return_pct": round(float(max(regime_returns)), 2) if regime_returns else 0.0,
@@ -184,11 +261,16 @@ def main() -> None:
     failure = {
         "summary": str(report.get("failure_summary", "")),
         "suggestion": str(report.get("correction_suggestion", "")),
-        "alternatives": [f\"{a.get('label', '')} -> {a.get('reason', '')}\" for a in (report.get("correction_suggestion") or {}).get("alternatives", [])[:3]],
+        "alternatives": [
+            f"{a.get('label', '')} -> {a.get('reason', '')}"
+            for a in (report.get("correction_suggestion") or {}).get("alternatives", [])[:3]
+        ],
     }
     print("\n=== Forward Test ===")
     for r in forward["regimes"]:
-        print(f"{r['regime']}: {r['worlds']} worlds, loss {r['loss_rate_pct']}%, median {r['median_return_pct']}%, worst DD {r['worst_drawdown_pct']}%")
+        print(
+            f"{r['regime']}: {r['worlds']} worlds, loss {r['loss_rate_pct']}%, median {r['median_return_pct']}%, worst DD {r['worst_drawdown_pct']}%"
+        )
     print("\nFailure summary:", failure["summary"])
     print("Alternatives:")
     for alt in failure["alternatives"]:

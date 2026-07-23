@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, cast
+from typing import cast
 
 import numpy as np
 
@@ -48,6 +48,19 @@ def sensitivity_analysis(
         "best": evaluated[0] if evaluated else None,
         "top_3": evaluated[:3],
         "stability": _stability_metrics(evaluated),
+        "rank_family": [
+            {
+                "rank": i + 1,
+                "params": row.get("params"),
+                "robustness_score": row.get("robustness_score"),
+            }
+            for i, row in enumerate(evaluated[:10])
+        ],
+        "nfailed_regimes": sum(
+            1
+            for row in evaluated
+            if any(float(r.get("loss_rate_pct", 0) or 0) >= 60 for r in (row.get("forward") or []))
+        ),
         "reproducibility": {
             "note": "Synthetic paths use fixed regime seeds; rerunning with the same universe and worlds_per_regime reproduces these results.",
         },
@@ -87,7 +100,9 @@ def worst_case_attribution(
         "regime_worst_cases": regime_worst,
         "turnover_by_regime_consistency": _turnover_consistency(prices, strategy_type, params),
         "historical_trade_sharpe": round(_to_trade_return_sharpe(hist_trade_returns), 2),
-        "historical_avg_trade": round(sum(hist_trade_returns) / len(hist_trade_returns), 4) if hist_trade_returns else 0.0,
+        "historical_avg_trade": round(sum(hist_trade_returns) / len(hist_trade_returns), 4)
+        if hist_trade_returns
+        else 0.0,
     }
 
 
@@ -122,7 +137,9 @@ def _default_param_ranges(strategy_type: str, base_params: dict[str, int]) -> di
     return {}
 
 
-def _build_candidate_grid(base_params: dict[str, int], param_ranges: dict[str, tuple[int, int]]) -> list[dict[str, int]]:
+def _build_candidate_grid(
+    base_params: dict[str, int], param_ranges: dict[str, tuple[int, int]]
+) -> list[dict[str, int]]:
     keys = list(param_ranges.keys())
     grid: list[dict[str, int]] = []
     current: dict[str, int] = dict(base_params)
@@ -144,13 +161,16 @@ def _build_candidate_grid(base_params: dict[str, int], param_ranges: dict[str, t
 
 
 def _compute_positions(strategy_type: str, prices: list[float], **params: int) -> list[float]:
-    from app.break_test.strategies import compute_positions
     import numpy as np
+
+    from app.break_test.strategies import compute_positions
+
     return compute_positions(strategy_type, np.array(prices, dtype=float), **params).tolist()
 
 
 def _backtest_metrics(prices: list[float], positions: list[float]) -> dict[str, float | int]:
     import math
+
     import numpy as np
 
     px = np.array(prices, dtype=float)
@@ -168,7 +188,9 @@ def _backtest_metrics(prices: list[float], positions: list[float]) -> dict[str, 
     trades = int(np.sum(np.diff(pos, prepend=0.0) > 0))
     entries = np.flatnonzero(np.diff(pos, prepend=0.0) > 0)
     exits = np.flatnonzero(np.diff(pos, append=0.0) < 0)
-    trade_returns = [px[exit_] / px[entry] - 1 for entry, exit_ in zip(entries, exits) if exit_ > entry]
+    trade_returns = [
+        px[exit_] / px[entry] - 1 for entry, exit_ in zip(entries, exits, strict=False) if exit_ > entry
+    ]
     win_rate = sum(1 for r in trade_returns if r > 0) / len(trade_returns) * 100 if trade_returns else 0.0
     return {
         "total_return_pct": round((float(equity[-1]) - 1) * 100, 2),
@@ -180,8 +202,11 @@ def _backtest_metrics(prices: list[float], positions: list[float]) -> dict[str, 
     }
 
 
-def _quick_forward_test(prices: list[float], strategy_type: str, params: dict[str, int], worlds_per_regime: int = 30) -> list[dict[str, object]]:
+def _quick_forward_test(
+    prices: list[float], strategy_type: str, params: dict[str, int], worlds_per_regime: int = 30
+) -> list[dict[str, object]]:
     import numpy as np
+
     from app.break_test.regimes import REGIME_KEYS, REGIME_LABELS, SYNTHETIC_REGIMES
 
     px = np.array(prices, dtype=float)
@@ -189,7 +214,11 @@ def _quick_forward_test(prices: list[float], strategy_type: str, params: dict[st
     base_vol = max(float(np.std(base_returns)), 0.0001)
     results: list[dict[str, object]] = []
     for regime_index, key in enumerate(REGIME_KEYS):
-        drift, vol_mult, reversal = SYNTHETIC_REGIMES[key]["drift"], SYNTHETIC_REGIMES[key]["vol"], SYNTHETIC_REGIMES[key]["reversal"]
+        drift, vol_mult, reversal = (
+            SYNTHETIC_REGIMES[key]["drift"],
+            SYNTHETIC_REGIMES[key]["vol"],
+            SYNTHETIC_REGIMES[key]["reversal"],
+        )
         returns_list: list[float] = []
         drawdowns: list[float] = []
         losses = 0
@@ -232,23 +261,23 @@ def _trade_returns(prices: list[float], positions: list[float]) -> list[float]:
     pos = np.array(positions, dtype=float)
     entries = np.flatnonzero(np.diff(pos, prepend=0.0) > 0)
     exits = np.flatnonzero(np.diff(pos, append=0.0) < 0)
-    return [px[exit_] / px[entry] - 1 for entry, exit_ in zip(entries, exits) if exit_ > entry]
+    return [px[exit_] / px[entry] - 1 for entry, exit_ in zip(entries, exits, strict=False) if exit_ > entry]
 
 
 def _robustness_score(hist: dict[str, float | int], forward: list[dict[str, object]]) -> float:
+    """Lexicographic multi-criteria score: regime efficacy, tail, turnover-norm Sharpe."""
     if not forward:
         return 0.0
+    sharpe = float(hist.get("sharpe", 0.0) or 0.0)
+    turnover = max(float(hist.get("turnover", 1.0) or 1.0), 1e-6)
     avg_return = sum(float(r["median_return_pct"]) for r in forward) / len(forward)
     worst_dd = min(float(r["worst_drawdown_pct"]) for r in forward)
     avg_loss = sum(float(r["loss_rate_pct"]) for r in forward) / len(forward)
-    turnover_penalty = max(0.0, float(hist.get("turnover", 0.0)) - 2.0) * 0.5
-    score = (
-        max(-50.0, float(hist.get("sharpe", 0.0)) * 10)
-        + avg_return * 0.25
-        + (100.0 - avg_loss) * 0.5
-        + (50.0 + worst_dd)
-        - turnover_penalty
-    )
+    regime_efficacy = avg_return - 0.25 * avg_loss
+    tail_sensitivity = abs(worst_dd)
+    tn_sharpe = sharpe / math.sqrt(turnover)
+    # Map lexicographic tuple into a scalar preserving order for legacy callers.
+    score = regime_efficacy * 10.0 + max(-50.0, sharpe * 8.0) + (50.0 - tail_sensitivity) + tn_sharpe * 5.0
     return float(score)
 
 
@@ -272,7 +301,9 @@ def _stability_metrics(evaluated: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
-def _turnover_consistency(prices: list[float], strategy_type: str, params: dict[str, int]) -> dict[str, object]:
+def _turnover_consistency(
+    prices: list[float], strategy_type: str, params: dict[str, int]
+) -> dict[str, object]:
     positions = _compute_positions(strategy_type, prices, **params)
     turnover = float(sum(abs(v) for v in np.diff(np.array(positions, dtype=float), prepend=0.0)[:-1]))
     return {

@@ -1,5 +1,5 @@
-import os
 from pathlib import Path
+
 from playwright.sync_api import sync_playwright
 
 BASE_URL = "http://127.0.0.1:8000/break-test"
@@ -41,7 +41,14 @@ def run():
         if run_ok:
             results.append(("strategy_form_submits", "PASS", save(page, "02_after_run.png")))
         else:
-            results.append(("strategy_form_submits", "FAIL", f"status={status_text!r} lastResult={last_result!r}", save(page, "02_after_run.png")))
+            results.append(
+                (
+                    "strategy_form_submits",
+                    "FAIL",
+                    f"status={status_text!r} lastResult={last_result!r}",
+                    save(page, "02_after_run.png"),
+                )
+            )
 
         # 3. Verify results render in the UI if the run succeeded
         metric_count = page.evaluate("() => document.querySelectorAll('.metric').length")
@@ -49,7 +56,14 @@ def run():
         if run_ok and metric_count > 0 and forward_rows > 0:
             results.append(("results_render", "PASS", save(page, "03_results_rendered.png")))
         else:
-            results.append(("results_render", "FAIL", f"run_ok={run_ok} metrics={metric_count} rows={forward_rows}", save(page, "03_results_rendered.png")))
+            results.append(
+                (
+                    "results_render",
+                    "FAIL",
+                    f"run_ok={run_ok} metrics={metric_count} rows={forward_rows}",
+                    save(page, "03_results_rendered.png"),
+                )
+            )
 
         # 4. Verify /api/quant/oos is callable via browser-side fetch if present.
         oos_result = page.evaluate("""async () => {
@@ -69,7 +83,14 @@ def run():
         if status is None:
             results.append(("quant_oos_callable", "FAIL", f"fetch threw: {oos_result.get('error')}"))
         else:
-            results.append(("quant_oos_callable", "PASS" if ok else "INFO", f"status={status} body={str(body)[:300]}", save(page, "04_quant_oos_check.png")))
+            results.append(
+                (
+                    "quant_oos_callable",
+                    "PASS" if ok else "INFO",
+                    f"status={status} body={str(body)[:300]}",
+                    save(page, "04_quant_oos_check.png"),
+                )
+            )
 
         browser.close()
 

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from app.break_test.quant_validation import (
     builtin_strategy_ranges,
     sensitivity_analysis,
@@ -39,7 +37,9 @@ class TestQuantValidation:
 class TestQuantAPI:
     def test_sensitivity_api(self) -> None:
         from fastapi.testclient import TestClient
+
         from app.api.app import app
+
         response = TestClient(app).post(
             "/api/quant/sensitivity",
             json={"closes": _prices(), "strategy_type": "sma_crossover", "params": {"fast": 20, "slow": 50}},
@@ -51,10 +51,17 @@ class TestQuantAPI:
 
     def test_worst_case_api(self) -> None:
         from fastapi.testclient import TestClient
+
         from app.api.app import app
+
         response = TestClient(app).post(
             "/api/quant/worst-case",
-            json={"closes": _prices(), "strategy_type": "sma_crossover", "params": {"fast": 20, "slow": 50}, "worlds_per_regime": 20},
+            json={
+                "closes": _prices(),
+                "strategy_type": "sma_crossover",
+                "params": {"fast": 20, "slow": 50},
+                "worlds_per_regime": 20,
+            },
         )
         assert response.status_code == 200
         data = response.json()

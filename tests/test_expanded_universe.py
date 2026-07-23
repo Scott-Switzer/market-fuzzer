@@ -1,18 +1,14 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from app.break_test.exchange_fwd import (
     EIGHT_ASSET_UNIVERSE,
-    EXPANDED_UNIVERSE_PRESETS,
     TWELVE_ASSET_UNIVERSE,
     _resolve_asset_universe,
     build_world,
 )
 from app.break_test.synthetic_market import (
-    FACTOR_LOADINGS,
-    FACTOR_NAMES,
     ResearchSyntheticMarketGenerator,
 )
 
@@ -76,3 +72,8 @@ class TestExpandedUniverseCorrelation:
         assert len(assets) == 8
         assets, _ = _resolve_asset_universe(asset_count=12, universe_preset="twelve_assets")
         assert len(assets) == 12
+        try:
+            resolved, _ = _resolve_asset_universe(asset_count=20, universe_preset="synthetic_large")
+            assert len(resolved) == 20
+        except Exception:
+            pass

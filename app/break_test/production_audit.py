@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import csv
 import hashlib
-import io
 import json
-import math
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -55,16 +53,16 @@ def audit_snapshot_json(mark: dict[str, object]) -> str:
     data = {
         "schema_version": "audit/v1",
         "mark": mark,
-        "snapshot_at": datetime.now(timezone.utc).isoformat(),
+        "snapshot_at": datetime.now(UTC).isoformat(),
     }
     return json.dumps(data, sort_keys=True)
 
 
 def audit_snapshot_text(mark: dict[str, object]) -> str:
     lines = [
-        f"AUDIT {mark.get('id','')} :: {mark.get('label','')}",
-        f"Timestamp: {datetime.now(timezone.utc).isoformat()}",
-        f"Inputs: prices={mark.get('inputs',{}).get('prices_len','')}, strategy={mark.get('inputs',{}).get('strategy_type','')}, params={mark.get('inputs',{}).get('params','')}, worlds={mark.get('inputs',{}).get('worlds_per_regime','')}",
+        f"AUDIT {mark.get('id', '')} :: {mark.get('label', '')}",
+        f"Timestamp: {datetime.now(UTC).isoformat()}",
+        f"Inputs: prices={mark.get('inputs', {}).get('prices_len', '')}, strategy={mark.get('inputs', {}).get('strategy_type', '')}, params={mark.get('inputs', {}).get('params', '')}, worlds={mark.get('inputs', {}).get('worlds_per_regime', '')}",
     ]
     hist = mark.get("historical", {})
     lines.append("Historical metrics:")
@@ -97,27 +95,39 @@ def rule_flag(prices: list[float], strategy_type: str, params: dict[str, int]) -
     try:
         from app.break_test.metrics import backtest_metrics
         from app.break_test.strategies import compute_positions
+
         px = np.array(prices, dtype=float)
         pos = compute_positions(strategy_type, px, **params)
         hist = backtest_metrics(px, pos)
         entry["historical"] = hist
-        marks.append({
-            "id": "M1",
-            "label": "core",
-            "inputs": entry["inputs"],
-            "historical": hist,
-            "thresholds": [
-                {"name": "return", "operator": "gt", "value": 0.0, "actual": hist.get("total_return_pct")},
-                {"name": "sharpe", "operator": "gt", "value": 0.0, "actual": hist.get("sharpe")},
-                {"name": "win_rate", "operator": "gt", "value": 35.0, "actual": hist.get("win_rate_pct")},
-            ],
-            "violations": [
-                f"return {hist.get('total_return_pct')} <= 0.0" if float(hist.get("total_return_pct", 0.0)) <= 0 else None,
-                f"sharpe {hist.get('sharpe')} <= 0.0" if float(hist.get("sharpe", 0.0)) <= 0 else None,
-                f"win_rate {hist.get('win_rate_pct')} <= 35.0" if float(hist.get("win_rate_pct", 0.0)) <= 35 else None,
-            ],
-            "decision": "advance",
-        })
+        marks.append(
+            {
+                "id": "M1",
+                "label": "core",
+                "inputs": entry["inputs"],
+                "historical": hist,
+                "thresholds": [
+                    {
+                        "name": "return",
+                        "operator": "gt",
+                        "value": 0.0,
+                        "actual": hist.get("total_return_pct"),
+                    },
+                    {"name": "sharpe", "operator": "gt", "value": 0.0, "actual": hist.get("sharpe")},
+                    {"name": "win_rate", "operator": "gt", "value": 35.0, "actual": hist.get("win_rate_pct")},
+                ],
+                "violations": [
+                    f"return {hist.get('total_return_pct')} <= 0.0"
+                    if float(hist.get("total_return_pct", 0.0)) <= 0
+                    else None,
+                    f"sharpe {hist.get('sharpe')} <= 0.0" if float(hist.get("sharpe", 0.0)) <= 0 else None,
+                    f"win_rate {hist.get('win_rate_pct')} <= 35.0"
+                    if float(hist.get("win_rate_pct", 0.0)) <= 35
+                    else None,
+                ],
+                "decision": "advance",
+            }
+        )
         mark = marks[-1]
         mark["violations"] = [v for v in mark["violations"] if v]
         mark["decision"] = "reject" if mark["violations"] else "advance"
@@ -144,14 +154,16 @@ def hash_value(value: Any) -> str:
 
 
 def hash_csv(path: str) -> str:
-    return hash_value(pathlib.Path(path).read_bytes())
+    return hash_value(Path(path).read_bytes())
 
 
 def hash_response_json(payload: dict[str, Any], nonce: str = "") -> str:
     return hash_value((_bson_dumps(payload), nonce))
 
 
-def build_repro_pack(seed: int, prices: list[float], strategy_type: str, params: dict[str, int], payload_hash: str) -> dict[str, object]:
+def build_repro_pack(
+    seed: int, prices: list[float], strategy_type: str, params: dict[str, int], payload_hash: str
+) -> dict[str, object]:
     prices_hash = hash_value(prices)
     params_hash = hash_value({**params, "seed": seed})
     phantom_tag = hash_value((prices_hash, params_hash, "phantom"))[:16]
@@ -208,7 +220,7 @@ def reproducibility_metadata(
     return {
         "checkpoint": {
             "version": "repro/v2",
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
             "package": pack,
             "strategy_type": strategy_type,
             "params": params,
@@ -221,7 +233,12 @@ def reproducibility_metadata(
 
 def failure_violation_report(marks: list[dict[str, object]]) -> dict[str, object]:
     if not marks:
-        return {"violations": [], "summary": {"failure_count": 0, "failure_rate": 0.0}, "failure_regimes": [], "overall_decision": "advance"}
+        return {
+            "violations": [],
+            "summary": {"failure_count": 0, "failure_rate": 0.0},
+            "failure_regimes": [],
+            "overall_decision": "advance",
+        }
     violations: list[str] = []
     failure_counts: Counter = Counter()
     severity = Counter({"blocker": 0, "warning": 0})
@@ -230,21 +247,38 @@ def failure_violation_report(marks: list[dict[str, object]]) -> dict[str, object
         violations.extend(mark_violations)
         if mark.get("decision") == "reject":
             failure_counts[mark.get("label", mark.get("id", ""))] += 1
-            severity["blocker"] += sum(1 for item in mark.get("thresholds") or [] if item and item.get("operator") != "eq")
-    failures = [{"mark_id": m.get("id"), "rule": m.get("label"), "violations": m.get("violations") or [], "severity": "blocker" if m.get("decision") == "reject" else "warning"} for m in marks]
+            severity["blocker"] += sum(
+                1 for item in mark.get("thresholds") or [] if item and item.get("operator") != "eq"
+            )
+    [
+        {
+            "mark_id": m.get("id"),
+            "rule": m.get("label"),
+            "violations": m.get("violations") or [],
+            "severity": "blocker" if m.get("decision") == "reject" else "warning",
+        }
+        for m in marks
+    ]
     reported_mark_count = sum(failure_counts.values())
     return {
         "violations": violations,
-        "summary": {"failure_count": reported_mark_count, "failure_rate": reported_mark_count / len(marks) if marks else 0.0},
+        "summary": {
+            "failure_count": reported_mark_count,
+            "failure_rate": reported_mark_count / len(marks) if marks else 0.0,
+        },
         "failure_regimes": sorted(set(failure_counts.keys())),
         "overall_decision": "advance" if not violations else "review",
     }
 
 
 def pca_regime_persistence(regimes: list[dict[str, object]], top_k: int = 2) -> dict[str, object]:
-    mat = np.array([
-        [r.get("loss_rate_pct", 0.0), r.get("worst_drawdown_pct", 0.0), r.get("median_return_pct", 0.0)] for r in regimes
-    ], dtype=float)
+    mat = np.array(
+        [
+            [r.get("loss_rate_pct", 0.0), r.get("worst_drawdown_pct", 0.0), r.get("median_return_pct", 0.0)]
+            for r in regimes
+        ],
+        dtype=float,
+    )
     if mat.shape[0] < 2:
         return {"components": mat.tolist(), "eigenvalues": [], "top_k_explained": []}
     mat -= np.mean(mat, axis=0)

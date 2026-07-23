@@ -2,11 +2,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
-
-from app.break_test.metrics import backtest_metrics, compute_equity_curve
 
 
 @dataclass(frozen=True)
@@ -53,7 +50,9 @@ def _strategy_positions(kind: str, prices: np.ndarray, fast: int, slow: int) -> 
     raise ValueError("Unsupported strategy type")
 
 
-def _metrics(prices: np.ndarray, positions: np.ndarray, exchange_spec: object | None = None) -> dict[str, float | int]:
+def _metrics(
+    prices: np.ndarray, positions: np.ndarray, exchange_spec: object | None = None
+) -> dict[str, float | int]:
     import numpy as np
 
     px = np.asarray(prices, dtype=float)
@@ -65,6 +64,7 @@ def _metrics(prices: np.ndarray, positions: np.ndarray, exchange_spec: object | 
         costs = turnover * 2.0 / 10_000
     else:
         from app.break_test.metrics import compute_turnover_cost
+
         costs = np.asarray(compute_turnover_cost(px, pos, exchange_spec=exchange_spec))
         if costs.size != returns.size:
             costs = np.resize(costs, returns.size)
@@ -78,7 +78,9 @@ def _metrics(prices: np.ndarray, positions: np.ndarray, exchange_spec: object | 
     entries = np.flatnonzero(np.diff(pos, prepend=0.0) > 0)
     exits = np.flatnonzero(np.diff(pos, append=0.0) < 0)
     trade_returns = [
-        prices[exit_] / prices[entry] - 1 for entry, exit_ in zip(entries, exits) if exit_ > entry
+        prices[exit_] / prices[entry] - 1
+        for entry, exit_ in zip(entries, exits, strict=False)
+        if exit_ > entry
     ]
     win_rate = sum(value > 0 for value in trade_returns) / len(trade_returns) * 100 if trade_returns else 0.0
     return {

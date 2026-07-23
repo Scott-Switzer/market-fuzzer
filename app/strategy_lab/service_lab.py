@@ -5,7 +5,7 @@ from typing import Any
 
 from app.strategy_lab.dsl import Strategy
 
-_CANONICAL_EXCLUDES = {"strategy_id", "approval", "provenance", "conflict_report"}
+_CANONICAL_EXCLUDES = {"strategy_id", "approval", "provenance", "conflict_report", "is_locked"}
 
 
 def _canonical_strategy(strategy: Strategy) -> str:
@@ -17,9 +17,13 @@ def _canonical_strategy(strategy: Strategy) -> str:
 
 class ApprovalService:
     @staticmethod
-    def lock(spec: dict[str, Any], actor: str = "user") -> dict[str, Any]:
-        spec["is_locked"] = True
-        strategy = Strategy.model_validate(spec)
+    def lock(spec: Strategy | dict[str, Any], actor: str = "user") -> dict[str, Any]:
+        if isinstance(spec, Strategy):
+            spec_dict: dict[str, Any] = json.loads(json.dumps(spec.model_dump(mode="json")))
+        else:
+            spec_dict = spec
+        spec_dict["is_locked"] = True
+        strategy = Strategy.model_validate(spec_dict)
         canonical = _canonical_strategy(strategy)
         now = datetime.now(UTC).isoformat()
         approval = {

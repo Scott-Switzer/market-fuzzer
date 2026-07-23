@@ -41,6 +41,13 @@ The central reveal is simple:
 
 > A strategy can win the visible practice leaderboard but lose after hidden robustness testing.
 
+**Strategy Validation Lab path:**
+
+1. Launch the app (below) and submit a natural-language strategy to the `/compile` API.
+2. Resolve ambiguous clauses, lock the strategy with the `/approve` API.
+3. Run historical backtests, observe metrics, and review the Evidence-Linked Suggestions.
+4. Export the deterministic validation package.
+
 ## Launch
 
 ```bash
@@ -130,6 +137,24 @@ make docker-smoke
 `make verify` runs formatting, lint, typing, pytest, determinism and provenance checks, both offline smoke paths, JavaScript syntax checks, and the headless Chromium lifecycle test. The E2E test covers student practice/submission, pre-release hidden denial, instructor lock/evaluate/release, ranking reversal, released feedback, a clean browser console, and `/market-fuzzer`. `make docker-smoke` builds the real image, waits for container health, and verifies the primary page, public hidden-data boundary, and advanced route from the host.
 
 See [execution challenge contract](docs/EXECUTION_CHALLENGE.md), [architecture](docs/ARCHITECTURE.md), [five-minute judge path](docs/JUDGE_GUIDE.md), [testing](docs/TESTING.md), [performance evidence](docs/PERFORMANCE.md), [research references](docs/RESEARCH_REFERENCES.md), [Build Week provenance](docs/BUILD_WEEK_PROVENANCE.md), and [limitations](docs/LIMITATIONS.md).
+
+## Quant validation / robustness
+
+Institutional-style OOS and multiple-testing helpers live under `app/break_test/`:
+
+| Endpoint / module | Purpose |
+|-------------------|---------|
+| `POST /api/quant/oos` | Walk-forward / CPCV with deflated Sharpe |
+| `POST /api/quant/multi-test` | White Reality Check, SPA, MCS |
+| `POST /api/quant/overfit-bounds` | Flajolet–Karlin SDB + López de Prado DSB |
+| `POST /api/quant/sensitivity` | Parameter sensitivity + `rank_family` |
+| `app/break_test/metrics.py` | Bootstrap CIs (`sharpe_ci_95`, …) |
+| `app/break_test/cross_val.py` | Purged K-fold CV |
+| `app/break_test/attribution.py` | Regime / factor attribution |
+
+Related surfaces: [](/docs) · [](/openapi.json) · [](/api/quant/oos) · [](/api/quant/multi-test) · [](/api/quant/overfit-bounds) · [](/arena)
+
+OpenAPI is available at `/docs` and `/openapi.json`. Break-test sessions attach an `environment` block (`python_version`, `platform`, `git_sha`, `seed_manifest`) and support HTML/PDF export via `/api/break-test/session/{id}/export`.
 
 ## License and safety
 

@@ -15,7 +15,7 @@ from typing import Any
 
 from app.schemas import ExchangeSpec, WorldSpec
 
-from .market import Account, Exchange
+from .market import Exchange
 from .orders import CancelRequest, Order, OrderType, Side, Trade
 from .v2 import (
     CancelOrderCommandV2,
@@ -46,7 +46,9 @@ def build_run_manifest_v2(
     return RunManifestV2(
         specification_digest=spec.specification_hash(),
         strategy_artifact_digest=strategy_artifact_digest
-        or _digest({"strategy": spec.experiment.strategy, "parent": spec.experiment.parent_order.model_dump()}),
+        or _digest(
+            {"strategy": spec.experiment.strategy, "parent": spec.experiment.parent_order.model_dump()}
+        ),
         generator_bundle_digest=generator_bundle_digest
         or _digest({"bundle": "simulation-exchange-v2", "world_type": spec.world_type}),
         campaign_commitment=_digest({"world_id": spec.world_id, "seed": spec.seed}),

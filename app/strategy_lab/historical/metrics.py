@@ -244,7 +244,9 @@ class HistoricalMetricsEngine:
             if returns and bench_returns:
                 try:
                     min_len = min(len(returns), len(bench_returns))
-                    aligned = [r - br for r, br in zip(returns[:min_len], bench_returns[:min_len], strict=False)]
+                    aligned = [
+                        r - br for r, br in zip(returns[:min_len], bench_returns[:min_len], strict=False)
+                    ]
                     if aligned:
                         aligned_mean = sum(aligned) / len(aligned)
                         aligned_var = (

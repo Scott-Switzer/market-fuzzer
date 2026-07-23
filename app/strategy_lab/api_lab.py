@@ -100,42 +100,21 @@ def strategy_lab_sealed_run(body: dict[str, Any]) -> dict[str, Any]:
             "strategy lab sealed-run dependency is unavailable in the isolated server",
         )
     try:
-        from app.evaluation.sealed_v1 import HiddenParameterRangeV1
         from app.strategy_lab.campaigns.campaign_engine import (
             SealedCampaignEngineV1,
-            deterministic_world_generation,
         )
 
         payload = body if isinstance(body, dict) else {}
-        campaign_payload: dict[str, Any] = payload if any(key in payload for key in ("same_family_ids", "holdout_family_ids", "name")) else {
-            "campaign_id": payload.get("campaign_id") or payload.get("strategy_id") or "campaign-unknown",
-            "name": payload.get("name") or payload.get("strategy_name") or "Sealed campaign",
-            "description": payload.get("description") or "",
-            "same_family_ids": tuple(payload.get("same_family_ids", ["heterogeneous_agent_v1"])),
-            "holdout_family_ids": tuple(payload.get("holdout_family_ids", ["regime_switching_point_process_v1"])),
-            "worlds_per_family": int(payload.get("worlds_per_family", 1)),
-            "hidden_parameter_ranges": [
-                {
-                    "family_id": range_item.get("family_id", "heterogeneous_agent_v1"),
-                    "parameter_name": range_item["parameter_name"],
-                    "lower_bound": float(range_item["lower_bound"]),
-                    "upper_bound": float(range_item["upper_bound"]),
-                }
-                for range_item in payload.get("hidden_parameter_ranges", [])
-            ],
-            "scoring_policy_digest": _digest({"policy": "sealed-campaign-v1", "generated_at": _now_iso()}),
-        }
-        if "campaign_id" in payload:
-            campaign_payload["campaign_id"] = str(payload["campaign_id"])
-        if "name" in payload:
-            campaign_payload["name"] = str(payload["name"])
-        if "description" in payload and payload["description"] is not None:
-            campaign_payload["description"] = str(payload["description"])
-
+        campaign_payload = _coerce_campaign_payload(payload)
         engine = SealedCampaignEngineV1(failing_strategy_backend="deterministic_product_fixture")
         campaign = engine.prepare_campaign(campaign_payload)
         if payload.get("strategy_spec"):
-            engine.register_strategy_artifact({"digest": strategy_digest(payload["strategy_spec"]), "raw": redact_strategy_spec(payload["strategy_spec"])})
+            engine.register_strategy_artifact(
+                {
+                    "digest": strategy_digest(payload["strategy_spec"]),
+                    "raw": redact_strategy_spec(payload["strategy_spec"]),
+                }
+            )
         campaign = engine.deterministic_evaluation(campaign)
         campaign = engine.run_baseline_search(campaign)
         if campaign.state == "baseline" and (campaign.baseline_result or {}).get("failures"):
@@ -155,7 +134,9 @@ def strategy_lab_sealed_run(body: dict[str, Any]) -> dict[str, Any]:
         }
         if campaign.state == "confirmed_failure":
             failure_result = _public_failure_summary(campaign.targeted_search_evidence) or {}
-            best_minimization = failure_result.get("minimized_scenario") or (failure_result.get("first_failure_scenario") or {})
+            best_minimization = failure_result.get("minimized_scenario") or (
+                failure_result.get("first_failure_scenario") or {}
+            )
             result["minimization"] = {
                 "minimized_scenario": best_minimization,
                 "suggestions": [
@@ -168,8 +149,48 @@ def strategy_lab_sealed_run(body: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(500, f"sealed run failed: {exc}") from exc
 
 
+def _coerce_campaign_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    has_all_families = all(key in payload for key in ("same_family_ids", "holdout_family_ids"))
+    if has_all_families:
+        coerced = dict(payload)
+    else:
+        coerced = {
+            "campaign_id": payload.get("campaign_id") or payload.get("strategy_id") or "campaign-unknown",
+            "name": payload.get("name") or payload.get("strategy_name") or "Sealed campaign",
+            "description": payload.get("description") or "",
+            "same_family_ids": list(payload.get("same_family_ids", ["heterogeneous_agent_v1"])),
+            "holdout_family_ids": list(
+                payload.get("holdout_family_ids", ["regime_switching_point_process_v1"])
+            ),
+            "worlds_per_family": int(payload.get("worlds_per_family", 1)),
+            "hidden_parameter_ranges": [
+                {
+                    "family_id": range_item.get("family_id", "heterogeneous_agent_v1"),
+                    "parameter_name": str(range_item["parameter_name"]),
+                    "lower_bound": float(range_item["lower_bound"]),
+                    "upper_bound": float(range_item["upper_bound"]),
+                }
+                for range_item in payload.get("hidden_parameter_ranges", [])
+            ],
+        }
+    if "same_family_ids" in coerced:
+        coerced["same_family_ids"] = tuple(coerced["same_family_ids"])
+    if "holdout_family_ids" in coerced:
+        coerced["holdout_family_ids"] = tuple(coerced["holdout_family_ids"])
+    if "campaign_id" in coerced:
+        coerced["campaign_id"] = str(coerced["campaign_id"])
+    if "name" in coerced:
+        coerced["name"] = str(coerced["name"])
+    description = coerced.get("description")
+    if description is not None and not isinstance(description, str):
+        coerced["description"] = str(description)
+    coerced["scoring_policy_digest"] = _digest({"policy": "sealed-campaign-v1", "generated_at": _now_iso()})
+    return coerced
+
+
 def _now_iso() -> str:
     from datetime import UTC, datetime
+
     return datetime.now(UTC).isoformat()
 
 
@@ -179,7 +200,14 @@ def _digest(value: object) -> str:
 
 def redact_strategy_spec(spec: dict[str, Any]) -> dict[str, Any]:
     redacted = copy.deepcopy(spec)
-    hidden_keys = {"family_id", "holdout_family_ids", "same_family_ids", "hidden_parameter_ranges", "parameter_overrides", "seed"}
+    hidden_keys = {
+        "family_id",
+        "holdout_family_ids",
+        "same_family_ids",
+        "hidden_parameter_ranges",
+        "parameter_overrides",
+        "seed",
+    }
     if isinstance(redacted, dict):
         redacted = {key: ("***" if key in hidden_keys else value) for key, value in redacted.items()}
     return redacted
@@ -194,7 +222,9 @@ def _collect_warnings(campaign) -> list[str]:
     warnings: list[str] = []
     try:
         if campaign.failure_confirmation and campaign.failure_confirmation.get("failure_rate"):
-            warnings.append("sealed campaign confirmed at least one failing evaluation; results are not a production guarantee.")
+            warnings.append(
+                "sealed campaign confirmed at least one failing evaluation; results are not a production guarantee."
+            )
         if campaign.targeted_search_evidence and campaign.targeted_search_evidence.get("stage") == "targeted":
             warnings.append("targeted search explored stress neighbors around failure boundaries.")
     except Exception:

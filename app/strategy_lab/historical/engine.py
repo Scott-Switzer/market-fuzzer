@@ -4,9 +4,8 @@ import dataclasses
 import hashlib
 import json
 from dataclasses import dataclass
-from io import BinaryIO
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 import numpy as np
 
@@ -41,7 +40,7 @@ class BacktestReport:
     metrics: dict[str, Any]
     equity_curve: list[float]
     trade_log: list[dict[str, Any]]
-    positions: list[PositionSnapshot]
+    positions: list[dict[str, Any]]
     cost_summary: dict[str, Any]
 
 
@@ -204,15 +203,12 @@ def run_historical_backtest(
 ) -> BacktestReport:
     contract = _validate_contract(contract)
 
-    if (
-        isinstance(prices, (list, tuple))
-        and not hasattr(prices, "read")
-        and not hasattr(prices, "expanduser")
-    ):
-        if prices and isinstance(prices[0], (list, tuple)):
-            prices = [list(map(float, item)) for item in prices]
-        else:
-            prices = [list(map(float, prices))] if prices else []
+    if prices is None:
+        prices = []
+    elif prices and isinstance(prices[0], (list, tuple)):
+        prices = [[float(x) for x in item] for item in prices]  # type: ignore[union-attr]
+    else:
+        prices = [[float(x) for x in prices]] if prices else []  # type: ignore[arg-type]
 
     provider = data_provider
     if provider is None and upload_payload is not None:
@@ -222,20 +218,20 @@ def run_historical_backtest(
         if upload_payload is None:
             raise ValueError("upload_payload must be provided when data_provider='upload'")
         load_contract = upload_contract or contract
-        result = HistoricalCsvUploadAdapter.load(upload_payload, contract=load_contract)
-        if not result.loaded:
-            raise ValueError("CSV upload adapter failed: " + "; ".join(result.errors))
-        prices = [result.prices_by_asset[asset] for asset in sorted(result.prices_by_asset)]
+        upload_result = HistoricalCsvUploadAdapter.load(upload_payload, contract=load_contract)
+        if not upload_result.loaded:
+            raise ValueError("CSV upload adapter failed: " + "; ".join(upload_result.errors))
+        prices = [upload_result.prices_by_asset[asset] for asset in sorted(upload_result.prices_by_asset)]
         contract = dataclasses.replace(
-            result.contract, provenance=dict(contract.provenance, **result.contract.provenance)
+            upload_result.contract, provenance=dict(contract.provenance, **upload_result.contract.provenance)
         )
     elif provider == "fenrix":
-        result = FenrixHistoricalAdapter.load()
-        if not result.loaded:
-            raise ValueError("Fenrix adapter failed: " + "; ".join(result.errors))
-        prices = [frame["prices"] for frame in result.price_frames.values()]
+        fenrix_result = FenrixHistoricalAdapter.load()
+        if not fenrix_result.loaded:
+            raise ValueError("Fenrix adapter failed: " + "; ".join(fenrix_result.errors))
+        prices = [frame["prices"] for frame in fenrix_result.price_frames.values()]
         contract = dataclasses.replace(
-            contract, provenance=dict(contract.provenance, fenrix=result.provenance)
+            contract, provenance=dict(contract.provenance, fenrix=fenrix_result.provenance)
         )
     else:
         if prices is None:

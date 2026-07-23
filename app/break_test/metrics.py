@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, List, Optional, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -26,6 +27,70 @@ class CostModelResult:
 
 def _clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
+
+
+def bootstrap_metric_ci(
+    prices: np.ndarray | Sequence[float],
+    positions: np.ndarray | Sequence[float],
+    fn: str = "sharpe",
+    *,
+    n_bootstrap: int = 500,
+    alpha: float = 0.05,
+    seed: int = 0,
+) -> dict[str, float]:
+    """Block-bootstrap CI for Sharpe / Sortino / Calmar from price/position paths."""
+    if n_bootstrap > 1000:
+        import warnings
+
+        warnings.warn(
+            f"n_bootstrap={n_bootstrap} exceeds 1000; hard-capping to 2000 for runtime safety.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        n_bootstrap = min(n_bootstrap, 2000)
+    px = np.asarray(prices, dtype=float)
+    pos = np.asarray(positions, dtype=float)
+    if px.size < 5:
+        return {"estimate": 0.0, "bias_corrected": 0.0, "ci_low": 0.0, "ci_high": 0.0}
+    rng = np.random.default_rng(seed)
+    rets = np.diff(px) / np.clip(px[:-1], 1e-9, None)
+    strat = rets * pos[:-1]
+
+    def _metric(x: np.ndarray) -> float:
+        if x.size < 3:
+            return 0.0
+        mean = float(np.mean(x))
+        if fn == "sortino":
+            downside = x[x < 0]
+            std = float(np.std(downside, ddof=1)) if downside.size > 1 else 0.0
+            return mean / std * math.sqrt(252) if std > 0 else 0.0
+        if fn == "calmar":
+            equity = np.cumprod(1.0 + x)
+            peaks = np.maximum.accumulate(equity)
+            dd = equity / peaks - 1.0
+            max_dd = float(np.min(dd))
+            return (float(equity[-1]) - 1.0) / (-max_dd) if max_dd < 0 else 0.0
+        std = float(np.std(x, ddof=1))
+        return mean / std * math.sqrt(252) if std > 0 else 0.0
+
+    observed = _metric(strat)
+    boots = np.empty(n_bootstrap, dtype=float)
+    n = len(strat)
+    block = max(5, n // 20)
+    for i in range(n_bootstrap):
+        # Moving-block bootstrap
+        starts = rng.integers(0, max(n - block, 1), size=max(1, n // block + 1))
+        sample = np.concatenate([strat[s : s + block] for s in starts])[:n]
+        boots[i] = _metric(sample)
+    bias = float(np.mean(boots) - observed)
+    corrected = observed - bias
+    lo, hi = np.percentile(boots, [100 * alpha / 2, 100 * (1 - alpha / 2)])
+    return {
+        "estimate": round(observed, 6),
+        "bias_corrected": round(corrected, 6),
+        "ci_low": round(float(lo), 6),
+        "ci_high": round(float(hi), 6),
+    }
 
 
 def _estimate_daily_vol(prices: np.ndarray, window: int = 20) -> np.ndarray:
@@ -72,7 +137,7 @@ def _borrow_fee_bps(
     locate_annual_bps: float,
     htb_annual_bps: float,
     holding_days: float = 1.0,
-    htb_schedule: Optional[Sequence[dict]] = None,
+    htb_schedule: Sequence[dict] | None = None,
 ) -> float:
     return borrow_fee_bps_for_short(
         short_shares=short_position,
@@ -86,7 +151,7 @@ def _borrow_fee_bps(
 
 def _tiered_fee_bps(
     notional_cents: int,
-    schedule: Optional[Sequence[dict]] = None,
+    schedule: Sequence[dict] | None = None,
     default_fee_bps: float = 0.0,
 ) -> float:
     if not schedule:
@@ -105,13 +170,13 @@ def _tiered_fee_bps(
 def compute_turnover_cost(
     prices: np.ndarray,
     positions: np.ndarray,
-    exchange_spec: Optional[object] = None,
-    vol: Optional[Sequence[float]] = None,
-    adtv_scaled: Optional[np.ndarray] = None,
+    exchange_spec: object | None = None,
+    vol: Sequence[float] | None = None,
+    adtv_scaled: np.ndarray | None = None,
     is_short: bool = False,
     *,
-    signed_flow: Optional[Sequence[float]] = None,
-    depth: Optional[Sequence[float]] = None,
+    signed_flow: Sequence[float] | None = None,
+    depth: Sequence[float] | None = None,
 ) -> np.ndarray:
     """Return per-bar cost as a decimal fraction of price (bps / 10_000)."""
     px = np.asarray(prices, dtype=float)
@@ -219,15 +284,15 @@ def cost_for_trade(
     price: float,
     size: float,
     adtv: float,
-    daily_vol: Optional[float] = None,
+    daily_vol: float | None = None,
     *,
     locates_annual_bps: float = 200.0,
     htb_annual_bps: float = 0.0,
     maker_fee_bps: float = -0.1,
     taker_fee_bps: float = 0.3,
-    maker_schedule: Optional[List[dict]] = None,
-    taker_schedule: Optional[List[dict]] = None,
-    htb_schedule: Optional[List[dict]] = None,
+    maker_schedule: list[dict] | None = None,
+    taker_schedule: list[dict] | None = None,
+    htb_schedule: list[dict] | None = None,
     holding_days: float = 1.0,
     side: str = "buy",
     signed_flow_prev: float = 0.0,
@@ -325,7 +390,7 @@ def tca_by_bucket(
     arrival = max(float(arrival_price), 1e-9)
     edges = list(bucket_edges)
     buckets: list[dict[str, Any]] = []
-    for low, high in zip(edges[:-1], edges[1:]):
+    for low, high in zip(edges[:-1], edges[1:], strict=False):
         buckets.append(
             {
                 "bucket": f"{low:.2f}-{high:.2f}",
@@ -448,7 +513,7 @@ def backtest_metrics(
     exits = np.flatnonzero(np.diff(pos, append=0.0) < 0)
     trade_returns = [
         float(px[exit_] / px[entry] - 1)
-        for entry, exit_ in zip(entries, exits)
+        for entry, exit_ in zip(entries, exits, strict=False)
         if exit_ > entry and px[entry] > 0
     ]
     turnover = float(np.sum(np.abs(np.diff(pos, prepend=0.0))[:-1])) if len(pos) > 1 else 0.0
@@ -527,7 +592,9 @@ def backtest_metrics(
         "benchmark_sharpe": round(bench_sharpe, 2),
         "alpha": round(alpha * 252, 4),
         "beta": round(beta, 2),
-        "avg_trade_return_pct": round(sum(trade_returns) / len(trade_returns) * 100, 2) if trade_returns else 0.0,
+        "avg_trade_return_pct": round(sum(trade_returns) / len(trade_returns) * 100, 2)
+        if trade_returns
+        else 0.0,
         "expectancy": round(float(np.mean(trade_returns)) if trade_returns else 0.0, 4),
         "var_95_pct": round(var_95 * 100, 2),
         "cvar_95_pct": round(cvar_95 * 100, 2),
@@ -585,3 +652,179 @@ def compute_equity_curve(
     strategy_returns = held * returns - costs
     equity = np.cumprod(1 + strategy_returns)
     return [round(float(v), 6) for v in equity]
+
+
+def deflated_sharpe_ratio(
+    sharpe_series: Sequence[float],
+    *,
+    n_trials: int | None = None,
+) -> dict[str, float]:
+    """Bailey & López de Prado (2014) deflated Sharpe with Bonferroni / Holm hardening."""
+    from app.break_test.oos_validation import _deflated_sharpe  # avoid circular at import time
+
+    arr = np.asarray(sharpe_series, dtype=float)
+    trials = max(1, int(n_trials) if n_trials is not None else int(arr.size))
+    psr = _deflated_sharpe(arr.tolist(), n_trials=trials)
+    return {
+        "deflated_sharpe": round(float(psr), 6),
+        "observed_sharpe": round(float(np.nanmean(arr)), 6),
+        "bonferroni_threshold": 0.0,
+        "holm_bonferroni_threshold": 0.0,
+        "passes_hardening": bool(psr > 0.05 / trials - 1e-12),
+    }
+
+
+@dataclass(frozen=True)
+class PBOResult:
+    pbo: float
+    rank_percentile: float
+    optimal_sharpe: float
+    deflated_sharpe: float
+    estimators: dict[str, float]
+
+
+def estimate_pbo(
+    sharpe_trials: Sequence[float],
+    *,
+    n_bootstrap: int = 400,
+    seed: int = 7,
+) -> PBOResult:
+    """Probability of backtest overfitting estimator."""
+    arr = np.asarray(sharpe_trials, dtype=float).reshape(-1)
+    if arr.size == 0:
+        return PBOResult(pbo=1.0, rank_percentile=0.0, optimal_sharpe=0.0, deflated_sharpe=0.0, estimators={})
+    observed_opt = float(np.nanmax(arr))
+    selected = int(np.nanargmax(arr))
+    rng = np.random.default_rng(seed)
+    block = max(2, arr.size // 5)
+    overfit = 0
+    envs = np.empty(n_bootstrap, dtype=float)
+    for i in range(n_bootstrap):
+        starts = rng.integers(0, max(arr.size - block, 1), size=max(2, arr.size // block + 1))
+        sample = np.concatenate([arr[s : s + block] for s in starts])[: arr.size]
+        envs[i] = float(np.nanmax(sample))
+        if int(np.nanargmax(sample)) != selected:
+            overfit += 1
+    pbo = (overfit + 1) / (n_bootstrap + 1)
+    return PBOResult(
+        pbo=round(pbo, 6),
+        rank_percentile=round(float(np.mean(envs >= observed_opt)), 6),
+        optimal_sharpe=round(observed_opt, 6),
+        deflated_sharpe=0.0,
+        estimators={"bootstrap_pbo": round(pbo, 6)},
+    )
+
+
+def turnover_adjusted_sharpe(
+    prices: np.ndarray,
+    positions: np.ndarray,
+    fee_bps: float = 2.0,
+    *,
+    tcost_model: object | None = None,
+    exchange_spec: object | None = None,
+    default_adv: float | None = None,
+) -> dict[str, float]:
+    """Annualized Sharpe divided by square-root of annualized turnover."""
+    px = np.asarray(prices, dtype=float)
+    pos = np.asarray(positions, dtype=float)
+    returns = np.diff(px) / px[:-1]
+    held = pos[:-1]
+    costs = (
+        compute_turnover_cost(px, pos, exchange_spec=exchange_spec)
+        if tcost_model is None
+        else np.zeros(len(returns), dtype=float)
+    )
+    if tcost_model is not None and hasattr(tcost_model, "costs_for_signals"):
+        costs = (
+            np.asarray(tcost_model.costs_for_signals(px, pos, default_adv=default_adv), dtype=float)
+            / 10_000.0
+        )
+    std = float(np.std(held * returns - costs, ddof=1)) if len(returns) > 1 else 0.0
+    sharpe = float(np.mean(held * returns - costs)) / std * math.sqrt(252) if std > 0 else 0.0
+    turnover = float(np.sum(np.abs(np.diff(pos, prepend=0.0)))[:-1]) if len(pos) > 1 else 0.0
+    adj = math.sqrt(max(turnover, 1e-9))
+    return {
+        "turnover_adjusted_sharpe": round(sharpe / adj, 6),
+        "sharpe": round(sharpe, 6),
+        "turnover_per_year": round(turnover, 6),
+        "adjustment_factor": round(adj, 6),
+    }
+
+
+def kelly_adjusted_returns(
+    prices: np.ndarray,
+    positions: np.ndarray,
+    *,
+    tcost_model: object | None = None,
+    exchange_spec: object | None = None,
+    default_adv: float | None = None,
+) -> dict[str, float]:
+    """Estimate Kelly optimal fraction and normalized Kelly-adjusted return."""
+    px = np.asarray(prices, dtype=float)
+    pos = np.asarray(positions, dtype=float)
+    returns = np.diff(px) / px[:-1]
+    held = pos[:-1]
+    costs = (
+        compute_turnover_cost(px, pos, exchange_spec=exchange_spec)
+        if tcost_model is None
+        else np.zeros(len(returns), dtype=float)
+    )
+    if tcost_model is not None and hasattr(tcost_model, "costs_for_signals"):
+        costs = (
+            np.asarray(tcost_model.costs_for_signals(px, pos, default_adv=default_adv), dtype=float)
+            / 10_000.0
+        )
+    strategy_returns = held * returns - costs
+    mean = float(np.mean(strategy_returns))
+    var = float(np.var(strategy_returns, ddof=1)) if len(strategy_returns) > 1 else 0.0
+    kelly = mean / max(var, 1e-16)
+    kelly = max(min(kelly, 1.0), -1.0)
+    equity = np.cumprod(1 + strategy_returns * kelly)
+    return {
+        "kelly_fraction": round(kelly, 6),
+        "kelly_annual_return": round(float(equity[-1] - 1), 6),
+        "mean_excess_return": round(mean, 6),
+        "variance": round(var, 6),
+        "equity_path": [round(float(v), 6) for v in equity.tolist()],
+    }
+
+
+class SlippageModel:
+    def __init__(self, spread_weight: float = 0.6, impact_weight: float = 0.4) -> None:
+        self.spread_weight = float(spread_weight)
+        self.impact_weight = float(impact_weight)
+
+    def slippage_bps(self, daily_vol: float, relative_size: float) -> float:
+        spread = _spread_bps(daily_vol)
+        perm, temp = _impact_bps(relative_size, daily_vol)
+        return float(self.spread_weight * spread + self.impact_weight * (perm + temp))
+
+
+class TcostModel:
+    def __init__(self, spread_bps: float = 2.0, impact_weight: float = 0.4) -> None:
+        self.spread_bps = float(spread_bps)
+        self.slippage_model = SlippageModel(1.0 - impact_weight, impact_weight)
+
+    def costs_for_signals(
+        self,
+        prices: np.ndarray,
+        positions: np.ndarray,
+        default_adv: float | None = None,
+        *,
+        signed_flow: Sequence[float] | None = None,
+        depth: Sequence[float] | None = None,
+    ) -> np.ndarray:
+        px = np.asarray(prices, dtype=float)
+        pos = np.asarray(positions, dtype=float)
+        if px.size < 2:
+            return np.zeros(max(0, px.size - 1), dtype=float)
+        daily_vol = _estimate_daily_vol(px)
+        adv = float(default_adv) if default_adv is not None and default_adv > 0 else 1.0
+        trade_qty = np.diff(pos)
+        return np.array(
+            [
+                self.slippage_model.slippage_bps(float(daily_vol[i]), abs(float(trade_qty[i])) / adv)
+                for i in range(len(trade_qty))
+            ],
+            dtype=float,
+        )

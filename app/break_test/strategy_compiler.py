@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
 
@@ -9,41 +8,89 @@ class StrategyCompiler:
         (
             "pairs_relative_value",
             (
-                "pairs trade", "pair trade", "relative value", "spread between", "z-score spread",
-                "cointegration", "convergence", "divergence", "two assets", "two symbols",
-                "hedged pair", "statistical arbitrage pair", "ratio", "long one short the other",
-                "market neutral pair", "paired", "pairing",
+                "pairs trade",
+                "pair trade",
+                "relative value",
+                "spread between",
+                "z-score spread",
+                "cointegration",
+                "convergence",
+                "divergence",
+                "two assets",
+                "two symbols",
+                "hedged pair",
+                "statistical arbitrage pair",
+                "ratio",
+                "long one short the other",
+                "market neutral pair",
+                "paired",
+                "pairing",
             ),
         ),
         (
             "volatility_compression",
             (
-                "volatility compression", "low volatility", "tight range", "coil", "squeeze",
-                "bollinger contraction", "narrowing band", "range compression", "quiet before",
-                "breakout from tight range", "low atr", "compress",
+                "volatility compression",
+                "low volatility",
+                "tight range",
+                "coil",
+                "squeeze",
+                "bollinger contraction",
+                "narrowing band",
+                "range compression",
+                "quiet before",
+                "breakout from tight range",
+                "low atr",
+                "compress",
             ),
         ),
         (
             "breakout_follow",
             (
-                "breakout", "new high", "recent high", "breaks above", "break above", "entry",
-                "breakout pullback", "range breakout", "channel breakout",
+                "breakout",
+                "new high",
+                "recent high",
+                "breaks above",
+                "break above",
+                "entry",
+                "breakout pullback",
+                "range breakout",
+                "channel breakout",
             ),
         ),
         (
             "trending_momentum",
             (
-                "trend", "moving average", "momentum", "follow", "above",
-                "crosses above", "rising", "directional", "trend following", "higher highs",
+                "trend",
+                "moving average",
+                "momentum",
+                "follow",
+                "above",
+                "crosses above",
+                "rising",
+                "directional",
+                "trend following",
+                "higher highs",
                 "price above average",
             ),
         ),
         (
             "mean_reversion",
             (
-                "mean reversion", "oversold", "overbought", "bounce", "revert", "return to normal",
-                "drops and rises", "reversal", "fades", "extreme", "overextended", "bollinger band",
-                "deviates", "mean revert",
+                "mean reversion",
+                "oversold",
+                "overbought",
+                "bounce",
+                "revert",
+                "return to normal",
+                "drops and rises",
+                "reversal",
+                "fades",
+                "extreme",
+                "overextended",
+                "bollinger band",
+                "deviates",
+                "mean revert",
             ),
         ),
     ]
@@ -52,7 +99,8 @@ class StrategyCompiler:
 
     _TEMPLATES: dict[str, str] = {
         "trending_momentum": (
-            _PREFIX + """prices = np.array([obs.get("mid_ticks", obs.get("close", 100)) for obs in observations], dtype=float)
+            _PREFIX
+            + """prices = np.array([obs.get("mid_ticks", obs.get("close", 100)) for obs in observations], dtype=float)
     fast = int(params.get("fast", 20))
     slow = int(params.get("slow", 50))
     if len(prices) < slow:
@@ -77,7 +125,8 @@ class StrategyCompiler:
 """
         ),
         "mean_reversion": (
-            _PREFIX + """prices = np.array([obs.get("mid_ticks", obs.get("close", 100)) for obs in observations], dtype=float)
+            _PREFIX
+            + """prices = np.array([obs.get("mid_ticks", obs.get("close", 100)) for obs in observations], dtype=float)
     lookback = int(params.get("lookback", 20))
     threshold = float(params.get("threshold", 1.5))
     actions = []
@@ -102,7 +151,8 @@ class StrategyCompiler:
 """
         ),
         "breakout_follow": (
-            _PREFIX + """prices = np.array([obs.get("mid_ticks", obs.get("close", 100)) for obs in observations], dtype=float)
+            _PREFIX
+            + """prices = np.array([obs.get("mid_ticks", obs.get("close", 100)) for obs in observations], dtype=float)
     lookback = int(params.get("lookback", 20))
     hold = int(params.get("hold", 10))
     actions = []
@@ -126,7 +176,8 @@ class StrategyCompiler:
 """
         ),
         "volatility_compression": (
-            _PREFIX + """prices = np.array([obs.get("mid_ticks", obs.get("close", 100)) for obs in observations], dtype=float)
+            _PREFIX
+            + """prices = np.array([obs.get("mid_ticks", obs.get("close", 100)) for obs in observations], dtype=float)
     lookback = int(params.get("lookback", 40))
     low_vol = float(params.get("low_vol", 0.6))
     exit_bars = int(params.get("exit_bars", 12))
@@ -161,7 +212,8 @@ class StrategyCompiler:
 """
         ),
         "pairs_relative_value": (
-            _PREFIX + """symbol_a_prices = np.array([obs.get("mid_ticks", obs.get("close", 100)) for obs in observations], dtype=float)
+            _PREFIX
+            + """symbol_a_prices = np.array([obs.get("mid_ticks", obs.get("close", 100)) for obs in observations], dtype=float)
     symbol_b_prices = np.array([obs.get("pair_mid_ticks", symbol_a_prices[i]) for i, obs in enumerate(observations)], dtype=float)
     lookback = int(params.get("lookback", 40))
     z_entry = float(params.get("z_entry", 1.8))
@@ -224,9 +276,7 @@ class StrategyCompiler:
                 {"name": "fast", "source": "params.fast", "type": "int", "default": 20},
                 {"name": "slow", "source": "params.slow", "type": "int", "default": 50},
             ],
-            "outputs": [
-                {"name": "actions", "type": "list[dict]", "length": "len(observations)"}
-            ],
+            "outputs": [{"name": "actions", "type": "list[dict]", "length": "len(observations)"}],
             "expected_observations": [
                 "Long-biased signals in uptrends when fast MA > slow MA.",
                 "Position flips to flat when fast MA crosses below slow MA.",
@@ -240,9 +290,7 @@ class StrategyCompiler:
                 {"name": "lookback", "source": "params.lookback", "type": "int", "default": 20},
                 {"name": "threshold", "source": "params.threshold", "type": "float", "default": 1.5},
             ],
-            "outputs": [
-                {"name": "actions", "type": "list[dict]", "length": "len(observations)"}
-            ],
+            "outputs": [{"name": "actions", "type": "list[dict]", "length": "len(observations)"}],
             "expected_observations": [
                 "No action until a full lookback window is available.",
                 "Buy when z-score is deeply negative; sell when deeply positive.",
@@ -256,9 +304,7 @@ class StrategyCompiler:
                 {"name": "lookback", "source": "params.lookback", "type": "int", "default": 20},
                 {"name": "hold", "source": "params.hold", "type": "int", "default": 10},
             ],
-            "outputs": [
-                {"name": "actions", "type": "list[dict]", "length": "len(observations)"}
-            ],
+            "outputs": [{"name": "actions", "type": "list[dict]", "length": "len(observations)"}],
             "expected_observations": [
                 "Signal only after lookback bars are available.",
                 "Entry on new high breakout, then fixed holding period.",
@@ -273,9 +319,7 @@ class StrategyCompiler:
                 {"name": "low_vol", "source": "params.low_vol", "type": "float", "default": 0.6},
                 {"name": "exit_bars", "source": "params.exit_bars", "type": "int", "default": 12},
             ],
-            "outputs": [
-                {"name": "actions", "type": "list[dict]", "length": "len(observations)"}
-            ],
+            "outputs": [{"name": "actions", "type": "list[dict]", "length": "len(observations)"}],
             "expected_observations": [
                 "Waits for realized volatility to compress below a threshold.",
                 "Enters long briefly, then exits after a fixed timer.",
@@ -291,9 +335,7 @@ class StrategyCompiler:
                 {"name": "z_entry", "source": "params.z_entry", "type": "float", "default": 1.8},
                 {"name": "z_exit", "source": "params.z_exit", "type": "float", "default": 0.4},
             ],
-            "outputs": [
-                {"name": "actions", "type": "list[dict]", "length": "len(observations)"}
-            ],
+            "outputs": [{"name": "actions", "type": "list[dict]", "length": "len(observations)"}],
             "expected_observations": [
                 "Requires pair_mid_ticks in each observation; otherwise falls back to a single-symbol degenerate case.",
                 "Uses log-spread z-score with rolling mean/std.",
@@ -368,7 +410,9 @@ def available_templates() -> dict[str, dict[str, object]]:
             "meta_key": StrategyCompiler._TEMPLATE_META.get(key, {}).get("meta_key", key),
             "inputs": StrategyCompiler._TEMPLATE_META.get(key, {}).get("inputs", []),
             "outputs": StrategyCompiler._TEMPLATE_META.get(key, {}).get("outputs", []),
-            "expected_observations": StrategyCompiler._TEMPLATE_META.get(key, {}).get("expected_observations", []),
+            "expected_observations": StrategyCompiler._TEMPLATE_META.get(key, {}).get(
+                "expected_observations", []
+            ),
         }
         for key in StrategyCompiler._TEMPLATES
     }

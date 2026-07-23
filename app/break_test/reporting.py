@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import json
-import math
-from typing import Any, cast
+from typing import cast
 
 
 def _f(v: object) -> float:
@@ -34,9 +33,31 @@ def build_failure_report(
         return {
             "strategy": {"type": strategy_type, "parameters": params},
             "baseline": historical,
-            "forward_test": {"total_worlds": 0, "overall_loss_rate_pct": 0.0, "regimes": [], "stats": {"strongest_regime": "N/A", "high_loss_regimes": 0, "acceptable_regimes": 0, "median_regime_loss_pct": 0.0, "median_worst_drawdown_pct": 0.0}},
+            "forward_test": {
+                "total_worlds": 0,
+                "overall_loss_rate_pct": 0.0,
+                "regimes": [],
+                "stats": {
+                    "strongest_regime": "N/A",
+                    "high_loss_regimes": 0,
+                    "acceptable_regimes": 0,
+                    "median_regime_loss_pct": 0.0,
+                    "median_worst_drawdown_pct": 0.0,
+                },
+            },
             "failure_summary": "No completed forward-test worlds were produced, so no regime-level failure pattern could be assessed.",
-            "failure_analysis": {"regime_breakdowns": [], "pattern": "insufficient_data", "vulnerability_type": "insufficient_data", "historical_context": {"return_robustness": "Unknown", "regime_coverage": "Insufficient", "risk_profile": "Unknown", "base_drawdown": f"{abs(float(historical.get('max_drawdown_pct', 0.0))):.2f}%"}, "segmentation_insights": {}},
+            "failure_analysis": {
+                "regime_breakdowns": [],
+                "pattern": "insufficient_data",
+                "vulnerability_type": "insufficient_data",
+                "historical_context": {
+                    "return_robustness": "Unknown",
+                    "regime_coverage": "Insufficient",
+                    "risk_profile": "Unknown",
+                    "base_drawdown": f"{abs(float(historical.get('max_drawdown_pct', 0.0))):.2f}%",
+                },
+                "segmentation_insights": {},
+            },
             "correction_suggestion": "Increase worlds_per_regime, extend simulation duration, or widen execution/adjustment parameters so completed worlds are produced.",
             "limitations": "Synthetic regimes are diagnostic models, not forecasts. Results depend on the uploaded data and include a 2 bps turnover cost assumption.",
         }
@@ -73,9 +94,7 @@ def build_failure_report(
             "strongest_regime": strongest["regime"],
             "high_loss_regimes": len(high_loss_regimes),
             "acceptable_regimes": len(forward_results) - len(high_loss_regimes),
-            "median_regime_loss_pct": round(
-                _median([_f(r["loss_rate_pct"]) for r in forward_results]), 1
-            ),
+            "median_regime_loss_pct": round(_median([_f(r["loss_rate_pct"]) for r in forward_results]), 1),
             "median_worst_drawdown_pct": median_drawdown,
         },
     }
@@ -137,7 +156,11 @@ def _build_failure_analysis(
         "pattern": pattern,
         "vulnerability_type": vulnerability_type,
         "historical_context": {
-            "return_robustness": "Strong" if hist_return > 15 and hist_sharpe > 1.0 else "Moderate" if hist_return > 5 else "Weak",
+            "return_robustness": "Strong"
+            if hist_return > 15 and hist_sharpe > 1.0
+            else "Moderate"
+            if hist_return > 5
+            else "Weak",
             "regime_coverage": "Acceptable" if len(forward_results) >= 4 else "Insufficient",
             "risk_profile": "High turnover" if _f(historical.get("turnover", 0.0)) > 5 else "Moderate",
             "base_drawdown": f"{abs(hist_drawdown):.2f}%",
@@ -154,7 +177,9 @@ def _build_failure_analysis(
 
 def _classify_regime_pattern(forward_results: list[dict[str, object]]) -> str:
     volatile_regimes = [
-        r for r in forward_results if r["regime"] in ("High Volatility", "Sudden Selloff", "Sideways & Choppy")
+        r
+        for r in forward_results
+        if r["regime"] in ("High Volatility", "Sudden Selloff", "Sideways & Choppy")
     ]
     if not volatile_regimes:
         return "Unknown"
@@ -250,9 +275,23 @@ def _suggest_correction(
         return {
             "rationale": "No completed forward-test worlds were produced, so no failure pattern could be assessed.",
             "alternatives": [
-                {"label": "Increase worlds_per_regime", "parameter_changes": {"worlds_per_regime": max(10, params.get("worlds_per_regime", 10) + 10)}, "reason": "More worlds increase the chance of completed simulations across all regimes."},
-                {"label": "Extend simulation duration", "parameter_changes": {"minutes": max(30, params.get("minutes", 30) + 30)}, "reason": "Longer duration gives execution bridges more steps to produce trade sequences."},
-                {"label": "Reduce slippage assumptions", "parameter_changes": {"impact_mode": "fixed", "spread_bps": 1}, "reason": "Lower synthetic cost pressure allows more worlds to complete with positive return."},
+                {
+                    "label": "Increase worlds_per_regime",
+                    "parameter_changes": {
+                        "worlds_per_regime": max(10, params.get("worlds_per_regime", 10) + 10)
+                    },
+                    "reason": "More worlds increase the chance of completed simulations across all regimes.",
+                },
+                {
+                    "label": "Extend simulation duration",
+                    "parameter_changes": {"minutes": max(30, params.get("minutes", 30) + 30)},
+                    "reason": "Longer duration gives execution bridges more steps to produce trade sequences.",
+                },
+                {
+                    "label": "Reduce slippage assumptions",
+                    "parameter_changes": {"impact_mode": "fixed", "spread_bps": 1},
+                    "reason": "Lower synthetic cost pressure allows more worlds to complete with positive return.",
+                },
             ],
         }
     weakest = max(forward_results, key=lambda r: _f(r["loss_rate_pct"]))
