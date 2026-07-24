@@ -164,9 +164,20 @@ def _normalize_yf(df, tickers, start, end, key) -> tuple[MarketDataPanel, dict[s
 
     benchmark = None
     if "SPY" in assets:
-        benchmark = close[:, assets.index("SPY")].copy()
+        spy_j = assets.index("SPY")
+        benchmark = close[:, spy_j].copy()
+        # SPY is the benchmark only — remove it from the TRADABLE universe so the
+        # cross-sectional strategy never selects it as a position.
+        keep = [j for j in range(N) if j != spy_j]
+        assets = [assets[j] for j in keep]
+        open_ = open_[:, keep]
+        high = high[:, keep]
+        low = low[:, keep]
+        close = close[:, keep]
+        volume = volume[:, keep]
+        N = len(assets)
 
-    metadata = {a: AssetMetadata(ticker=a, is_benchmark=(a == "SPY")) for a in assets}
+    metadata = {a: AssetMetadata(ticker=a, is_benchmark=False) for a in assets}
     provenance = DataProvenance(
         source="yfinance",
         tier=2,
@@ -239,8 +250,16 @@ def _load_cache(key: str) -> MarketDataPanel:
     # reconstruct a minimal valid panel (open=high=low=close for cache reload;
     # acceptable because we only need close + benchmark for the historical demo)
     placeholder = close.copy()
-    benchmark = close[:, assets.index("SPY")].copy() if "SPY" in assets else None
-    metadata = {a: AssetMetadata(ticker=a, is_benchmark=(a == "SPY")) for a in assets}
+    benchmark = None
+    if "SPY" in assets:
+        spy_j = assets.index("SPY")
+        benchmark = close[:, spy_j].copy()
+        keep = [j for j in range(N) if j != spy_j]
+        assets = [assets[j] for j in keep]
+        close = close[:, keep]
+        placeholder = close.copy()
+        N = len(assets)
+    metadata = {a: AssetMetadata(ticker=a, is_benchmark=False) for a in assets}
     provenance = DataProvenance(
         source="yfinance",
         tier=2,

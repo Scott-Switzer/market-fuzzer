@@ -3,59 +3,104 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fenrix Submission MVP</title>
 <style>
- body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;background:#0b1020;color:#e7ecf3}
- header{padding:16px 24px;background:#121a2e;border-bottom:1px solid #243352;display:flex;gap:16px;align-items:center}
- header a{color:#7fd1ff;text-decoration:none;font-weight:600}
- main{max-width:900px;margin:24px auto;padding:0 16px}
- .step{background:#121a2e;border:1px solid #243352;border-radius:10px;padding:14px 16px;margin:10px 0}
- .step b{color:#7fd1ff}
- .log{background:#0b1020;border-radius:8px;padding:12px;white-space:pre-wrap;font-size:13px;max-height:320px;overflow:auto}
- button{background:#1f6feb;color:#fff;border:0;border-radius:8px;padding:10px 16px;font-weight:600;cursor:pointer}
- button:disabled{opacity:.5}
- select,input{background:#0b1020;color:#e7ecf3;border:1px solid #243352;border-radius:6px;padding:6px}
- .ok{color:#9affc4}.bad{color:#ff8a8a}
+:root{--bg:#0b1020;--panel:#121a2e;--edge:#243352;--ink:#e7ecf3;--mut:#93a4c3;--accent:#7fd1ff;--blue:#1f6feb;--ok:#9affc4;--bad:#ff8a8a;--warn:#ffd479;--long:#3ecf8e;--short:#ff7a90}
+*{box-sizing:border-box}
+body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;background:var(--bg);color:var(--ink)}
+header{padding:14px 24px;background:var(--panel);border-bottom:1px solid var(--edge);display:flex;gap:16px;align-items:center;position:sticky;top:0;z-index:20}
+header a{color:var(--accent);text-decoration:none;font-weight:600}
+header .sp{flex:1}
+.badge{font-size:12px;padding:4px 9px;border-radius:999px;border:1px solid var(--edge);color:var(--mut)}
+.badge.on{color:var(--ok);border-color:#265c42}
+main{max-width:1080px;margin:20px auto;padding:0 18px 80px}
+.lead{color:var(--mut);line-height:1.5}
+.controls{background:var(--panel);border:1px solid var(--edge);border-radius:12px;padding:14px 16px;margin:14px 0;display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+select,input{background:var(--bg);color:var(--ink);border:1px solid var(--edge);border-radius:8px;padding:8px}
+button{background:var(--blue);color:#fff;border:0;border-radius:9px;padding:10px 16px;font-weight:600;cursor:pointer}
+button.ghost{background:transparent;border:1px solid var(--edge);color:var(--accent)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.stagebar{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0}
+.chip{font-size:12px;padding:6px 10px;border-radius:8px;border:1px solid var(--edge);color:var(--mut);display:flex;gap:6px;align-items:center}
+.chip .dot{width:9px;height:9px;border-radius:50%;background:#38466a}
+.chip.active{border-color:var(--accent);color:var(--ink)}
+.chip.done{color:var(--ok);border-color:#265c42}
+.chip.done .dot{background:var(--ok)}
+.chip.active .dot{background:var(--accent)}
+.chip.fail{color:var(--bad);border-color:#5c2632}
+.stage{background:var(--panel);border:1px solid var(--edge);border-radius:12px;padding:16px 18px;margin:14px 0;position:relative;overflow:hidden}
+.stage h3{margin:0 0 4px;font-size:16px}
+.stage h3 .n{color:var(--accent);font-variant-numeric:tabular-nums}
+.stage .sub{color:var(--mut);font-size:13px;margin-bottom:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.card{background:var(--bg);border:1px solid var(--edge);border-radius:10px;padding:12px}
+.card h4{margin:0 0 8px;font-size:13px;color:var(--mut);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.kv{display:flex;justify-content:space-between;padding:3px 0;font-size:13px;border-bottom:1px dashed #1e2a44}
+.kv:last-child{border-bottom:0}
+.kv b{color:var(--ink);font-variant-numeric:tabular-nums}
+.kv .pos{color:var(--ok)}.kv .neg{color:var(--bad)}
+.log{background:var(--bg);border-radius:8px;padding:12px;white-space:pre-wrap;font-size:12.5px;line-height:1.45;max-height:280px;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.chartwrap{background:var(--bg);border:1px solid var(--edge);border-radius:10px;padding:10px 8px 4px}
+.chartwrap .ct{font-size:12px;color:var(--mut);padding:0 6px 4px;display:flex;justify-content:space-between;align-items:center}
+.legend{display:flex;gap:12px;font-size:11.5px;color:var(--mut)}
+.legend i{display:inline-block;width:10px;height:3px;vertical-align:middle;margin-right:4px;border-radius:2px}
+svg{display:block;width:100%;height:auto}
+.watermark{position:absolute;top:10px;right:14px;font-size:11px;color:var(--mut);border:1px solid var(--edge);border-radius:6px;padding:3px 8px;background:rgba(11,16,32,.6);letter-spacing:.02em}
+.tag{font-size:11px;padding:2px 8px;border-radius:6px;border:1px solid var(--edge);color:var(--mut)}
+.tag.t1{color:#8fe3ff;border-color:#22506b}.tag.t2{color:var(--warn);border-color:#5c4a1f}.tag.t3{color:#c9a7ff;border-color:#3d2b5c}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.mut{color:var(--mut)}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{text-align:right;padding:5px 7px;border-bottom:1px solid #1a2740}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--mut);font-weight:600;position:sticky;top:0;background:var(--bg)}
+.scroll{max-height:260px;overflow:auto;border:1px solid var(--edge);border-radius:8px}
+.pill{font-size:11px;padding:2px 7px;border-radius:999px}
+.pill.f{background:#3a1420;color:var(--bad)}.pill.p{background:#0f2f22;color:var(--ok)}
+.hidden{display:none}
+.foot{margin-top:20px;color:var(--mut);font-size:12px;line-height:1.6;border-top:1px solid var(--edge);padding-top:14px}
+.dl{display:inline-block;margin-top:8px}
+a.link{color:var(--accent)}
+.spin{display:inline-block;width:13px;height:13px;border:2px solid var(--edge);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.bars{display:flex;flex-direction:column;gap:6px}
+.bar{display:flex;align-items:center;gap:8px;font-size:12px}
+.bar .lb{width:120px;color:var(--mut);text-align:right}
+.bar .tr{flex:1;background:#0f1830;border-radius:5px;height:14px;overflow:hidden}
+.bar .fl{height:100%;border-radius:5px}
+.bar .vv{width:80px;color:var(--ink);font-variant-numeric:tabular-nums}
 </style></head><body>
-<header><a href="/strategy-lab">← Strategy Lab</a><span>Fenrix Submission MVP</span></header>
+<header>
+  <a href="/strategy-lab">← Strategy Lab</a>
+  <span style="font-weight:700">Fenrix Submission MVP</span>
+  <span class="sp"></span>
+  <span class="badge" id="src-badge">source: —</span>
+  <span class="badge" id="sha-badge">git: —</span>
+  <span class="badge" id="hash-badge">hash: —</span>
+</header>
 <main>
- <p>One story: plain-English strategy → reviewed clause ledger → mandatory approval → immutable hash → real multi-asset backtest → sealed synthetic stress → minimized failure + adjacent pass → evidence.</p>
- <div class="step"><b>Step 0</b> Mode:
-   <select id="mode"><option value="synthetic_fixture">Tier 3 · deterministic synthetic (offline)</option><option value="auto">Auto (yfinance → Fenrix → synthetic)</option><option value="yfinance">Tier 2 · yfinance</option><option value="fenrix">Tier 1 · Fenrix bundle</option></select>
-   Budget: <input id="budget" type="number" value="24" min="1" max="96" style="width:64px">
-   <button id="run">Run full pipeline</button></div>
- <div id="steps"></div>
- <div class="step"><b>Live log</b><div class="log" id="log">idle…</div></div>
- <div class="step" id="evidence" style="display:none"><b>Evidence</b><div id="evbody" class="log"></div>
-   <a id="deck" href="/static/pitch-deck/index.html" target="_blank">Open pitch deck →</a></div>
+  <p class="lead">One story, eight verifiable stages: plain-English strategy → reviewed clause ledger → mandatory approval → immutable hash → declared data source → real multi-asset backtest → sealed synthetic stress → minimized failure + adjacent pass → signed evidence.</p>
+
+  <div class="controls">
+    <label>Mode
+      <select id="mode">
+        <option value="synthetic_fixture">Tier 3 · deterministic synthetic (offline)</option>
+        <option value="auto">Auto (yfinance → Fenrix → synthetic)</option>
+        <option value="yfinance">Tier 2 · yfinance</option>
+        <option value="fenrix">Tier 1 · Fenrix bundle</option>
+      </select>
+    </label>
+    <label id="fenrix-path-wrap" style="display:none">Fenrix path
+      <input id="fenrix_path" type="text" placeholder="/path/to/fenrix_bundle" style="width:230px">
+    </label>
+    <label>Stress budget <input id="budget" type="number" value="8" min="1" max="96" style="width:64px"></label>
+    <button id="run">▶ Run live pipeline</button>
+    <button id="demo" class="ghost">✓ Run verified judge demo</button>
+    <span id="status" class="mut" style="font-size:13px"></span>
+  </div>
+
+  <div class="stagebar" id="stagebar"></div>
+  <div id="stages"></div>
+
+  <div class="stage"><h3>Live log</h3><div class="log" id="log">idle…</div></div>
+  <p class="foot" id="foot"></p>
 </main>
-<script>
-const BASE="/api/strategy-lab";
-const log=document.getElementById("log");
-const steps=document.getElementById("steps");
-function add(text,cls){const d=document.createElement("div");if(cls)d.className=cls;d.textContent=text;steps.appendChild(d);}
-async function post(path,body){const r=await fetch(BASE+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});return r;}
-document.getElementById("run").onclick=async()=>{
-  steps.innerHTML="";document.getElementById("evidence").style.display="none";
-  const mode=document.getElementById("mode").value;
-  const budget=+document.getElementById("budget").value;
-  const body={mode,budget};
-  log.textContent="starting…\n";
-  try{
-    let r=await post("/submission/compile",body);let j=await r.json();
-    add("1 · Compiled → universe "+j.universe.length+" assets, benchmark "+j.benchmark,"ok");
-    r=await post("/submission/approve",body);j=await r.json();const h=j.strategy_id.slice(0,16);
-    add("2 · Approved → immutable hash "+h,"ok");
-    r=await post("/submission/backtest",body);j=await r.json();
-    add("3 · Historical backtest ("+j.data_mode+") → Sharpe "+j.metrics.sharpe.toFixed(2)+", cum ret "+(100*j.metrics.cumulative_return).toFixed(2)+"%, trades "+j.metrics.get("trades",0),"ok");
-    r=await post("/submission/stress",{...body,strategy_hash:h});j=await r.json();
-    add("4 · Sealed stress → "+j.failure_count+"/"+j.evaluated+" failures ("+(100*j.failure_rate).toFixed(0)+"%)","ok");
-    r=await post("/submission/run",body);j=await r.json();
-    add("5 · Minimized failure: "+(j.minimized?j.minimized.mechanism+" @intensity "+j.minimized.minimized_intensity:"n/a"),"ok");
-    add("6 · Adjacent passing case: "+(j.adjacent_pass?(j.adjacent_pass.mechanism+" seedΔ"+j.adjacent_pass.delta_from_failure_seed):"n/a"),"ok");
-    add("7 · Evidence written → "+j.evidence.base_dir,"ok");
-    document.getElementById("evidence").style.display="block";
-    document.getElementById("evbody").textContent=JSON.stringify(j.evidence.manifest,null,2);
-    log.textContent+="\nDONE. Strategy hash "+h+"\n";
-  }catch(e){log.textContent+="\nERROR: "+e.message;}
-};
-</script>
+<script src="/static/submission.js"></script>
 </body></html>
