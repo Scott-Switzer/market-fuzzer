@@ -50,7 +50,9 @@ def main() -> int:
         errors.append("historical backtest has zero trades / zero sharpe (fabricated?)")
 
     # 3) evidence artifact hashes are non-trivial
-    ev = build_evidence_package(run)
+    # Write to a distinct `-verify` dir so this offline synthetic check never
+    # clobbers the yfinance run-of-record at artifacts/submission/<sha>/.
+    ev = build_evidence_package(run, save_dir=f"artifacts/submission/{sha}-verify")
     m = ev["manifest"]
     if not m["artifact_hashes"].get("historical/equity_curve.csv"):
         errors.append("historical/equity_curve.csv artifact hash missing")
