@@ -1,0 +1,6 @@
+# Binary artifacts: don't text-diff (avoids git diff --check trailing-whitespace
+# errors on binary PDF/PPTX content).
+*.pdf binary
+*.pptx binary
+*.png binary
+*.webm binary
