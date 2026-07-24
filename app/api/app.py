@@ -493,6 +493,12 @@ def strategy_lab() -> FileResponse:
     return FileResponse(ROOT / "static" / "strategy-lab.html")
 
 
+@app.get("/submission")
+def submission_mvp() -> FileResponse:
+    """Fenrix Submission MVP wizard (compile → approve → backtest → stress → evidence)."""
+    return FileResponse(ROOT / "static" / "submission.html")
+
+
 @app.get("/legacy-start")
 def legacy_start() -> FileResponse:
     """Previous start page retained for reference."""

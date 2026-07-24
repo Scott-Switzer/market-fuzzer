@@ -43,17 +43,17 @@
 
 <div class="slide"><h2>3 &middot; Sealed synthetic stress (reproducible failures)</h2>
 <div class="kpi">
-<div class="card"><b>24</b><span>worlds searched</span></div>
-<div class="card"><b>4</b><span>confirmed failures</span></div>
-<div class="card"><b>16.67%</b><span>failure rate</span></div>
+<div class="card"><b>8</b><span>worlds searched</span></div>
+<div class="card"><b>2</b><span>confirmed failures</span></div>
+<div class="card"><b>25.00%</b><span>failure rate</span></div>
 </div>
 <p>Mechanisms searched: <code>momentum_reversal, volatility_expansion, correlation_breakdown, volatility_compression, spread_inflation, slippage_inflation, borrow_cost_increase, short_unavailability, delayed_rebalance, universe_churn, missing_data_shock</code></p>
-<p>Confirmed-failure mechanisms: <b>slippage_inflation, volatility_compression, volatility_expansion</b></p>
+<p>Confirmed-failure mechanisms: <b>correlation_breakdown, slippage_inflation</b></p>
 <div class="warn">These are generated worlds, not historical events. They probe <i>fragility</i>, not real future risk. No claim of universal discovery or realism.</div></div>
 
 <div class="slide"><h2>4 &middot; Confirmed failure &rarr; minimize &rarr; adjacent pass</h2>
-<p><b>Minimized failure:</b> volatility_compression at intensity <code>0.0046</code> (still fails: True).</p>
-<p><b>Adjacent passing case:</b> volatility_compression seed delta <code>1</code> passes: True.</p>
+<p><b>Minimized failure:</b> correlation_breakdown at intensity <code>0.0051</code> (still fails: True).</p>
+<p><b>Adjacent passing case:</b> correlation_breakdown seed delta <code>-2</code> passes: True.</p>
 <p>Recommendation: tighten the failing mechanism's guard (e.g. cap per-name weight, add a vol-scaling stop, or widen the cost buffer) and re-run the sealed search before any capital decision.</p></div>
 
 <div class="slide"><h2>5 &middot; Honest limitations (read before sharing)</h2>
