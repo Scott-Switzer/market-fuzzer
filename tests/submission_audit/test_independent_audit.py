@@ -69,7 +69,11 @@ def _latest_package() -> Path:
     import subprocess
 
     base = REPO_ROOT / "artifacts" / "submission"
-    candidates = [p for p in base.glob("*") if (p / "submission_manifest.json").exists()]
+    candidates = [
+        p
+        for p in base.glob("*")
+        if (p / "submission_manifest.json").exists() and not p.name.endswith("-verify")
+    ]
     if not candidates:
         pytest.skip("no submission evidence package found; run the pipeline first")
     try:
