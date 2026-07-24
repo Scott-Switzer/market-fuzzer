@@ -1,4 +1,4 @@
-.PHONY: install install-browser verify test e2e demo run run-example arena-demo decision-benchmark regression judge-demo docker-smoke performance clean-artifacts
+.PHONY: install install-browser verify test e2e demo run run-example arena-demo decision-benchmark regression judge-demo docker-smoke performance clean-artifacts verify-submission test-portfolio-engine test-data-adapters test-strategy-identity submission-demo pitch-deck fenrix-inspect
 
 # Default to the project Python 3.12 virtualenv if present,
 # otherwise fall back to whatever `python3` resolves to.
@@ -76,3 +76,26 @@ performance:
 
 clean-artifacts:
 	rm -rf artifacts/smw-*
+
+# --- Fenrix Submission MVP targets ---
+test-portfolio-engine:
+	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m pytest tests/submission/test_portfolio_engine.py -q -p no:cacheprovider --tb=short
+
+test-data-adapters:
+	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m pytest tests/submission/test_data_adapters.py -q -p no:cacheprovider --tb=short
+
+test-strategy-identity:
+	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m pytest tests/submission/test_strategy_identity.py -q -p no:cacheprovider --tb=short
+
+verify-submission:
+	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m pytest tests/submission -q -p no:cacheprovider --tb=short
+	$(PYTHON) scripts/submission_verify.py
+
+submission-demo:
+	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m app.strategy_lab.submission.cli demo
+
+pitch-deck:
+	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m app.strategy_lab.submission.cli build-deck
+
+fenrix-inspect:
+	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m app.strategy_lab.data inspect-fenrix

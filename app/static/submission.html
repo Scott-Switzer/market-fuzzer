@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fenrix Submission MVP</title>
+<style>
+ body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;background:#0b1020;color:#e7ecf3}
+ header{padding:16px 24px;background:#121a2e;border-bottom:1px solid #243352;display:flex;gap:16px;align-items:center}
+ header a{color:#7fd1ff;text-decoration:none;font-weight:600}
+ main{max-width:900px;margin:24px auto;padding:0 16px}
+ .step{background:#121a2e;border:1px solid #243352;border-radius:10px;padding:14px 16px;margin:10px 0}
+ .step b{color:#7fd1ff}
+ .log{background:#0b1020;border-radius:8px;padding:12px;white-space:pre-wrap;font-size:13px;max-height:320px;overflow:auto}
+ button{background:#1f6feb;color:#fff;border:0;border-radius:8px;padding:10px 16px;font-weight:600;cursor:pointer}
+ button:disabled{opacity:.5}
+ select,input{background:#0b1020;color:#e7ecf3;border:1px solid #243352;border-radius:6px;padding:6px}
+ .ok{color:#9affc4}.bad{color:#ff8a8a}
+</style></head><body>
+<header><a href="/strategy-lab">← Strategy Lab</a><span>Fenrix Submission MVP</span></header>
+<main>
+ <p>One story: plain-English strategy → reviewed clause ledger → mandatory approval → immutable hash → real multi-asset backtest → sealed synthetic stress → minimized failure + adjacent pass → evidence.</p>
+ <div class="step"><b>Step 0</b> Mode:
+   <select id="mode"><option value="synthetic_fixture">Tier 3 · deterministic synthetic (offline)</option><option value="auto">Auto (yfinance → Fenrix → synthetic)</option><option value="yfinance">Tier 2 · yfinance</option><option value="fenrix">Tier 1 · Fenrix bundle</option></select>
+   Budget: <input id="budget" type="number" value="24" min="1" max="96" style="width:64px">
+   <button id="run">Run full pipeline</button></div>
+ <div id="steps"></div>
+ <div class="step"><b>Live log</b><div class="log" id="log">idle…</div></div>
+ <div class="step" id="evidence" style="display:none"><b>Evidence</b><div id="evbody" class="log"></div>
+   <a id="deck" href="/static/pitch-deck/index.html" target="_blank">Open pitch deck →</a></div>
+</main>
+<script>
+const BASE="/api/strategy-lab";
+const log=document.getElementById("log");
+const steps=document.getElementById("steps");
+function add(text,cls){const d=document.createElement("div");if(cls)d.className=cls;d.textContent=text;steps.appendChild(d);}
+async function post(path,body){const r=await fetch(BASE+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});return r;}
+document.getElementById("run").onclick=async()=>{
+  steps.innerHTML="";document.getElementById("evidence").style.display="none";
+  const mode=document.getElementById("mode").value;
+  const budget=+document.getElementById("budget").value;
+  const body={mode,budget};
+  log.textContent="starting…\n";
+  try{
+    let r=await post("/submission/compile",body);let j=await r.json();
+    add("1 · Compiled → universe "+j.universe.length+" assets, benchmark "+j.benchmark,"ok");
+    r=await post("/submission/approve",body);j=await r.json();const h=j.strategy_id.slice(0,16);
+    add("2 · Approved → immutable hash "+h,"ok");
+    r=await post("/submission/backtest",body);j=await r.json();
+    add("3 · Historical backtest ("+j.data_mode+") → Sharpe "+j.metrics.sharpe.toFixed(2)+", cum ret "+(100*j.metrics.cumulative_return).toFixed(2)+"%, trades "+j.metrics.get("trades",0),"ok");
+    r=await post("/submission/stress",{...body,strategy_hash:h});j=await r.json();
+    add("4 · Sealed stress → "+j.failure_count+"/"+j.evaluated+" failures ("+(100*j.failure_rate).toFixed(0)+"%)","ok");
+    r=await post("/submission/run",body);j=await r.json();
+    add("5 · Minimized failure: "+(j.minimized?j.minimized.mechanism+" @intensity "+j.minimized.minimized_intensity:"n/a"),"ok");
+    add("6 · Adjacent passing case: "+(j.adjacent_pass?(j.adjacent_pass.mechanism+" seedΔ"+j.adjacent_pass.delta_from_failure_seed):"n/a"),"ok");
+    add("7 · Evidence written → "+j.evidence.base_dir,"ok");
+    document.getElementById("evidence").style.display="block";
+    document.getElementById("evbody").textContent=JSON.stringify(j.evidence.manifest,null,2);
+    log.textContent+="\nDONE. Strategy hash "+h+"\n";
+  }catch(e){log.textContent+="\nERROR: "+e.message;}
+};
+</script>
+</body></html>
