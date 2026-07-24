@@ -17,6 +17,51 @@ const STAGES = [
 
 const $ = (id) => document.getElementById(id);
 const el = (t, cls, txt) => { const d = document.createElement(t); if (cls) d.className = cls; if (txt != null) d.textContent = txt; return d; };
+
+// ---- Universe presets (sent as "universe" to /submission/* endpoints) ----
+const FLAGSHIP_29 = ["AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","JPM","V","UNH","XOM","JNJ","WMT","MA","PG","HD","CVX","KO","PEP","COST","ABBV","AVGO","MRK","PFE","T","BAC","DIS","CSCO","ADBE"];
+const UNIVERSE_PRESETS = {
+  flagship29: { label: "Flagship 29 (default)", tickers: FLAGSHIP_29 },
+  sp500proxy: { label: "S&P 500 proxy (liquid 30)", tickers: ["SPY","QQQ","IWM","DIA","XLK","XLV","XLF","XLE","XLY","XLI","XLP","XLB","XLU","XLC","XLRE","AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","JPM","V","UNH","XOM","JNJ","WMT","HD"] },
+  largecaps:  { label: "Large caps (top 20)", tickers: FLAGSHIP_29.slice(0, 20) },
+  sectors:    { label: "Sector ETFs", tickers: ["SPY","XLK","XLV","XLF","XLE","XLY","XLI","XLP","XLB","XLU","XLC","XLRE","KIE"] },
+  saa_taa:    { label: "SAA / TAA building blocks", tickers: ["SPY","QQQ","IWM","VEA","VWO","EFA","GLD","TLT","IEF","TIP","HYG","LQD","DBC","VNQ"] },
+  custom:     { label: "Custom", tickers: null },
+};
+
+// ---- Strategy templates (plain-English starting points for students) ----
+// NOTE: the /submission/compile endpoint does not accept a "description" field
+// (extra fields are rejected: extra="forbid"), so templates are shown as
+// helper text only; the pipeline always runs the flagship L/S engine.
+const TEMPLATES = {
+  flagship:   { label: "Flagship L/S momentum (default)", desc: "Fenrix flagship long/short momentum-volatility strategy: rank the universe cross-sectionally by momentum and volatility, hold the top ranks long and bottom ranks short, rebalance on schedule with cost controls. This is what the pipeline executes." },
+  saa6040:    { label: "60/40 SAA", desc: "Allocate 60% to a broad US equity ETF and 40% to an aggregate bond ETF, rebalance monthly; this is a static strategic asset allocation baseline." },
+  riskparity: { label: "Risk-parity-ish TAA", desc: "Hold a basket of asset-class ETFs (equity, bonds, gold, commodities) weighted to equal risk contribution, tilt monthly toward the recent winning asset classes; tactical overlay." },
+  momtaa:     { label: "Momentum TAA", desc: "Each month rank the asset-class ETFs by 12-1 momentum and hold the top 3, shift to Treasuries when the equity trend is down; tactical asset allocation." },
+};
+
+// Resolve the selected universe. Returns a ticker array, or null if invalid (warns user).
+function selectedUniverse() {
+  const key = $("universe-preset").value;
+  if (key !== "custom") return UNIVERSE_PRESETS[key].tickers.slice();
+  const raw = ($("custom_universe").value || "");
+  const tickers = raw.split(",").map((t) => t.trim().toUpperCase()).filter((t) => t.length);
+  if (!tickers.length) {
+    setStatus("⚠ enter at least one ticker for the custom universe (e.g. SPY,QQQ,GLD,TLT)", false);
+    $("custom_universe").focus();
+    return null;
+  }
+  return tickers;
+}
+
+function updateTemplateBox() {
+  const t = TEMPLATES[$("template").value];
+  const key = $("universe-preset").value;
+  const p = UNIVERSE_PRESETS[key];
+  $("tpl-name").textContent = t.label;
+  $("tpl-uni").textContent = "· universe: " + (key === "custom" ? "custom (type tickers above)" : p.label + " — " + p.tickers.length + " tickers");
+  $("tpl-desc").textContent = t.desc + (($("template").value !== "flagship") ? " (Shown as a plain-English goal; the backtest engine currently runs the flagship long/short model on your chosen universe.)" : "");
+}
 const fmtPct = (x, d = 2) => (x == null || isNaN(x)) ? "—" : (100 * x).toFixed(d) + "%";
 const fmtNum = (x, d = 2) => (x == null || isNaN(x)) ? "—" : Number(x).toFixed(d);
 const fmtMoney = (x) => (x == null || isNaN(x)) ? "—" : "$" + Math.round(x).toLocaleString();
@@ -179,7 +224,7 @@ function renderClauses(ctx, wm) {
   const tb = el("tbody");
   (ctx.clauses || []).forEach((c) => {
     const tr = el("tr");
-    let kind = c.status || "";
+    let kind = c.kind || c.status || "";
     try { const o = JSON.parse(c.original_text || "{}"); if (o.kind) kind = o.kind; } catch (e) {}
     tr.innerHTML = "<td>" + esc(c.clause_id || c.id || "?") + "</td><td>" + esc(kind) +
       "</td><td class='ok'>" + esc(c.user_resolution || "approved") + "</td><td>" +
@@ -458,7 +503,11 @@ async function runLive() {
   $("stages").innerHTML = ""; LOGBUF = ""; logln("starting live pipeline…");
   const states = new Array(8).fill(""); renderStageBar(states);
   const mode = $("mode").value, budget = +$("budget").value;
-  const body = { mode, budget };
+  const universe = selectedUniverse();
+  if (!universe) { busy(false); return; }
+  logln("universe: " + universe.join(", ") + " (" + universe.length + " tickers)");
+  logln("template: " + TEMPLATES[$("template").value].label);
+  const body = { mode, budget, universe };
   const fp = $("fenrix_path") && $("fenrix_path").value.trim();
   if (mode === "fenrix" && fp) body.fenrix_path = fp;
   const ctx = { wm: "LIVE · " + mode };
@@ -526,6 +575,7 @@ async function runDemo() {
   const busy = (b) => { $("run").disabled = b; $("demo").disabled = b; };
   busy(true);
   $("stages").innerHTML = ""; LOGBUF = ""; logln("loading verified judge demo (cached evidence)…");
+  logln("note: the judge demo replays a canned, pre-verified run — your universe/template selection is not used here.");
   const states = new Array(8).fill(""); renderStageBar(states);
   const mark = (i, st) => { states[i] = st; renderStageBar(states); };
   try {
@@ -576,6 +626,17 @@ if (_modeSel && _fpWrap) {
   const _toggleFp = () => { _fpWrap.style.display = (_modeSel.value === "fenrix") ? "" : "none"; };
   _modeSel.addEventListener("change", _toggleFp); _toggleFp();
 }
+// universe preset: show the custom-ticker input only for "Custom"; keep template box in sync
+const _uniSel = $("universe-preset"), _custWrap = $("custom-universe-wrap"), _tplSel = $("template");
+if (_uniSel && _custWrap) {
+  const _toggleCust = () => {
+    _custWrap.style.display = (_uniSel.value === "custom") ? "" : "none";
+    updateTemplateBox();
+  };
+  _uniSel.addEventListener("change", _toggleCust); _toggleCust();
+}
+if (_tplSel) _tplSel.addEventListener("change", updateTemplateBox);
+updateTemplateBox();
 $("foot").innerHTML = "Charts are hand-rolled inline SVG (zero external dependencies). " +
   "The verified judge demo renders persisted, deterministic evidence with no live-server dependency. " +
   "Synthetic stress worlds probe fragility, not real future risk; costs are labeled heuristics, not broker-calibrated.";

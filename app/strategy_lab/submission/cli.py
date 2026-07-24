@@ -34,7 +34,10 @@ def cmd_demo(args: argparse.Namespace) -> int:
             print("  Refusing to overwrite the primary evidence deck with synthetic-fixture results.")
             return 2
     run = run_submission(spec=spec, mode=mode, use_cache=not args.no_cache, budget=args.budget)
-    ev = build_evidence_package(run)
+    # Reserve the canonical <sha> dir for the yfinance run-of-record; synthetic
+    # writes to <sha>-synthetic so it never clobbers the audited package.
+    suffix = "" if run.data_mode == "yfinance" else "-synthetic"
+    ev = build_evidence_package(run, save_dir=f"artifacts/submission/{run.strategy_hash}{suffix}")
     print("SUBMISSION DEMO COMPLETE")
     print(f"  strategy_hash : {run.strategy_hash}")
     print(f"  data_mode     : {run.data_mode}")

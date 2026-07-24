@@ -219,6 +219,7 @@ class SubmissionRun:
     stress: dict[str, Any]
     minimized: dict[str, Any] | None
     adjacent_pass: dict[str, Any] | None
+    clause_ledger: list[dict[str, Any]] = field(default_factory=list)
     evidence: dict[str, Any] = field(default_factory=dict)
 
 
@@ -305,6 +306,8 @@ def run_submission(
         stress=stress,
         minimized=minimized,
         adjacent_pass=adjacent,
+        clause_ledger=[c.__dict__ for c in strategy.clause_ledger],
+        evidence={},
     )
 
 

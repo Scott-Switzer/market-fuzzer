@@ -61,10 +61,13 @@ def defect(reason: str):
 def _latest_package() -> Path:
     """Return the evidence package to audit.
 
-    Prefers the package whose recorded git_sha equals the current HEAD (the
-    canonical run-of-record), so a stray synthetic demo dir can never shadow the
-    real yfinance run-of-record. Falls back to newest manifest mtime only when no
-    HEAD-matched package exists.
+    Selection order (most-preferred first):
+      1. HEAD-matched package whose run-of-record is yfinance (the canonical one)
+      2. HEAD-matched package of any data_mode
+      3. newest yfinance package
+      4. newest package by manifest mtime
+    This guarantees a stray synthetic demo dir can never shadow the real
+    yfinance run-of-record, and a `-verify` synthetic check dir is ignored.
     """
     import subprocess
 
@@ -72,24 +75,39 @@ def _latest_package() -> Path:
     candidates = [
         p
         for p in base.glob("*")
-        if (p / "submission_manifest.json").exists() and not p.name.endswith("-verify")
+        if (p / "submission_manifest.json").exists()
+        and not p.name.endswith("-verify")
+        and not p.name.endswith("-synthetic")
     ]
     if not candidates:
         pytest.skip("no submission evidence package found; run the pipeline first")
+
+    def _mode(p: Path) -> str:
+        try:
+            return json.loads((p / "pitch" / "deck_data.json").read_text()).get("data_mode", "")
+        except Exception:
+            return ""
+
+    def _sha(p: Path) -> str:
+        try:
+            return json.loads((p / "submission_manifest.json").read_text()).get("git_sha", "")
+        except Exception:
+            return ""
+
     try:
         head = subprocess.run(
             ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=REPO_ROOT
         ).stdout.strip()
     except Exception:
         head = ""
-    if head:
-        for p in candidates:
-            try:
-                sha = json.loads((p / "submission_manifest.json").read_text()).get("git_sha", "")
-            except Exception:
-                sha = ""
-            if sha == head:
-                return p
+
+    head_matched = [p for p in candidates if _sha(p) == head]
+    if head_matched:
+        yf = [p for p in head_matched if _mode(p) == "yfinance"]
+        return yf[0] if yf else head_matched[0]
+    yf = [p for p in candidates if _mode(p) == "yfinance"]
+    if yf:
+        return max(yf, key=lambda p: (p / "submission_manifest.json").stat().st_mtime)
     return max(candidates, key=lambda p: (p / "submission_manifest.json").stat().st_mtime)
 
 

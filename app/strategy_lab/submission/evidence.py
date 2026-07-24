@@ -70,7 +70,7 @@ def build_evidence_package(run: SubmissionRun, save_dir: str | None = None) -> d
     (base / "strategy" / "original_description.txt").write_text(
         "Fenrix Flagship Long/Short Momentum-Volatility strategy."
     )
-    clause_ledger = {"strategy_id": run.strategy_hash, "clauses": bt.get("assets")}
+    clause_ledger = {"strategy_id": run.strategy_hash, "clauses": run.clause_ledger}
     (base / "strategy" / "clause_ledger.json").write_text(json.dumps(clause_ledger, indent=2))
     (base / "strategy" / "approved_strategy.json").write_text(
         json.dumps({"strategy_id": run.strategy_hash, "approval": run.approval}, indent=2)

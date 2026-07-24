@@ -13,6 +13,11 @@ header .sp{flex:1}
 .badge.on{color:var(--ok);border-color:#265c42}
 main{max-width:1080px;margin:20px auto;padding:0 18px 80px}
 .lead{color:var(--mut);line-height:1.5}
+.howto{background:var(--panel);border:1px solid var(--edge);border-radius:12px;padding:12px 16px;margin:14px 0}
+.howto summary{cursor:pointer;font-weight:600;color:var(--accent)}
+.howto ol{margin:10px 0 0;padding-left:22px;color:var(--ink);line-height:1.7;font-size:13.5px}
+.howto li{margin-bottom:4px}
+.tplbox{background:var(--panel);border:1px solid var(--edge);border-left:3px solid var(--accent);border-radius:10px;padding:10px 14px;margin:10px 0;font-size:13.5px}
 .controls{background:var(--panel);border:1px solid var(--edge);border-radius:12px;padding:14px 16px;margin:14px 0;display:flex;flex-wrap:wrap;gap:12px;align-items:center}
 select,input{background:var(--bg);color:var(--ink);border:1px solid var(--edge);border-radius:8px;padding:8px}
 button{background:var(--blue);color:#fff;border:0;border-radius:9px;padding:10px 16px;font-weight:600;cursor:pointer}
@@ -78,7 +83,39 @@ a.link{color:var(--accent)}
 <main>
   <p class="lead">One story, eight verifiable stages: plain-English strategy → reviewed clause ledger → mandatory approval → immutable hash → declared data source → real multi-asset backtest → sealed synthetic stress → minimized failure + adjacent pass → signed evidence.</p>
 
+  <details class="howto" id="howto" open>
+    <summary>👋 New here? How to use this page</summary>
+    <ol>
+      <li><b>Pick a universe</b> — the list of tickers your strategy trades. For SAA/TAA class work, choose <b>“SAA / TAA building blocks”</b> (asset-class ETFs: stocks, bonds, gold, commodities…), or pick <b>Custom</b> and type your own comma-separated tickers.</li>
+      <li><b>Optionally pick a strategy template</b> — a plain-English starting point (60/40, risk parity, momentum). Its description appears below the controls so you know exactly what you're about to run.</li>
+      <li><b>Click “▶ Run live pipeline”</b> to compile, approve, backtest and stress-test your setup end-to-end. Or click <b>“✓ Run verified judge demo”</b> to see a finished, canned example first.</li>
+      <li><b>Read the 8 stages</b> as they light up, then <b>download the signed evidence JSON</b> at the end (stage 8).</li>
+    </ol>
+    <p class="mut" style="font-size:12px;margin:6px 0 0">Everything here is for research and education only — it is not investment advice.</p>
+  </details>
+
   <div class="controls">
+    <label>Universe preset
+      <select id="universe-preset">
+        <option value="flagship29">Flagship 29 (default)</option>
+        <option value="sp500proxy">S&amp;P 500 proxy (liquid 30)</option>
+        <option value="largecaps">Large caps (top 20)</option>
+        <option value="sectors">Sector ETFs</option>
+        <option value="saa_taa">SAA / TAA building blocks</option>
+        <option value="custom">Custom…</option>
+      </select>
+    </label>
+    <label id="custom-universe-wrap" style="display:none">Tickers
+      <input id="custom_universe" type="text" placeholder="e.g. SPY,QQQ,GLD,TLT" style="width:220px">
+    </label>
+    <label>Strategy template
+      <select id="template">
+        <option value="flagship">Flagship L/S momentum (default)</option>
+        <option value="saa6040">60/40 SAA</option>
+        <option value="riskparity">Risk-parity-ish TAA</option>
+        <option value="momtaa">Momentum TAA</option>
+      </select>
+    </label>
     <label>Mode
       <select id="mode">
         <option value="synthetic_fixture">Tier 3 · deterministic synthetic (offline)</option>
@@ -94,6 +131,11 @@ a.link{color:var(--accent)}
     <button id="run">▶ Run live pipeline</button>
     <button id="demo" class="ghost">✓ Run verified judge demo</button>
     <span id="status" class="mut" style="font-size:13px"></span>
+  </div>
+
+  <div class="tplbox" id="tplbox">
+    <b id="tpl-name"></b> <span class="mut" id="tpl-uni"></span>
+    <div class="mut" id="tpl-desc" style="margin-top:4px;font-size:13px;line-height:1.55"></div>
   </div>
 
   <div class="stagebar" id="stagebar"></div>

@@ -7,6 +7,7 @@ The historical backtest uses the REAL T x N portfolio engine, not the legacy fac
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -25,6 +26,20 @@ from app.strategy_lab.submission.strategy import (
     FIXED_START,
     CrossSectionalSpec,
 )
+
+
+def _evidence_dir_for(run) -> str:
+    """Resolve the on-disk evidence dir for a run.
+
+    The canonical ``artifacts/submission/<sha>`` directory is reserved for the
+    yfinance run-of-record (the audited artifact). Synthetic-fixture runs write
+    to ``<sha>-synthetic`` so they can never clobber the canonical package that
+    the independent-audit gate reads.
+    """
+    sha = run.strategy_hash
+    suffix = "" if run.data_mode == "yfinance" else "-synthetic"
+    return str(Path(f"artifacts/submission/{sha}{suffix}"))
+
 
 router = APIRouter()
 
@@ -153,7 +168,7 @@ def run_endpoint(body: dict[str, Any]) -> dict[str, Any]:
         )
     except Exception as exc:
         raise HTTPException(500, f"submission run failed: {exc}") from exc
-    ev = build_evidence_package(run)
+    ev = build_evidence_package(run, save_dir=_evidence_dir_for(run))
     return {
         "ok": True,
         "strategy_hash": run.strategy_hash,
@@ -169,7 +184,7 @@ def run_endpoint(body: dict[str, Any]) -> dict[str, Any]:
             "evaluated": run.stress["evaluated"],
             "failure_count": run.stress["failure_count"],
             "failure_rate": run.stress["failure_rate"],
-            "failed_mechanisms": sorted({f["mechanism"] for f in run.stress["failures"]}),
+            "failed_mechanisms": sorted({f["mechanism"] for f in run.stress.get("confirmed_failures", [])}),
         },
         "minimized": run.minimized,
         "adjacent_pass": run.adjacent_pass,

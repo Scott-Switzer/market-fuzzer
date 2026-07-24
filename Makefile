@@ -1,4 +1,4 @@
-.PHONY: install install-browser verify test e2e demo run run-example arena-demo decision-benchmark regression judge-demo docker-smoke performance clean-artifacts verify-submission test-portfolio-engine test-data-adapters test-strategy-identity submission-demo pitch-deck fenrix-inspect
+.PHONY: install install-browser verify verify-fast test e2e demo run run-example arena-demo decision-benchmark regression judge-demo docker-smoke performance clean-artifacts verify-submission test-portfolio-engine test-data-adapters test-strategy-identity submission-demo pitch-deck fenrix-inspect
 
 # Default to the project Python 3.12 virtualenv if present,
 # otherwise fall back to whatever `python3` resolves to.
@@ -30,6 +30,18 @@ verify:
 	@test -f scripts/judge_demo.sh && bash -n scripts/judge_demo.sh || true
 	@test -f app/static/app.js && node --check app/static/app.js || true
 	@test -f app/static/arena.js && node --check app/static/arena.js || true
+	git diff --check
+
+# Fast local loop: skips the slow Playwright browser_e2e + arena_smoke serial
+# suites and the determinism/provenance scripts. Use for quick iteration; the
+# full `make verify` (CI) still runs everything.
+verify-fast:
+	$(PYTHON) -m ruff format --check app scripts tests docs
+	$(PYTHON) -m ruff check app scripts tests docs
+	$(PYTHON) -m mypy app/strategy_lab
+	$(MAKE) verify-strategy-lab
+	$(PYTHON) -m pytest -q -p no:cacheprovider
+	$(PYTHON) scripts/demo_smoke.py
 	git diff --check
 
 verify-strategy-lab:
