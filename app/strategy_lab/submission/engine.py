@@ -122,13 +122,15 @@ def cross_sectional_target_weights(
             # scale to feasible, warn
             scale = max_feasible / gross_exposure if gross_exposure > 0 else 1.0
             scaled = scaled * scale
-            warnings.append({
-                "type": "infeasible_gross",
-                "t": t,
-                "declared_gross": gross_exposure,
-                "feasible_gross": round(max_feasible, 4),
-                "action": "scaled_to_feasible",
-            })
+            warnings.append(
+                {
+                    "type": "infeasible_gross",
+                    "t": t,
+                    "declared_gross": gross_exposure,
+                    "feasible_gross": round(max_feasible, 4),
+                    "action": "scaled_to_feasible",
+                }
+            )
         else:
             max_feasible = gross_exposure
         # enforce net target by symmetric trim
@@ -267,7 +269,6 @@ def run_portfolio_backtest(
         if src >= 0:
             active_target[t] = signal_on_date[src]
 
-
     # ---- next-open execution + cost accounting ----
     shares = np.zeros((T, N), dtype=float)
     cash = np.zeros(T, dtype=float)
@@ -290,10 +291,24 @@ def run_portfolio_backtest(
         pre_trade_equity = cash[t - 1] + float(np.sum(prev_shares * close[t - 1]))
         target_shares = _weights_to_shares(active_target[t], fill_px, close[t - 1], pre_trade_equity)
         delta = target_shares - prev_shares
-        commission_total, slippage_total, borrow_total, spread_total, locate_total, cash_after, _ = _charge_costs(
-            delta, fill_px, cash[t - 1], close[t - 1], prev_shares, spec,
-            commission_total, slippage_total, borrow_total, spread_total, locate_total,
-            t, trades, panel, t,
+        commission_total, slippage_total, borrow_total, spread_total, locate_total, cash_after, _ = (
+            _charge_costs(
+                delta,
+                fill_px,
+                cash[t - 1],
+                close[t - 1],
+                prev_shares,
+                spec,
+                commission_total,
+                slippage_total,
+                borrow_total,
+                spread_total,
+                locate_total,
+                t,
+                trades,
+                panel,
+                t,
+            )
         )
         # 3.5 record daily borrow accrued this row (for the accounting test)
         short_mv = float(np.sum(np.where(prev_shares < -1e-9, -prev_shares * close[t - 1], 0.0)))
@@ -328,21 +343,29 @@ def run_portfolio_backtest(
     cost_attribution = dict(cost_summary)
 
     metrics = compute_portfolio_metrics(
-        equity=equity, shares=shares, close=close, cap=cap,
-        benchmark_close=panel.benchmark_close, cost_summary=cost_summary,
-        gross_exp=gross_exp, net_exp=net_exp, turnover=turnover,
+        equity=equity,
+        shares=shares,
+        close=close,
+        cap=cap,
+        benchmark_close=panel.benchmark_close,
+        cost_summary=cost_summary,
+        gross_exp=gross_exp,
+        net_exp=net_exp,
+        turnover=turnover,
     )
     # attach feasible-exposure warning flag
     if any(w["type"] == "infeasible_gross" for w in warnings):
         metrics["exposure_scaled_to_feasible"] = True
 
-    backtest_id = _stable_hash({
-        "strategy_hash": strategy_hash,
-        "dates": [d.isoformat() for d in panel.dates],
-        "assets": list(panel.assets),
-        "equity_end": float(equity[-1]),
-        "cost_total": total_cost,
-    })
+    backtest_id = _stable_hash(
+        {
+            "strategy_hash": strategy_hash,
+            "dates": [d.isoformat() for d in panel.dates],
+            "assets": list(panel.assets),
+            "equity_end": float(equity[-1]),
+            "cost_total": total_cost,
+        }
+    )
 
     return BacktestResult(
         backtest_id=backtest_id,
@@ -376,7 +399,9 @@ def run_portfolio_backtest(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _weights_to_shares(weights: np.ndarray, fill_px: np.ndarray, mark: np.ndarray, equity: float) -> np.ndarray:
+def _weights_to_shares(
+    weights: np.ndarray, fill_px: np.ndarray, mark: np.ndarray, equity: float
+) -> np.ndarray:
     """3.2 Convert target weights (fraction of PRE-TRADE EQUITY) to share counts.
 
     notional = weights * equity (net liquidation value), then / fill price.
@@ -426,18 +451,22 @@ def _charge_costs(
         slippage_total += slippage
         spread_total += spread_cost
         locate_total += locate
-        trades.append({
-            "date": panel.dates[trade_date_idx].isoformat() if trade_date_idx < len(panel.dates) else str(t),
-            "asset": panel.assets[n],
-            "side": "buy" if qty > 0 else "sell_short" if qty < 0 else "flat",
-            "quantity": round(float(qty), 6),
-            "price": round(exec_px, 6),
-            "commission": round(commission, 6),
-            "slippage": round(slippage, 6),
-            "spread": round(spread_cost, 6),
-            "borrow": 0.0,
-            "locate": round(locate, 6),
-        })
+        trades.append(
+            {
+                "date": panel.dates[trade_date_idx].isoformat()
+                if trade_date_idx < len(panel.dates)
+                else str(t),
+                "asset": panel.assets[n],
+                "side": "buy" if qty > 0 else "sell_short" if qty < 0 else "flat",
+                "quantity": round(float(qty), 6),
+                "price": round(exec_px, 6),
+                "commission": round(commission, 6),
+                "slippage": round(slippage, 6),
+                "spread": round(spread_cost, 6),
+                "borrow": 0.0,
+                "locate": round(locate, 6),
+            }
+        )
     # 3.5 daily borrow accrual on OUTSTANDING short market value
     for n in range(len(prev_shares)):
         if prev_shares[n] < -1e-9:
@@ -483,7 +512,11 @@ def compute_portfolio_metrics(
         bmean = float(np.mean(brets)) if len(brets) else 0.0
         bstd = float(np.std(brets, ddof=1)) if len(brets) > 1 else 0.0
         m_b = min(n, len(benchmark_close))
-        bench_cagr = (benchmark_close[m_b] / benchmark_close[0]) ** (252.0 / max(m_b - 1, 1)) - 1.0 if benchmark_close[m_b] > 0 else 0.0
+        bench_cagr = (
+            (benchmark_close[m_b] / benchmark_close[0]) ** (252.0 / max(m_b - 1, 1)) - 1.0
+            if benchmark_close[m_b] > 0
+            else 0.0
+        )
         bench_sharpe = (bmean / bstd * math.sqrt(252.0)) if bstd > 0 else 0.0
         if n:
             m = min(n, len(brets))

@@ -23,10 +23,9 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def _git_sha() -> str:
-    return (
-        subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=REPO)
-        .stdout.strip()[:16]
-    )
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=REPO
+    ).stdout.strip()[:16]
 
 
 SHA = _git_sha()
@@ -179,9 +178,7 @@ def test_failed_mechanisms_match_confirmed_set(html_text, deck_data):
 
 
 def test_watermark_tier_matches_evidence(html_text, deck_data):
-    quality = json.loads(
-        (REPO / f"artifacts/submission/{SHA}/data/quality_report.json").read_text()
-    )
+    quality = json.loads((REPO / f"artifacts/submission/{SHA}/data/quality_report.json").read_text())
     tier = quality["tier"]
     assert f"TIER {tier}" in html_text, "tier watermark missing from HTML"
 

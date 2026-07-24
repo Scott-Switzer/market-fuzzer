@@ -17,6 +17,7 @@ Known bug (documented, not fixed here - app/ is read-only for this audit):
   union/longest (COMPANY_001 has 158 rows; others have up to 184). Longer series
   are silently truncated to 158 bars. See test_known_truncation_bug_documented.
 """
+
 from __future__ import annotations
 
 import numpy as np

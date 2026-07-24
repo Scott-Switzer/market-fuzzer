@@ -27,10 +27,16 @@ def test_long_only_sizing_on_equity_not_cash():
     realized gross exposure (engine metric) must respect the declared target."""
     panel = _panel()
     spec = CrossSectionalSpec(
-        universe=list(panel.assets), benchmark="SPY",
-        momentum_lookback=120, momentum_short=21, volatility_window=30,
-        long_quantile=0.5, short_quantile=0.0,  # long-only
-        gross_exposure=0.5, net_exposure=0.5, max_position_weight=0.10,
+        universe=list(panel.assets),
+        benchmark="SPY",
+        momentum_lookback=120,
+        momentum_short=21,
+        volatility_window=30,
+        long_quantile=0.5,
+        short_quantile=0.0,  # long-only
+        gross_exposure=0.5,
+        net_exposure=0.5,
+        max_position_weight=0.10,
     )
     res = run_portfolio_backtest(panel=panel, spec=spec, strategy_hash="h")
     # engine-reported gross exposure never exceeds the declared target (within float eps)
@@ -49,10 +55,16 @@ def test_long_only_sizing_on_equity_not_cash():
 def test_dollar_neutral_long_short():
     panel = _panel()
     spec = CrossSectionalSpec(
-        universe=list(panel.assets), benchmark="SPY",
-        momentum_lookback=120, momentum_short=21, volatility_window=30,
-        long_quantile=0.5, short_quantile=0.5,
-        gross_exposure=0.5, net_exposure=0.0, max_position_weight=0.10,
+        universe=list(panel.assets),
+        benchmark="SPY",
+        momentum_lookback=120,
+        momentum_short=21,
+        volatility_window=30,
+        long_quantile=0.5,
+        short_quantile=0.5,
+        gross_exposure=0.5,
+        net_exposure=0.0,
+        max_position_weight=0.10,
     )
     res = run_portfolio_backtest(panel=panel, spec=spec, strategy_hash="h")
     # net exposure must be ~0 (dollar neutral) on average
@@ -65,10 +77,16 @@ def test_dollar_neutral_long_short():
 def test_multiple_rebalances_and_short_proceeds():
     panel = _panel()
     spec = CrossSectionalSpec(
-        universe=list(panel.assets), benchmark="SPY",
-        momentum_lookback=120, momentum_short=21, volatility_window=30,
-        long_quantile=0.5, short_quantile=0.5,
-        gross_exposure=0.5, net_exposure=0.0, max_position_weight=0.10,
+        universe=list(panel.assets),
+        benchmark="SPY",
+        momentum_lookback=120,
+        momentum_short=21,
+        volatility_window=30,
+        long_quantile=0.5,
+        short_quantile=0.5,
+        gross_exposure=0.5,
+        net_exposure=0.0,
+        max_position_weight=0.10,
     )
     res = run_portfolio_backtest(panel=panel, spec=spec, strategy_hash="h")
     # at least two distinct rebalance months must produce positions
@@ -82,10 +100,16 @@ def test_accounting_ties_every_row():
     """cash + mark-to-market holdings == equity for every row."""
     panel = _panel()
     spec = CrossSectionalSpec(
-        universe=list(panel.assets), benchmark="SPY",
-        momentum_lookback=120, momentum_short=21, volatility_window=30,
-        long_quantile=0.5, short_quantile=0.5,
-        gross_exposure=0.5, net_exposure=0.0, max_position_weight=0.10,
+        universe=list(panel.assets),
+        benchmark="SPY",
+        momentum_lookback=120,
+        momentum_short=21,
+        volatility_window=30,
+        long_quantile=0.5,
+        short_quantile=0.5,
+        gross_exposure=0.5,
+        net_exposure=0.0,
+        max_position_weight=0.10,
     )
     res = run_portfolio_backtest(panel=panel, spec=spec, strategy_hash="h")
     T, N = panel.close.shape
@@ -111,10 +135,16 @@ def test_infeasible_gross_warns_and_scales():
 def test_spread_charged():
     panel = _panel()
     spec = CrossSectionalSpec(
-        universe=list(panel.assets), benchmark="SPY",
-        momentum_lookback=120, momentum_short=21, volatility_window=30,
-        long_quantile=0.5, short_quantile=0.5,
-        gross_exposure=0.5, net_exposure=0.0, max_position_weight=0.10,
+        universe=list(panel.assets),
+        benchmark="SPY",
+        momentum_lookback=120,
+        momentum_short=21,
+        volatility_window=30,
+        long_quantile=0.5,
+        short_quantile=0.5,
+        gross_exposure=0.5,
+        net_exposure=0.0,
+        max_position_weight=0.10,
     )
     res = run_portfolio_backtest(panel=panel, spec=spec, strategy_hash="h")
     assert res.cost_summary["spread"] > 0.0, "spread must be charged"
@@ -125,10 +155,16 @@ def test_borrow_accrues_daily_on_outstanding_shorts():
     """Borrow is charged on outstanding short market value every day, not once."""
     panel = _panel()
     spec = CrossSectionalSpec(
-        universe=list(panel.assets), benchmark="SPY",
-        momentum_lookback=120, momentum_short=21, volatility_window=30,
-        long_quantile=0.5, short_quantile=0.5,
-        gross_exposure=0.5, net_exposure=0.0, max_position_weight=0.10,
+        universe=list(panel.assets),
+        benchmark="SPY",
+        momentum_lookback=120,
+        momentum_short=21,
+        volatility_window=30,
+        long_quantile=0.5,
+        short_quantile=0.5,
+        gross_exposure=0.5,
+        net_exposure=0.0,
+        max_position_weight=0.10,
         borrow_bps=50.0,
     )
     res = run_portfolio_backtest(panel=panel, spec=spec, strategy_hash="h")
@@ -142,10 +178,16 @@ def test_borrow_accrues_daily_on_outstanding_shorts():
 def test_benchmark_cagr_is_geometric():
     panel = _panel()
     spec = CrossSectionalSpec(
-        universe=list(panel.assets), benchmark="SPY",
-        momentum_lookback=120, momentum_short=21, volatility_window=30,
-        long_quantile=0.5, short_quantile=0.5,
-        gross_exposure=0.5, net_exposure=0.0, max_position_weight=0.10,
+        universe=list(panel.assets),
+        benchmark="SPY",
+        momentum_lookback=120,
+        momentum_short=21,
+        volatility_window=30,
+        long_quantile=0.5,
+        short_quantile=0.5,
+        gross_exposure=0.5,
+        net_exposure=0.0,
+        max_position_weight=0.10,
     )
     res = run_portfolio_backtest(panel=panel, spec=spec, strategy_hash="h")
     bench = panel.benchmark_close

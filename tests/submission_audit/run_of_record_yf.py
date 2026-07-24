@@ -4,6 +4,7 @@ and write a cache manifest + hash under artifacts/yfinance_cache/.
 Read-only on app/. Usage:
     env -u PYTHONPATH .venv312/bin/python tests/submission_audit/run_of_record_yf.py
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -69,7 +70,12 @@ def main() -> int:
             }
         )
         payload = json.dumps(
-            {"assets": returned, "rows": panel.T, "first": manifest["first_date"], "last": manifest["last_date"]},
+            {
+                "assets": returned,
+                "rows": panel.T,
+                "first": manifest["first_date"],
+                "last": manifest["last_date"],
+            },
             sort_keys=True,
         ).encode()
         manifest["panel_hash"] = hashlib.sha256(close.tobytes() + payload).hexdigest()
@@ -77,7 +83,11 @@ def main() -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out = OUT_DIR / "run_of_record_manifest.json"
     out.write_text(json.dumps(manifest, indent=2, default=str))
-    print(json.dumps({k: v for k, v in manifest.items() if k not in ("quality", "provenance")}, indent=2, default=str))
+    print(
+        json.dumps(
+            {k: v for k, v in manifest.items() if k not in ("quality", "provenance")}, indent=2, default=str
+        )
+    )
     print("manifest ->", out)
     return 0 if panel is not None else 1
 

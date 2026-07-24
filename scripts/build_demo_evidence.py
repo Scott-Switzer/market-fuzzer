@@ -25,9 +25,7 @@ OUT = ROOT / "app" / "static" / "submission_demo_evidence.json"
 
 def _current_git_sha() -> str:
     try:
-        out = subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=ROOT
-        )
+        out = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=ROOT)
         return out.stdout.strip()
     except Exception:
         return "unknown"
@@ -164,9 +162,13 @@ def main() -> None:
         },
         "stress": {
             "evaluated": deck["synthetic"]["evaluated"],
-            "failure_count": deck["synthetic"]["failure_count"],
+            "confirmed_count": deck["synthetic"]["confirmed_count"],
+            "candidate_count": deck["synthetic"].get("candidate_count"),
+            # UI shows CONFIRMED failures (repeated-seed), not raw candidates
+            "failure_count": deck["synthetic"]["confirmed_count"],
             "failure_rate": deck["synthetic"]["failure_rate"],
-            "mechanisms_searched": deck["synthetic"]["mechanisms_searched"],
+            "mechanisms_searched": deck["synthetic"]["mechanisms_evaluated"],
+            "mechanisms_evaluated": deck["synthetic"]["mechanisms_evaluated"],
             "failed_mechanisms": deck["synthetic"]["failed_mechanisms"],
             "regime_matrix": regime,
             "regime_header": rm_header,

@@ -34,9 +34,7 @@ def test_default_exposure_config_feasible_or_rejected():
     N = 7
     rng = np.random.default_rng(7)
     drifts = np.linspace(-0.3, 0.4, N)
-    close = np.exp(
-        np.cumsum(rng.normal(0.0, 0.005, size=(T, N)) + drifts / T, axis=0)
-    ) * 100.0
+    close = np.exp(np.cumsum(rng.normal(0.0, 0.005, size=(T, N)) + drifts / T, axis=0)) * 100.0
     panel = make_panel(close)
     spec = small_spec(
         universe=[f"A{i}" for i in range(N)],
@@ -46,9 +44,7 @@ def test_default_exposure_config_feasible_or_rejected():
         net_exposure=0.0,
         max_position_weight=0.10,
     )
-    res = run_portfolio_backtest(
-        panel=panel, spec=spec, strategy_hash="p0-3", initial_capital=1_000_000.0
-    )
+    res = run_portfolio_backtest(panel=panel, spec=spec, strategy_hash="p0-3", initial_capital=1_000_000.0)
     tw = res.target_weights
     live = np.abs(tw).sum(axis=1) > 1e-12
     assert live.any(), "no live targets; panel misconfigured"

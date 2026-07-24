@@ -18,8 +18,14 @@ from app.strategy_lab.submission.strategy import CrossSectionalSpec
 def _spec():
     return CrossSectionalSpec(
         universe=["SYN_A", "SYN_B", "SYN_C", "SYN_D", "SYN_E", "SYN_F", "SPY"],
-        benchmark="SPY", momentum_lookback=120, momentum_short=21, volatility_window=30,
-        long_quantile=0.5, short_quantile=0.5, gross_exposure=0.5, net_exposure=0.0,
+        benchmark="SPY",
+        momentum_lookback=120,
+        momentum_short=21,
+        volatility_window=30,
+        long_quantile=0.5,
+        short_quantile=0.5,
+        gross_exposure=0.5,
+        net_exposure=0.0,
         max_position_weight=0.10,
     )
 
@@ -40,9 +46,16 @@ def test_fill_at_t_unchanged_by_close_t_mutation():
     from app.strategy_lab.submission.panels import MarketDataPanel
 
     mut_panel = MarketDataPanel(
-        dates=mut.dates, assets=mut.assets, open=mut.open, high=mut.high,
-        low=mut.low, close=c, volume=mut.volume, benchmark_close=mut.benchmark_close,
-        metadata=mut.metadata, provenance=mut.provenance,
+        dates=mut.dates,
+        assets=mut.assets,
+        open=mut.open,
+        high=mut.high,
+        low=mut.low,
+        close=c,
+        volume=mut.volume,
+        benchmark_close=mut.benchmark_close,
+        metadata=mut.metadata,
+        provenance=mut.provenance,
     )
     res_mut = _run(mut_panel)
     # fill at t uses signal from t-1 (and earlier), so close[t] cannot change it
@@ -61,9 +74,16 @@ def test_first_changed_fill_is_t_plus_1_or_later():
     from app.strategy_lab.submission.panels import MarketDataPanel
 
     mut_panel = MarketDataPanel(
-        dates=mut.dates, assets=mut.assets, open=mut.open, high=mut.high,
-        low=mut.low, close=c, volume=mut.volume, benchmark_close=mut.benchmark_close,
-        metadata=mut.metadata, provenance=mut.provenance,
+        dates=mut.dates,
+        assets=mut.assets,
+        open=mut.open,
+        high=mut.high,
+        low=mut.low,
+        close=c,
+        volume=mut.volume,
+        benchmark_close=mut.benchmark_close,
+        metadata=mut.metadata,
+        provenance=mut.provenance,
     )
     res_mut = _run(mut_panel)
     # The signal produced at t feeds the fill at t+1 (or later). So the first
@@ -88,6 +108,4 @@ def test_delay_shifts_fills_by_n_days():
     res = _run(base)
     res_delay = run_portfolio_backtest(panel=base, spec=spec_delay, strategy_hash="h")
     # delayed fills must not equal the non-delayed fills at the same row
-    assert not np.allclose(res.shares[205], res_delay.shares[205]), (
-        "execution delay must shift fills"
-    )
+    assert not np.allclose(res.shares[205], res_delay.shares[205]), "execution delay must shift fills"

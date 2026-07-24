@@ -41,24 +41,40 @@ def _panel(n_assets: int = 3, T: int = 400, seed: int = 7) -> MarketDataPanel:
     prov = DataProvenance(source="conformance_fixture", tier=3, label="bt conformance")
     dates = tuple(date(2022, 1, 1) + timedelta(days=i) for i in range(T))
     return MarketDataPanel(
-        dates=dates, assets=tuple(assets), open=close.copy(), high=close.copy(),
-        low=close.copy(), close=close, volume=np.ones((T, n_assets)),
-        benchmark_close=benchmark, metadata=metadata, provenance=prov,
+        dates=dates,
+        assets=tuple(assets),
+        open=close.copy(),
+        high=close.copy(),
+        low=close.copy(),
+        close=close,
+        volume=np.ones((T, n_assets)),
+        benchmark_close=benchmark,
+        metadata=metadata,
+        provenance=prov,
     )
 
 
 def _spec(panel):
     return CrossSectionalSpec(
-            universe=list(panel.assets), benchmark=panel.assets[0],
-            momentum_lookback=5, momentum_short=2, volatility_window=5,
-            long_quantile=1.0, short_quantile=0.0,  # all long (pure long now honoured)
-            gross_exposure=1.0, net_exposure=1.0, weighting="equal_weight",
-            max_position_weight=1.0,
-            commission_bps=0.0, spread_bps=0.0, slippage_bps=0.0,
-            borrow_bps=0.0, locate_bps=0.0,
-            cost_model_type="heuristic_flat_bps", cost_model_calibrated=False,
-        )
-
+        universe=list(panel.assets),
+        benchmark=panel.assets[0],
+        momentum_lookback=5,
+        momentum_short=2,
+        volatility_window=5,
+        long_quantile=1.0,
+        short_quantile=0.0,  # all long (pure long now honoured)
+        gross_exposure=1.0,
+        net_exposure=1.0,
+        weighting="equal_weight",
+        max_position_weight=1.0,
+        commission_bps=0.0,
+        spread_bps=0.0,
+        slippage_bps=0.0,
+        borrow_bps=0.0,
+        locate_bps=0.0,
+        cost_model_type="heuristic_flat_bps",
+        cost_model_calibrated=False,
+    )
 
     def test_engine_matches_buy_and_hold_analytic():
         """1-asset, pure long-only, zero-cost: the engine must exactly track the
@@ -74,9 +90,16 @@ def _spec(panel):
         prov = DataProvenance(source="conformance_fixture", tier=3, label="analytic")
         dates = tuple(date(2022, 1, 1) + timedelta(days=i) for i in range(T))
         panel = MarketDataPanel(
-            dates=dates, assets=("ONE",), open=close.copy(), high=close.copy(),
-            low=close.copy(), close=close, volume=np.ones((T, 1)),
-            benchmark_close=benchmark, metadata=metadata, provenance=prov,
+            dates=dates,
+            assets=("ONE",),
+            open=close.copy(),
+            high=close.copy(),
+            low=close.copy(),
+            close=close,
+            volume=np.ones((T, 1)),
+            benchmark_close=benchmark,
+            metadata=metadata,
+            provenance=prov,
         )
         res = run_portfolio_backtest(panel=panel, spec=_spec(panel), strategy_hash="analytic")
         price_ratio = px[-1] / px[0]
@@ -94,11 +117,20 @@ def test_engine_matches_bt_secondary():
     try:
         import pandas as pd
 
-        px = pd.DataFrame(panel.close, index=pd.to_datetime([d.isoformat() for d in panel.dates]), columns=list(panel.assets))
-        s = bt.Strategy("ew", [
-            bt.algos.RunMonthly(), bt.algos.SelectAll(),
-            bt.algos.WeighEqually(), bt.algos.Rebalance(),
-        ])
+        px = pd.DataFrame(
+            panel.close,
+            index=pd.to_datetime([d.isoformat() for d in panel.dates]),
+            columns=list(panel.assets),
+        )
+        s = bt.Strategy(
+            "ew",
+            [
+                bt.algos.RunMonthly(),
+                bt.algos.SelectAll(),
+                bt.algos.WeighEqually(),
+                bt.algos.Rebalance(),
+            ],
+        )
         t = bt.Backtest(s, px, initial_capital=1_000_000.0)
         r = bt.run(t)
         # bt keeps weights/prices; reconstruct the equity curve
@@ -113,7 +145,8 @@ def test_engine_matches_bt_secondary():
 def test_engine_rejects_unsupported_cost_model():
     panel = _panel()
     spec = CrossSectionalSpec(
-        universe=list(panel.assets), benchmark=panel.assets[0],
+        universe=list(panel.assets),
+        benchmark=panel.assets[0],
         cost_model_type="broker_calibrated_magic",  # unsupported
     )
     with pytest.raises(ValueError):

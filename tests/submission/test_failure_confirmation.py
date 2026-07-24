@@ -15,11 +15,15 @@ from app.strategy_lab.submission.stress_search import (
 
 
 def _spec():
-    return CrossSectionalSpec(universe=["SYN_A", "SYN_B", "SYN_C", "SYN_D", "SYN_E", "SYN_F", "SPY"], benchmark="SPY")
+    return CrossSectionalSpec(
+        universe=["SYN_A", "SYN_B", "SYN_C", "SYN_D", "SYN_E", "SYN_F", "SPY"], benchmark="SPY"
+    )
 
 
 def test_candidate_vs_confirmed_are_separate():
-    res = run_fast_search(strategy_hash="x", spec=_spec(), base_assets=list(_spec().universe), T=504, budget=33)
+    res = run_fast_search(
+        strategy_hash="x", spec=_spec(), base_assets=list(_spec().universe), T=504, budget=33
+    )
     # the run reports both counts distinctly
     assert "candidate_count" in res
     assert "failure_count" in res
@@ -33,18 +37,42 @@ def test_confirmation_requires_repeated_seeds():
 
     # Build a fake world result that violates on base but not siblings.
     base = {
-        "mechanism": "volatility_expansion", "seed": 999, "intensity": 0.9,
-        "sharpe": 0.0, "max_drawdown": -0.05, "cost_pct": 0.0,
-        "violated_predicates": ["low_sharpe"], "non_shortable": 0,
-        "execution_delay_days": 0, "data_failure": False,
+        "mechanism": "volatility_expansion",
+        "seed": 999,
+        "intensity": 0.9,
+        "sharpe": 0.0,
+        "max_drawdown": -0.05,
+        "cost_pct": 0.0,
+        "violated_predicates": ["low_sharpe"],
+        "non_shortable": 0,
+        "execution_delay_days": 0,
+        "data_failure": False,
     }
     siblings = [
-        {"mechanism": "volatility_expansion", "seed": 1000, "intensity": 0.9,
-         "sharpe": 5.0, "max_drawdown": -0.01, "cost_pct": 0.0,
-         "violated_predicates": [], "non_shortable": 0, "execution_delay_days": 0, "data_failure": False},
-        {"mechanism": "volatility_expansion", "seed": 1001, "intensity": 0.9,
-         "sharpe": 5.0, "max_drawdown": -0.01, "cost_pct": 0.0,
-         "violated_predicates": [], "non_shortable": 0, "execution_delay_days": 0, "data_failure": False},
+        {
+            "mechanism": "volatility_expansion",
+            "seed": 1000,
+            "intensity": 0.9,
+            "sharpe": 5.0,
+            "max_drawdown": -0.01,
+            "cost_pct": 0.0,
+            "violated_predicates": [],
+            "non_shortable": 0,
+            "execution_delay_days": 0,
+            "data_failure": False,
+        },
+        {
+            "mechanism": "volatility_expansion",
+            "seed": 1001,
+            "intensity": 0.9,
+            "sharpe": 5.0,
+            "max_drawdown": -0.01,
+            "cost_pct": 0.0,
+            "violated_predicates": [],
+            "non_shortable": 0,
+            "execution_delay_days": 0,
+            "data_failure": False,
+        },
     ]
     # emulate the confirmation logic directly
     base_viol = set(base["violated_predicates"])
@@ -54,7 +82,9 @@ def test_confirmation_requires_repeated_seeds():
 
 
 def test_confirmed_failure_carries_predicate_and_rule():
-    res = run_fast_search(strategy_hash="x", spec=_spec(), base_assets=list(_spec().universe), T=504, budget=33)
+    res = run_fast_search(
+        strategy_hash="x", spec=_spec(), base_assets=list(_spec().universe), T=504, budget=33
+    )
     for cf in res["confirmed_failures"]:
         assert "confirmed_predicates" in cf
         assert "confirmation" in cf

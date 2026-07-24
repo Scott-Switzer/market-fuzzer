@@ -26,7 +26,9 @@ def cmd_demo(args: argparse.Namespace) -> int:
         # Historical run of record: require real data; do NOT silently fall back.
         from app.strategy_lab.submission.yfinance_adapter import acquire
 
-        probe = acquire(tickers=list(spec.universe) + [spec.benchmark], start=spec.start, end=spec.end, use_cache=True)
+        probe = acquire(
+            tickers=list(spec.universe) + [spec.benchmark], start=spec.start, end=spec.end, use_cache=True
+        )
         if probe.get("panel") is None:
             print("SUBMISSION DEMO (HISTORICAL) FAILED: no yfinance data/cache available.")
             print("  Refusing to overwrite the primary evidence deck with synthetic-fixture results.")
@@ -54,7 +56,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     d = sub.add_parser("demo")
     d.add_argument(
-        "--mode", default="synthetic_fixture",
+        "--mode",
+        default="synthetic_fixture",
         choices=["synthetic_fixture", "yfinance", "fenrix", "auto", "historical", "offline"],
     )
     d.add_argument("--no-cache", action="store_true")

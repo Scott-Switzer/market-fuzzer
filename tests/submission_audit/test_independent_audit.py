@@ -102,9 +102,7 @@ def _whash(obj) -> str:
 
 
 def _git(*args: str) -> str:
-    out = subprocess.run(
-        ["git", *args], capture_output=True, text=True, cwd=REPO_ROOT, check=True
-    )
+    out = subprocess.run(["git", *args], capture_output=True, text=True, cwd=REPO_ROOT, check=True)
     return out.stdout.strip()
 
 
@@ -135,9 +133,7 @@ class TestDeckHonesty:
         if not deck_path.exists():
             pytest.skip("deck not rendered")
         html = deck_path.read_text()
-        assert deck_data["data_mode"] in html, (
-            "deck must state the data mode of record verbatim"
-        )
+        assert deck_data["data_mode"] in html, "deck must state the data mode of record verbatim"
 
 
 # ---------------------------------------------------------------------------
@@ -145,10 +141,7 @@ class TestDeckHonesty:
 # ---------------------------------------------------------------------------
 class TestClaimLedger:
     def test_real_panel_claim_matches_data_mode(self, claim_ledger, deck_data):
-        claim = next(
-            c for c in claim_ledger["claims"]
-            if "historical backtest" in c["claim"]
-        )
+        claim = next(c for c in claim_ledger["claims"] if "historical backtest" in c["claim"])
         expected = deck_data["data_mode"] != "synthetic_fixture"
         assert claim["supported"] is expected, (
             f"CLAIM DEFECT: 'historical backtest on real multi-asset panel' is marked "
@@ -240,9 +233,7 @@ class TestFailureConfirmation:
         html = deck_path.read_text().lower()
         if "confirmed failure" in html and deck_data["synthetic"]["failure_count"] > 0:
             items = failures_doc.get("items", [])
-            has_confirmation = items and all(
-                (f.get("confirmation") or f.get("confirm_seeds")) for f in items
-            )
+            has_confirmation = items and all((f.get("confirmation") or f.get("confirm_seeds")) for f in items)
             assert has_confirmation, (
                 "DECK DEFECT: deck says 'confirmed failures' but the underlying "
                 "failures are unconfirmed single-seed observations."
@@ -359,9 +350,7 @@ class TestArtifactHashes:
             "regime_matrix.csv": _whash(regime.rstrip("\n")),
             "deck_data.json": _whash(deck),
         }
-        mismatches = {
-            k: (hashes.get(k), v) for k, v in recomputed.items() if hashes.get(k) != v
-        }
+        mismatches = {k: (hashes.get(k), v) for k, v in recomputed.items() if hashes.get(k) != v}
         assert not mismatches, (
             f"HASH DEFECT: manifest artifact_hashes do not recompute from the files on "
             f"disk: {mismatches}. Either the files were overwritten by a later run or "
@@ -388,8 +377,7 @@ class TestArtifactHashes:
         ]
         hashed = set(manifest["artifact_hashes"].keys())
         missing = [
-            m for m in material
-            if (pkg / m).exists() and Path(m).name not in hashed and m not in hashed
+            m for m in material if (pkg / m).exists() and Path(m).name not in hashed and m not in hashed
         ]
         assert not missing, (
             f"HASH DEFECT: material artifacts not covered by manifest hashes "

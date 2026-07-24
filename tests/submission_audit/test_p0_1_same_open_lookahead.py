@@ -31,7 +31,7 @@ from app.strategy_lab.submission.engine import run_portfolio_backtest
 @pytest.mark.xfail(strict=False, reason="P0-1: close-t decision filled at SAME open[t]; must fill open[t+1]")
 def test_fill_occurs_next_open_not_same_open():
     T = 70
-    a0 = 100.0 * np.exp(np.linspace(0.0, 0.4, T))   # rising -> long
+    a0 = 100.0 * np.exp(np.linspace(0.0, 0.4, T))  # rising -> long
     a1 = 100.0 * np.exp(np.linspace(0.0, -0.3, T))  # falling -> short
     panel = make_panel(np.column_stack([a0, a1]))
     res = run_portfolio_backtest(

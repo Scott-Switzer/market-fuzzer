@@ -107,9 +107,23 @@ def main() -> int:
         narration.append((round(time.monotonic() - t0, 1), shot, text))
 
     proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "app.main:app",
-         "--host", "127.0.0.1", "--port", str(port), "--log-level", "warning"],
-        cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "app.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--log-level",
+            "warning",
+        ],
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
     )
     manifest: dict = {}
     try:
@@ -150,20 +164,20 @@ def main() -> int:
                 page.wait_for_timeout(350)
                 shot(shot_idx)
 
-            scroll_shot(0, 1)   # strategy
-            scroll_shot(1, 2)   # clauses
-            scroll_shot(2, 3)   # approval
-            scroll_shot(3, 4)   # data source
-            scroll_shot(4, 5)   # historical (top)
+            scroll_shot(0, 1)  # strategy
+            scroll_shot(1, 2)  # clauses
+            scroll_shot(2, 3)  # approval
+            scroll_shot(3, 4)  # data source
+            scroll_shot(4, 5)  # historical (top)
 
             # 07 charts closeup: scroll to bottom of historical stage (cost/holdings)
             page.eval_on_selector("#stage-4", "el => el.scrollIntoView({block:'end'})")
             page.wait_for_timeout(350)
             shot(6)
 
-            scroll_shot(5, 7)   # stress
-            scroll_shot(6, 8)   # replay
-            scroll_shot(7, 9)   # evidence
+            scroll_shot(5, 7)  # stress
+            scroll_shot(6, 8)  # replay
+            scroll_shot(7, 9)  # evidence
 
             # 11 complete: scroll to top to show all done chips
             page.eval_on_selector(".stagebar", "el => el.scrollIntoView({block:'start'})")
@@ -240,7 +254,7 @@ def main() -> int:
             f"- **Git SHA:** `{head}`",
             "- **Flow:** verified judge demo (deterministic, offline cached evidence)",
             f"- **Recorded:** {manifest['generated_at']}",
-            f"- **Page state:** {state.get('source','')} · {state.get('hash','')} · "
+            f"- **Page state:** {state.get('source', '')} · {state.get('hash', '')} · "
             f"{state.get('stages_done')}/8 stages · {state.get('watermarks')} watermarks",
             "",
             "## Walkthrough",

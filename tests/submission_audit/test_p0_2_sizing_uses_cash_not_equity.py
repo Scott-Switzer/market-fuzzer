@@ -28,7 +28,9 @@ from _audit_helpers import make_panel, small_spec
 from app.strategy_lab.submission.engine import run_portfolio_backtest
 
 
-@pytest.mark.xfail(strict=False, reason="P0-2: _weights_to_shares sizes off cash, not equity (engine.py ~350)")
+@pytest.mark.xfail(
+    strict=False, reason="P0-2: _weights_to_shares sizes off cash, not equity (engine.py ~350)"
+)
 def test_second_rebalance_sizes_off_equity_not_cash():
     T = 70
     a0 = 100.0 * np.exp(np.linspace(0.0, 0.2, T))
@@ -36,9 +38,7 @@ def test_second_rebalance_sizes_off_equity_not_cash():
     panel = make_panel(np.column_stack([a0, a1]))
     # Fully-invested net-long book: weights become [0.5, 0.5].
     spec = small_spec(long_quantile=0.5, short_quantile=0.0, net_exposure=1.0)
-    res = run_portfolio_backtest(
-        panel=panel, spec=spec, strategy_hash="p0-2", initial_capital=1_000_000.0
-    )
+    res = run_portfolio_backtest(panel=panel, spec=spec, strategy_hash="p0-2", initial_capital=1_000_000.0)
     # Sanity: fully invested after first rebalance (t=31), cash ~ 0.
     assert res.gross_exposure[35] > 0.9, "expected fully-invested book after first rebalance"
     assert abs(res.cash[35]) < 0.2 * 1_000_000.0

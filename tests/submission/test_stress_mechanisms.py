@@ -1,10 +1,10 @@
 """Test-stress-mechanisms (spec 4.1-4.5).
 
- * 4.1 cross-process determinism (sha256, not hash())
- * 4.2 every registered mechanism is evaluated (no no-ops); intensity
-       continuously affects minimizable mechanisms
- * 4.4 minimization is meaningful (reduced intensity fails less / passes)
- * 4.5 the run reports only mechanisms ACTUALLY evaluated
+* 4.1 cross-process determinism (sha256, not hash())
+* 4.2 every registered mechanism is evaluated (no no-ops); intensity
+      continuously affects minimizable mechanisms
+* 4.4 minimization is meaningful (reduced intensity fails less / passes)
+* 4.5 the run reports only mechanisms ACTUALLY evaluated
 """
 
 from __future__ import annotations
@@ -31,9 +31,7 @@ def _assets():
 def test_stable_seed_not_python_hash():
     # 4.1: must be a stable sha256 digest, never Python's randomized hash()
     h = mech_seed("correlation_breakdown", 123)
-    expected = int.from_bytes(
-        hashlib.sha256(b"correlation_breakdown:123").digest()[:8], "big"
-    )
+    expected = int.from_bytes(hashlib.sha256(b"correlation_breakdown:123").digest()[:8], "big")
     assert h == expected
     # deterministic across calls (Python hash() would vary per process)
     assert mech_seed("correlation_breakdown", 123) == h
@@ -63,8 +61,12 @@ def test_no_noop_mechanism_intensity_has_effect():
         for t in range(T):
             p *= 1.0 + rng.normal(0.0003, 0.01)
             close[t, n] = p
-    for mech in ("volatility_expansion", "volatility_compression", "correlation_breakdown",
-                 "momentum_reversal"):
+    for mech in (
+        "volatility_expansion",
+        "volatility_compression",
+        "correlation_breakdown",
+        "momentum_reversal",
+    ):
         lo = apply_mechanism(close, mech, 0.0, 7, assets)["close"]
         hi = apply_mechanism(close, mech, 1.0, 7, assets)["close"]
         assert not np.allclose(lo, hi), f"{mech} is a no-op (intensity ignored)"

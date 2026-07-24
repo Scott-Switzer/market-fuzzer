@@ -79,9 +79,23 @@ def main() -> int:
         env.pop("PYTHONPATH", None)
         env.pop("OPENAI_API_KEY", None)
         proc = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "app.main:app",
-             "--host", "127.0.0.1", "--port", str(port), "--log-level", "warning"],
-            cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "app.main:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+                "--log-level",
+                "warning",
+            ],
+            cwd=ROOT,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
         )
         try:
             _wait_health(port, proc)
@@ -95,7 +109,10 @@ def main() -> int:
                 page.on("console", lambda m: console_errors.append(m.text) if m.type == "error" else None)
                 page.on("pageerror", lambda e: console_errors.append(str(e)))
                 bad_responses: list[str] = []
-                page.on("response", lambda r: bad_responses.append(f"{r.status} {r.url}") if r.status >= 400 else None)
+                page.on(
+                    "response",
+                    lambda r: bad_responses.append(f"{r.status} {r.url}") if r.status >= 400 else None,
+                )
 
                 page.goto(f"{base}/submission", wait_until="domcontentloaded")
                 assert "Fenrix Submission" in page.title(), f"bad title {page.title()!r}"
@@ -132,7 +149,9 @@ def main() -> int:
                 # hash appears in approval, stress, evidence stages (short form)
                 occurrences = body_text.count(hash_badge)
                 if occurrences < 3:
-                    failures.append(f"[hash-continuity] hash {hash_badge!r} appeared {occurrences}x (<3 stages)")
+                    failures.append(
+                        f"[hash-continuity] hash {hash_badge!r} appeared {occurrences}x (<3 stages)"
+                    )
 
                 # (5) charts render: >=3 svg with path data + bar charts
                 svgs = page.query_selector_all("svg")
@@ -191,8 +210,10 @@ def main() -> int:
         for f in failures:
             print("  ✗ " + f)
         return 1
-    print("SUBMISSION E2E: PASS — watermark, git SHA, hash continuity, charts, "
-          "no console errors, no failed API calls, evidence download, no stale loading.")
+    print(
+        "SUBMISSION E2E: PASS — watermark, git SHA, hash continuity, charts, "
+        "no console errors, no failed API calls, evidence download, no stale loading."
+    )
     return 0
 
 

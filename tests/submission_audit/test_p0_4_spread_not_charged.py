@@ -37,9 +37,7 @@ def _panel():
 def test_spread_is_charged():
     panel = _panel()
     spec = small_spec(spread_bps=10.0)  # all other costs zero
-    res = run_portfolio_backtest(
-        panel=panel, spec=spec, strategy_hash="p0-4", initial_capital=1_000_000.0
-    )
+    res = run_portfolio_backtest(panel=panel, spec=spec, strategy_hash="p0-4", initial_capital=1_000_000.0)
     assert res.cost_summary["total"] > 0.0, (
         "SPREAD DEFECT: spread_bps=10 with ~$1M traded notional produced $0 of "
         "costs. _charge_costs never reads spec.spread_bps."
@@ -50,11 +48,15 @@ def test_spread_is_charged():
 def test_spread_reduces_equity_vs_zero_spread():
     panel = _panel()
     r0 = run_portfolio_backtest(
-        panel=panel, spec=small_spec(spread_bps=0.0), strategy_hash="p0-4a",
+        panel=panel,
+        spec=small_spec(spread_bps=0.0),
+        strategy_hash="p0-4a",
         initial_capital=1_000_000.0,
     )
     r1 = run_portfolio_backtest(
-        panel=panel, spec=small_spec(spread_bps=10.0), strategy_hash="p0-4b",
+        panel=panel,
+        spec=small_spec(spread_bps=10.0),
+        strategy_hash="p0-4b",
         initial_capital=1_000_000.0,
     )
     assert float(r1.equity_curve[-1]) < float(r0.equity_curve[-1]), (

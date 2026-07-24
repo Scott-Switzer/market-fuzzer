@@ -36,9 +36,7 @@ def test_borrow_accrues_daily_on_held_short():
     a1 = 100.0 * np.exp(np.linspace(0.0, -0.3, T))
     panel = make_panel(np.column_stack([a0, a1]))
     spec = small_spec(borrow_bps=365.0)  # all other costs zero
-    res = run_portfolio_backtest(
-        panel=panel, spec=spec, strategy_hash="p0-5", initial_capital=1_000_000.0
-    )
+    res = run_portfolio_backtest(panel=panel, spec=spec, strategy_hash="p0-5", initial_capital=1_000_000.0)
     t0 = first_active_target_index(res)
     # Realized short market value each day the short is held.
     short_mv = np.where(res.shares < 0, -res.shares, 0.0) * panel.close

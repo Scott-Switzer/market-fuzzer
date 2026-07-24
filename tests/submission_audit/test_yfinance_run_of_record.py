@@ -11,6 +11,7 @@ available every run-of-record invariant is asserted:
   * survivorship warning is recorded in the run-of-record manifest
   * cache manifest + panel hash exist under artifacts/yfinance_cache/
 """
+
 from __future__ import annotations
 
 import json
@@ -103,7 +104,9 @@ def test_cache_roundtrip_reports_source(run_of_record):
 
 def test_manifest_hash_and_survivorship_warning_saved():
     if not MANIFEST.exists():
-        pytest.skip("run-of-record manifest not generated yet (run tests/submission_audit/run_of_record_yf.py)")
+        pytest.skip(
+            "run-of-record manifest not generated yet (run tests/submission_audit/run_of_record_yf.py)"
+        )
     m = json.loads(MANIFEST.read_text())
     assert m["requested_count"] == 31
     assert m["returned_count"] == len(m["returned"])

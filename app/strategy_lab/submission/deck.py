@@ -38,9 +38,7 @@ HISTORICAL_MODES = {"yfinance", "fenrix"}
 
 def _git_sha() -> str:
     try:
-        out = subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=Path.cwd()
-        )
+        out = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=Path.cwd())
         return out.stdout.strip()[:16]
     except Exception:
         return "unknown"
@@ -86,9 +84,7 @@ def load_evidence(require_current_sha: bool = True) -> Evidence:
         data = json.loads(deck_json.read_text())
 
     if require_current_sha and data.get("git_sha") != sha:
-        raise RuntimeError(
-            f"stale evidence: deck_data git_sha={data.get('git_sha')} != current {sha}"
-        )
+        raise RuntimeError(f"stale evidence: deck_data git_sha={data.get('git_sha')} != current {sha}")
 
     quality_path = base / "data" / "quality_report.json"
     tier = 3
@@ -102,9 +98,7 @@ def load_evidence(require_current_sha: bool = True) -> Evidence:
     )
 
     # every screenshot must come from the CURRENT sha evidence dir
-    screenshots = sorted(
-        p for pat in ("*.png", "*.jpg") for p in (base / "demo").glob(pat)
-    )
+    screenshots = sorted(p for pat in ("*.png", "*.jpg") for p in (base / "demo").glob(pat))
 
     equity: list[float] = []
     eq_csv = base / "historical" / "equity_curve.csv"
@@ -159,8 +153,16 @@ def _render_equity_chart(ev: Evidence) -> Path | None:
     ax.set_ylabel("equity")
     ax.grid(alpha=0.25)
     fig.text(
-        0.5, 0.5, ev.watermark, ha="center", va="center",
-        fontsize=11, color="gray", alpha=0.30, rotation=12, wrap=True,
+        0.5,
+        0.5,
+        ev.watermark,
+        ha="center",
+        va="center",
+        fontsize=11,
+        color="gray",
+        alpha=0.30,
+        rotation=12,
+        wrap=True,
     )
     fig.tight_layout()
     fig.savefig(out)
@@ -325,7 +327,8 @@ def build_slides(ev: Evidence) -> list[dict[str, Any]]:
         {  # 9
             "title": "Honest boundary & roadmap",
             "subtitle": "What this is NOT \u2014 and what comes next",
-            "bullets": [*d["limitations"],
+            "bullets": [
+                *d["limitations"],
                 "Roadmap: point-in-time fundamentals, broker-calibrated costs, richer mechanism library, live paper-trading bridge.",
             ],
             "watermark": False,
@@ -357,8 +360,7 @@ def render_html(slides: list[dict[str, Any]], ev: Evidence) -> str:
         kpi_html = ""
         if sl.get("kpis"):
             cards = "".join(
-                f'<div class="card"><b>{v}</b><span>{label}</span></div>'
-                for v, label in sl["kpis"]
+                f'<div class="card"><b>{v}</b><span>{label}</span></div>' for v, label in sl["kpis"]
             )
             kpi_html = f'<div class="kpi">{cards}</div>'
         bullets = "".join(f"<li>{b}</li>" for b in sl.get("bullets", []))
@@ -368,17 +370,15 @@ def render_html(slides: list[dict[str, Any]], ev: Evidence) -> str:
             if img_path.exists():
                 rel = f"../../../artifacts/submission/{ev.sha}/pitch/{sl['image']}"
                 img_html = f'<img src="{rel}" alt="equity curve" style="width:100%;border-radius:8px;margin-top:10px">'
-        for shot in (ev.screenshots if sl.get("image") else []):
+        for shot in ev.screenshots if sl.get("image") else []:
             img_html += (
                 f'<img src="../../../{shot}" alt="screenshot" '
                 'style="width:100%;border-radius:8px;margin-top:10px">'
             )
-        wm = (
-            f'<div class="wm">{ev.watermark}</div>' if sl.get("watermark") else ""
-        )
+        wm = f'<div class="wm">{ev.watermark}</div>' if sl.get("watermark") else ""
         parts.append(
             f'<div class="slide" data-slide="{i}">{wm}<h1>{sl["title"]}</h1>'
-            f'<h2>{sl["subtitle"]}</h2>{kpi_html}<ul>{bullets}</ul>{img_html}</div>'
+            f"<h2>{sl['subtitle']}</h2>{kpi_html}<ul>{bullets}</ul>{img_html}</div>"
         )
 
     body = "\n".join(parts)
@@ -447,9 +447,7 @@ def render_pptx(slides: list[dict[str, Any]], ev: Evidence, out_path: Path) -> P
             n = len(sl["kpis"])
             w = 12.1 / n
             for j, (v, label) in enumerate(sl["kpis"]):
-                kb = slide.shapes.add_textbox(
-                    Inches(0.6 + j * w), Inches(top), Inches(w - 0.15), Inches(1.1)
-                )
+                kb = slide.shapes.add_textbox(Inches(0.6 + j * w), Inches(top), Inches(w - 0.15), Inches(1.1))
                 ktf = kb.text_frame
                 ktf.word_wrap = True
                 kp = ktf.paragraphs[0]

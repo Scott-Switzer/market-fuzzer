@@ -304,7 +304,11 @@ def _eval_single(strategy_hash, spec, mechanism, intensity, seed):
     """Kept for backward-compatible single-world evaluation via the new stress API."""
     from app.strategy_lab.submission.stress_search import _base_panel, _evaluate_world
 
-    assets = list(spec.universe) if mode_is_fixture(spec) else ["SYN_A", "SYN_B", "SYN_C", "SYN_D", "SYN_E", "SYN_F", "SPY"]
+    assets = (
+        list(spec.universe)
+        if mode_is_fixture(spec)
+        else ["SYN_A", "SYN_B", "SYN_C", "SYN_D", "SYN_E", "SYN_F", "SPY"]
+    )
     N = len(assets)
     base = _base_panel(assets, 504, 12345, [100.0 + 20.0 * i for i in range(N)])
     return _evaluate_world(base, assets, spec, mechanism, intensity, seed, DEFAULT_PREDICATES)
@@ -312,4 +316,3 @@ def _eval_single(strategy_hash, spec, mechanism, intensity, seed):
 
 def mode_is_fixture(spec) -> bool:
     return False
-
