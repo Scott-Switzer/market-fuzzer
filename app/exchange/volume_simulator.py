@@ -113,7 +113,7 @@ class VolumeSimulator:
         for t in range(1, n):
             r = abs(float(rets[t - 1])) if t - 1 < rets.size else 0.0
             u_mult = max(0.25, _u_shape_mult(t))
-            r_mult = max(0.25, 1.0 + r_gamma * r) if r_mult_active else 1.0
+            r_mult_val = max(0.25, 1.0 + r_gamma * r) if r_mult_active else 1.0
             excitation = self.alpha * excitation * decay + self.alpha * (volumes[t - 1] / baseline)
             shock = float(rng.lognormal(0.0, 0.12))
             volumes[t] = max(
@@ -122,7 +122,7 @@ class VolumeSimulator:
                 * regime_mult
                 * (1.0 + self.kappa * r)
                 * u_mult
-                * r_mult
+                * r_mult_val
                 * (1.0 + excitation)
                 * shock,
             )
