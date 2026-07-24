@@ -269,9 +269,7 @@ def run_submission(
         "assets": bt.assets,
         "dates": bt.dates,
         "benchmark_close": (
-            [round(float(x), 4) for x in bt.benchmark_close]
-            if bt.benchmark_close is not None
-            else None
+            [round(float(x), 4) for x in bt.benchmark_close] if bt.benchmark_close is not None else None
         ),
         "data_mode": acquired["mode"],
         "tier": acquired["tier"],
