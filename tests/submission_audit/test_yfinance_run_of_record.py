@@ -68,8 +68,14 @@ def test_all_tickers_attempted_and_failures_reported(run_of_record):
     # No silent dropping: requested == returned + dropped, disjoint
     assert sorted(requested) == sorted(list(returned) + list(dropped))
     assert set(returned).isdisjoint(set(dropped))
-    # successful count reported explicitly
-    assert len(returned) == len(panel.assets)
+    # SPY is returned as the BENCHMARK, not a tradable asset: the tradable panel
+    # excludes it, so tradable count == returned count minus the benchmark.
+    tradable_returned = [t for t in returned if t != "SPY"]
+    assert len(tradable_returned) == len(panel.assets), (
+        "tradable universe must equal returned tickers minus the SPY benchmark"
+    )
+    assert "SPY" not in panel.assets, "SPY is benchmark-only; must not be tradable"
+    assert panel.benchmark_close is not None, "SPY benchmark series must be present"
     # per-ticker status must exist for every requested name on a fresh fetch
     per_ticker = quality.get("per_ticker")
     if per_ticker is not None:

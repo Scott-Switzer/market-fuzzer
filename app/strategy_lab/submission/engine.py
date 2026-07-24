@@ -503,29 +503,31 @@ def compute_portfolio_metrics(
     downside = rets[rets < 0]
     downside_var = float(np.var(downside, ddof=1)) if len(downside) > 1 else 0.0
     sortino = (mean / math.sqrt(downside_var) * math.sqrt(252.0)) if downside_var > 0 else 0.0
-    # 3.6 benchmark CAGR geometric
+    # 3.6 benchmark CAGR geometric (robust to NaN-leading / partially-aligned series)
     bench_cagr = bench_sharpe = None
     active = info_ratio = None
     tracking_error = None
-    if benchmark_close is not None and len(benchmark_close) == len(equity) and benchmark_close[0] > 0:
-        brets = benchmark_close[1:] / benchmark_close[:-1] - 1.0
-        bmean = float(np.mean(brets)) if len(brets) else 0.0
-        bstd = float(np.std(brets, ddof=1)) if len(brets) > 1 else 0.0
-        m_b = min(n, len(benchmark_close))
-        bench_cagr = (
-            (benchmark_close[m_b] / benchmark_close[0]) ** (252.0 / max(m_b - 1, 1)) - 1.0
-            if benchmark_close[m_b] > 0
-            else 0.0
-        )
-        bench_sharpe = (bmean / bstd * math.sqrt(252.0)) if bstd > 0 else 0.0
-        if n:
-            m = min(n, len(brets))
-            aligned = rets[:m] - brets[:m]
-            am = float(np.mean(aligned))
-            av = float(np.var(aligned, ddof=1)) if m > 1 else 0.0
-            tracking_error = math.sqrt(av) * math.sqrt(252.0)
-            info_ratio = (am / math.sqrt(av) * math.sqrt(252.0)) if av > 0 else 0.0
-            active = float(np.sum(aligned))
+    if benchmark_close is not None and len(benchmark_close) == len(equity):
+        bc = np.asarray(benchmark_close, dtype=float)
+        finite_idx = np.where(np.isfinite(bc) & (bc > 0))[0]
+        if len(finite_idx) >= 2:
+            b0, b1 = int(finite_idx[0]), int(finite_idx[-1])
+            span = max(b1 - b0, 1)
+            brets = bc[b0 + 1 : b1 + 1] / bc[b0:b1] - 1.0
+            brets = brets[np.isfinite(brets)]
+            bmean = float(np.mean(brets)) if len(brets) else 0.0
+            bstd = float(np.std(brets, ddof=1)) if len(brets) > 1 else 0.0
+            bench_cagr = (bc[b1] / bc[b0]) ** (252.0 / span) - 1.0
+            bench_sharpe = (bmean / bstd * math.sqrt(252.0)) if bstd > 0 else 0.0
+            if n:
+                m = min(len(rets), len(brets))
+                if m > 1:
+                    aligned = rets[:m] - brets[:m]
+                    am = float(np.mean(aligned))
+                    av = float(np.var(aligned, ddof=1))
+                    tracking_error = math.sqrt(av) * math.sqrt(252.0)
+                    info_ratio = (am / math.sqrt(av) * math.sqrt(252.0)) if av > 0 else 0.0
+                    active = float(np.sum(aligned))
     avg_holdings = float(np.mean([np.sum(shares[t] != 0) for t in range(len(shares))]))
     avg_gross = float(np.mean(gross_exp))
     avg_net = float(np.mean(net_exp))

@@ -190,10 +190,12 @@ def test_benchmark_cagr_is_geometric():
         max_position_weight=0.10,
     )
     res = run_portfolio_backtest(panel=panel, spec=spec, strategy_hash="h")
-    bench = panel.benchmark_close
-    # find last non-nan (engine uses that index)
-    m_b = int(np.max(np.where(np.isfinite(bench))[0]))
-    geo = (bench[m_b] / bench[0]) ** (252.0 / max(m_b - 1, 1)) - 1.0
+    bench = np.asarray(panel.benchmark_close, dtype=float)
+    # engine uses first & last finite,>0 indices; span = last - first
+    fin = np.where(np.isfinite(bench) & (bench > 0))[0]
+    b0, b1 = int(fin[0]), int(fin[-1])
+    span = max(b1 - b0, 1)
+    geo = (bench[b1] / bench[b0]) ** (252.0 / span) - 1.0
     assert abs(res.metrics["benchmark_cagr"] - geo) < 1e-6
     # must NOT equal mean*252 (the old buggy formula)
     mean_annual = float(np.nanmean(bench[1:] / bench[:-1] - 1.0)) * 252.0

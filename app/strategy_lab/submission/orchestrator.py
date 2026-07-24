@@ -146,6 +146,11 @@ def acquire_panel(
     uni = universe or list(DEMO_UNIVERSE)
     st = start or FIXED_START
     en = end or FIXED_END
+    # Ensure the SPY benchmark is fetched alongside the tradable universe so the
+    # panel carries benchmark_close (the strategy universe still excludes SPY).
+    fetch_tickers = list(uni)
+    if "SPY" not in fetch_tickers:
+        fetch_tickers = fetch_tickers + ["SPY"]
 
     if mode in ("auto", "fenrix"):
         fr = fenrix_load(explicit=fenrix_path, write_inventory=(mode == "fenrix"))
@@ -168,7 +173,7 @@ def acquire_panel(
         # fall through to yfinance
 
     if mode in ("auto", "yfinance"):
-        yf = yfinance_acquire(tickers=uni, start=st, end=en, use_cache=use_cache)
+        yf = yfinance_acquire(tickers=fetch_tickers, start=st, end=en, use_cache=use_cache)
         if yf.get("panel") is not None:
             return {
                 "panel": yf["panel"],
