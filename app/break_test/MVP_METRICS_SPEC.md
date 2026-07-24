@@ -201,9 +201,7 @@ Precise definitions below map each requested metric to the current code path in 
 - **GAP**: `backtest_metrics` output does not expose a single `implementation_shortfall_bps` key; it returns components. Add a wrapped summary:
   ```python
   implementation_shortfall_bps = (
-      tca["slippage_vs_arrival"]
-      + tca["opportunity_cost"]
-      + tca["completion_rate_penalty_bps"]
+      tca["slippage_vs_arrival"] + tca["opportunity_cost"] + tca["completion_rate_penalty_bps"]
   )
   ```
 

@@ -148,8 +148,9 @@ class SeedManifest(StrictModel):
 
 ```python
 class CorrelationStressManifest(StrictModel):
-    scenario: Literal["base", "neutral", "flight_to_quality", "dollar_crunch",
-                      "commodity_surge", "crypto_contagion"]
+    scenario: Literal[
+        "base", "neutral", "flight_to_quality", "dollar_crunch", "commodity_surge", "crypto_contagion"
+    ]
     applied_at: str
     multiplier: float
     offdiagonal_scale_bps: float | None = None

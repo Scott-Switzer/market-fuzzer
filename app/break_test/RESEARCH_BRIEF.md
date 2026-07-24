@@ -55,12 +55,12 @@ with `N_t` a Poisson process of intensity `λ(s_t)` and lognormal jump sizes `Y 
 Generate via **Euler-Maruyama + Poisson sampling** with full-truncation:
 ```python
 # Pseudocode pattern from codearmo.com + quantlib-style
-v_t = max(v_t, 1e-12)          # enforce positivity
+v_t = max(v_t, 1e-12)  # enforce positivity
 z1, z2 = correlated_normals(rho)
-v_t += kappa*(theta - v_t)*dt + xi*np.sqrt(v_t)*z2*np.sqrt(dt)
-S_t *= np.exp((mu - 0.5*v_t)*dt + np.sqrt(v_t)*z1*np.sqrt(dt))
-jump = 1.0 if np.random.poisson(lam*dt) > 0 else 0.0
-S_t *= np.exp(jump * (mu_jump - 0.5*sigma_jump**2) + sigma_jump * normal())
+v_t += kappa * (theta - v_t) * dt + xi * np.sqrt(v_t) * z2 * np.sqrt(dt)
+S_t *= np.exp((mu - 0.5 * v_t) * dt + np.sqrt(v_t) * z1 * np.sqrt(dt))
+jump = 1.0 if np.random.poisson(lam * dt) > 0 else 0.0
+S_t *= np.exp(jump * (mu_jump - 0.5 * sigma_jump**2) + sigma_jump * normal())
 ```
 
 #### 1.1.2 Factor Model with Macro Common Factors
@@ -77,7 +77,7 @@ where factors `F_k,t` are drawn from a regime-conditional multivariate normal wi
 factors = rng.multivariate_normal(
     mean=regime_factor_mu,
     cov=regime_factor_cov,  # switches with Q
-    size=steps
+    size=steps,
 )
 asset_return = (alpha[s] + beta @ factors[t] + idiosyncratic[s]) * dt
 ```
@@ -350,9 +350,11 @@ Add functions:
 def probabilistic_sharpe(sharpe_hat, sharpe_star, n, skew, kurt):
     z = (sharpe_hat - sharpe_star) / (sharpe_std(n, sharpe_hat, skew, kurt))
     return norm.cdf(z)
+
+
 def deflated_sharpe(max_sharpe_k, n_trials, n, skew=0.0, kurt=3.0):
     z = max_sharpe_k / sharpe_std(n, 0.0, skew, kurt)
-    dsr = 1.0 - (1.0 - norm.cdf(z))**n_trials
+    dsr = 1.0 - (1.0 - norm.cdf(z)) ** n_trials
     return dsr
 ```
 Extend `run_forward_test` return dict to include `psr_95`, `dsr`, `min_backtest_len_days`.
@@ -375,7 +377,10 @@ Extend `run_forward_test` return dict to include `psr_95`, `dsr`, `min_backtest_
 **For local corporate-actions archive** (build your own from FMP free endpoint):
 ```python
 import requests, pandas as pd
-r = requests.get("https://financialmodelingprep.com/api/v3/stock_split_calendar?from=2020-01-01&to=2025-01-01&apikey=FREE_KEY")
+
+r = requests.get(
+    "https://financialmodelingprep.com/api/v3/stock_split_calendar?from=2020-01-01&to=2025-01-01&apikey=FREE_KEY"
+)
 df = pd.DataFrame(r.json())
 df.to_parquet("data/splits.parquet")
 ```

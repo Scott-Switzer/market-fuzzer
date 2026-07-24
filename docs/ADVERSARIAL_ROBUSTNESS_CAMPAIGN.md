@@ -77,13 +77,13 @@ The deterministic budget is the maximum work performed in a single campaign befo
 
 ```python
 CAMPAIGN_BUDGET = {
-    "seeds": (41, 42),               # immutable seed contract
-    "worlds_per_regime": 30,         # from robustness_product / regimes
-    "parameter_sets_max": 10,        # accepted calibration sets in validation campaign
+    "seeds": (41, 42),  # immutable seed contract
+    "worlds_per_regime": 30,  # from robustness_product / regimes
+    "parameter_sets_max": 10,  # accepted calibration sets in validation campaign
     "participations": (0.02, 0.05, 0.10, 0.20),
     "world_variants": ("normal", "liquidity_withdrawal", "crowded_unwind", "earnings_shock", "latency_shock"),
-    "max_candidate_grid": 32,        # current cap in _build_candidate_grid
-    "cpcv_max_combinations": 16,     # current cap
+    "max_candidate_grid": 32,  # current cap in _build_candidate_grid
+    "cpcv_max_combinations": 16,  # current cap
     "oos_max_folds": 24,
     "bootstrap_n": 500,
     "n_trials_deflated_sharpe": None,  # infer from fold count
