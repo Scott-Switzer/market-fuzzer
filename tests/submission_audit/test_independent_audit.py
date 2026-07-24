@@ -285,14 +285,22 @@ class TestMinimization:
         sh = minimized.get("strategy_hash", "audit")
 
         res_min = _eval_single(sh, spec, mech, minimized["minimized_intensity"], seed)
-        fails_at_min = any(p.violated(res_min.metrics) for p in DEFAULT_PREDICATES)
+        fails_at_min = any(
+            p.violated(res_min)
+            for p in DEFAULT_PREDICATES
+            if p.name in (res_min.get("violated_predicates") or [])
+        )
         assert fails_at_min == bool(minimized["still_fails"]), (
             "MINIMIZATION DEFECT: recomputed outcome at minimized_intensity does not "
             "match the recorded still_fails flag (non-reproducible minimization)."
         )
 
         res_zero = _eval_single(sh, spec, mech, 0.0, seed)
-        fails_at_zero = any(p.violated(res_zero.metrics) for p in DEFAULT_PREDICATES)
+        fails_at_zero = any(
+            p.violated(res_zero)
+            for p in DEFAULT_PREDICATES
+            if p.name in (res_zero.get("violated_predicates") or [])
+        )
         assert not fails_at_zero, (
             "MINIMIZATION DEFECT: the UNSTRESSED world (intensity=0) already violates "
             "the predicates, so the 'failure' is not caused by the mechanism at all "
@@ -352,11 +360,11 @@ class TestArtifactHashes:
         deck = json.loads((pkg / "pitch" / "deck_data.json").read_text())
 
         recomputed = {
-            "equity_curve.csv": _whash(equity),
-            "metrics.json": _whash(metrics),
+            "historical/equity_curve.csv": _whash(equity),
+            "historical/metrics.json": _whash(metrics),
             # evidence.py hashes the joined rows WITHOUT the trailing newline it writes
-            "regime_matrix.csv": _whash(regime.rstrip("\n")),
-            "deck_data.json": _whash(deck),
+            "synthetic/regime_matrix.csv": _whash(regime.rstrip("\n")),
+            "pitch/deck_data.json": _whash(deck),
         }
         mismatches = {k: (hashes.get(k), v) for k, v in recomputed.items() if hashes.get(k) != v}
         assert not mismatches, (

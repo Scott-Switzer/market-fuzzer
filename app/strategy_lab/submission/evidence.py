@@ -27,7 +27,7 @@ from app.strategy_lab.submission.orchestrator import SubmissionRun
 def _git_sha() -> str:
     try:
         out = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=Path.cwd())
-        return out.stdout.strip()[:16]
+        return out.stdout.strip()  # full 40-char sha; do NOT truncate
     except Exception:
         return "unknown"
 
@@ -211,6 +211,7 @@ def build_evidence_package(run: SubmissionRun, save_dir: str | None = None) -> d
             "evaluated": st["evaluated"],
             "candidate_count": st["candidate_count"],
             "confirmed_count": st["failure_count"],
+            "failure_count": st["failure_count"],  # alias for audit consumers
             "failure_rate": st["failure_rate"],
             "mechanisms_evaluated": st["mechanisms_evaluated"],
             "worlds_per_mechanism": st["worlds_per_mechanism"],
@@ -244,15 +245,36 @@ def build_evidence_package(run: SubmissionRun, save_dir: str | None = None) -> d
             "docker_smoke": "pending",
             "verify_submission": "pending",
         },
-        "artifact_hashes": {
-            "equity_curve.csv": _whash(equity_csv),
-            "metrics.json": _whash(bt["metrics"]),
-            "regime_matrix.csv": _whash("\n".join(regime_rows)),
-            "deck_data.json": _whash(deck_data),
-            "CLAIMS_MANIFEST.json": claims_digest,
-        },
-        "generated_at": datetime.now(UTC).isoformat(),
     }
+    # Comprehensive tamper-evident coverage: hash every material artifact on disk
+    # (not just the headline ones) so the evidence chain has no holes.
+    _material_rel = [
+        "historical/equity_curve.csv",
+        "historical/metrics.json",
+        "historical/trades.csv",
+        "historical/exposures.csv",
+        "historical/costs.json",
+        "synthetic/regime_matrix.csv",
+        "synthetic/failures.json",
+        "synthetic/campaign_public.json",
+        "replay/minimized_failure.json",
+        "replay/adjacent_pass.json",
+        "data/source_manifest.json",
+        "pitch/deck_data.json",
+        "pitch/CLAIMS_MANIFEST.json",
+        "strategy/approved_strategy.json",
+    ]
+    artifact_hashes = {}
+    for rel in _material_rel:
+        p = base / rel
+        if not p.exists():
+            continue
+        if p.suffix == ".json":
+            artifact_hashes[rel] = _whash(json.loads(p.read_text()))
+        else:
+            artifact_hashes[rel] = _whash(p.read_text().rstrip("\n"))
+    manifest["artifact_hashes"] = artifact_hashes
+    manifest["generated_at"] = datetime.now(UTC).isoformat()
     (base / "submission_manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
     (base / "verification.json").write_text(json.dumps(manifest["verification"], indent=2))
 

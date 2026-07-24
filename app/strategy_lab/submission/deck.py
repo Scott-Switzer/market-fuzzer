@@ -39,7 +39,7 @@ HISTORICAL_MODES = {"yfinance", "fenrix"}
 def _git_sha() -> str:
     try:
         out = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=Path.cwd())
-        return out.stdout.strip()[:16]
+        return out.stdout.strip()  # full 40-char sha, matches evidence.py
     except Exception:
         return "unknown"
 

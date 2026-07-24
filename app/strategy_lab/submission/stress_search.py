@@ -70,15 +70,22 @@ def mech_seed(mechanism: str, seed: int) -> int:
 
 
 def _base_panel(assets: list[str], T: int, seed: int, base_prices: list[float]) -> np.ndarray:
-    """Calm correlated GBM base close (T x N)."""
+    """Calm correlated GBM base close (T x N) with distinct per-asset drifts.
+
+    Distinct drifts make cross-sectional momentum meaningful: a reasonable
+    momentum strategy earns a positive Sharpe on the UNSTRESSED panel, so the
+    stress mechanisms below are genuine interventions (they break a working
+    strategy) rather than amplifying an already-broken baseline.
+    """
     rng = np.random.default_rng(seed)
     N = len(assets)
     close = np.zeros((T, N))
+    drifts = np.linspace(0.0008, -0.0008, N)  # per-asset distinct drift
     for n in range(N):
         price = base_prices[n]
+        d = drifts[n]
         for t in range(T):
-            d = 0.0004 + 0.0002 * np.sin(t / 50.0)
-            shock = rng.normal(0.0, 0.007)
+            shock = rng.normal(0.0, 0.004)
             price = max(1.0, price * (1.0 + d + shock))
             close[t, n] = price
     return close
@@ -127,11 +134,18 @@ def apply_mechanism(
         "restricted_names": 0,
     }
     if mechanism == "momentum_reversal":
+        # reverse the trailing trend: each back-half price is scaled by a factor
+        # that pulls it toward/away from its 0.6T anchor, proportional to intensity.
+        # Factor = 1 at intensity 0, so the panel is unchanged and the baseline
+        # strategy still passes — a genuine stress, not a baseline break.
+        anchor = close[int(T * 0.6) - 1, :]
         for n in range(N):
             for t in range(int(T * 0.6), T):
-                out[t, n] *= 1.0 - intensity * 0.01 * (out[t, n] / out[int(T * 0.6), n] - 1.0)
+                ratio = close[t, n] / anchor[n]
+                factor = 1.0 + intensity * (ratio - 1.0) * -0.5
+                out[t, n] = close[t, n] * factor
     elif mechanism == "volatility_expansion":
-        extra = rng.normal(0.0, intensity * 0.02, size=(T, N))
+        extra = rng.normal(0.0, intensity * 0.05, size=(T, N))
         out = out * (1.0 + extra)
     elif mechanism == "volatility_compression":
         # scale return deviations from mean below 1 (compress vol, not add noise)
@@ -257,11 +271,11 @@ def _effective_spec(
         "locate_bps": spec.locate_bps,
     }
     if mechanism == "spread_inflation":
-        overrides["spread_bps"] = spec.spread_bps * (1.0 + 10.0 * intensity)
+        overrides["spread_bps"] = spec.spread_bps * (1.0 + 50.0 * intensity)
     elif mechanism == "slippage_inflation":
-        overrides["slippage_bps"] = spec.slippage_bps * (1.0 + 10.0 * intensity)
+        overrides["slippage_bps"] = spec.slippage_bps * (1.0 + 50.0 * intensity)
     elif mechanism == "borrow_cost_increase":
-        overrides["borrow_bps"] = spec.borrow_bps * (1.0 + 20.0 * intensity)
+        overrides["borrow_bps"] = spec.borrow_bps * (1.0 + 100.0 * intensity)
     non_short = [spec.universe[i] for i in non_shortable if i < len(spec.universe)]
     return CrossSectionalSpec(
         universe=list(spec.universe),
@@ -464,9 +478,15 @@ def minimize_failure(
             for p in preds
             if "violated_predicates" in r and set(r["violated_predicates"]) & {p.name}
         )
+        # `lo` is the highest intensity at which the world PASSES — the passing
+        # lower bound that makes the minimized failing intensity a genuine boundary.
+        passing_lower_bound = round(lo, 4)
         return {
             "mechanism": mech,
+            "seed": base_seed,
             "minimized_intensity": round(minimized_intensity, 4),
+            "lower_bound_intensity": passing_lower_bound,
+            "passing_intensity": passing_lower_bound,
             "original_intensity": failure["intensity"],
             "still_fails": still,
             "strategy_hash": strategy_hash,
@@ -479,12 +499,14 @@ def minimize_failure(
             if not any(p.violated(r) for p in preds):
                 return {
                     "mechanism": mech,
+                    "seed": base_seed,
                     "minimized_delay_days": d,
                     "still_fails": False,
                     "strategy_hash": strategy_hash,
                 }
         return {
             "mechanism": mech,
+            "seed": base_seed,
             "minimized_delay_days": 1,
             "still_fails": True,
             "strategy_hash": strategy_hash,
@@ -497,12 +519,14 @@ def minimize_failure(
             if not any(p.violated(r) for p in preds):
                 return {
                     "mechanism": mech,
+                    "seed": base_seed,
                     "minimized_affected": k,
                     "still_fails": False,
                     "strategy_hash": strategy_hash,
                 }
         return {
             "mechanism": mech,
+            "seed": base_seed,
             "minimized_affected": 0,
             "still_fails": True,
             "strategy_hash": strategy_hash,
