@@ -4,69 +4,25 @@
 <title>Fenrix Strategy Validation Lab — Submission Deck</title>
 <style>
  body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;background:#0b1020;color:#e7ecf3}
- .slide{max-width:900px;margin:24px auto;background:#121a2e;border-radius:14px;padding:32px;box-shadow:0 8px 30px rgba(0,0,0,.35)}
- h1{font-size:30px;margin:0 0 6px} h2{font-size:20px;color:#7fd1ff;margin-top:0}
+ .slide{position:relative;max-width:900px;margin:24px auto;background:#121a2e;border-radius:14px;padding:32px;box-shadow:0 8px 30px rgba(0,0,0,.35)}
+ h1{font-size:30px;margin:0 0 6px} h2{font-size:18px;color:#7fd1ff;margin-top:0;font-weight:500}
  .kpi{display:flex;flex-wrap:wrap;gap:14px;margin:14px 0}
  .card{flex:1 1 160px;background:#0f1730;border:1px solid #243352;border-radius:10px;padding:14px}
  .card b{display:block;font-size:24px;color:#9affc4} .card span{font-size:12px;color:#9fb3d1}
- .warn{border-left:4px solid #ffb020;background:#1c2436;padding:12px 16px;border-radius:8px;color:#ffd9a0}
- ul{line-height:1.5} code{background:#0b1020;padding:1px 5px;border-radius:4px;color:#9affc4}
- table{width:100%;border-collapse:collapse;margin-top:10px} th,td{text-align:left;padding:8px;border-bottom:1px solid #243352}
+ .wm{position:absolute;top:10px;right:14px;font-size:11px;color:#ffb020;border:1px solid #ffb020;
+      border-radius:6px;padding:3px 8px;opacity:.85;max-width:46%;text-align:right}
+ ul{line-height:1.55} code{background:#0b1020;padding:1px 5px;border-radius:4px;color:#9affc4}
 </style></head><body>
-
-<div class="slide"><h1>Fenrix Strategy Validation Lab</h1>
-<h2>Turn a strategy into a reviewed contract &rarr; test on history &rarr; search sealed synthetic failures</h2>
-<p><b>Audience:</b> quant-finance students, instructors, retail quant researchers.<br>
-<b>Strategy hash (immutable):</b> <code>667019ea45b1065c</code> &nbsp; <b>git:</b> <code>10330d1f601dc0b2</code><br>
-<b>Data mode of record:</b> synthetic_fixture &nbsp; <b>Universe size:</b> 7</p></div>
-
-<div class="slide"><h2>1 &middot; What it does (the one story)</h2>
-<ol>
-<li>Plain-English strategy &rarr; structured clause ledger (every clause reviewed).</li>
-<li>Mandatory approve step &rarr; immutable strategy version + canonical SHA-256 hash.</li>
-<li>Same locked hash runs a <b>real multi-asset</b> historical backtest (performance, trades, costs, exposures, benchmark).</li>
-<li>Same locked hash enters a <b>sealed synthetic</b> stress search for reproducible failures.</li>
-<li>Confirmed failure &rarr; minimized replay + adjacent passing case &rarr; evidence-linked recommendation.</li>
-</ol></div>
-
-<div class="slide"><h2>2 &middot; Real historical backtest (Tier per data mode)</h2>
-<div class="kpi">
-<div class="card"><b>6.17%</b><span>cumulative return</span></div>
-<div class="card"><b>1.23</b><span>Sharpe</span></div>
-<div class="card"><b>-2.92%</b><span>max drawdown</span></div>
-<div class="card"><b>2.46%</b><span>ann. volatility</span></div>
-<div class="card"><b>0.13%</b><span>cost % of capital</span></div>
-<div class="card"><b>50</b><span>trades</span></div>
-</div>
-<p>Benchmark CAGR <code>20.54%</code> &middot; Information ratio <code>-1.02</code> &middot; Gross exposure avg <code>9.38%</code> &middot; Net exposure avg <code>0.01%</code></p>
-<div class="warn">Costs are explicit bounded heuristics (commission/spread/slippage/borrow in bps). <b>Not</b> validated broker calibrations.</div></div>
-
-<div class="slide"><h2>3 &middot; Sealed synthetic stress (reproducible failures)</h2>
-<div class="kpi">
-<div class="card"><b>8</b><span>worlds searched</span></div>
-<div class="card"><b>2</b><span>confirmed failures</span></div>
-<div class="card"><b>25.00%</b><span>failure rate</span></div>
-</div>
-<p>Mechanisms searched: <code>momentum_reversal, volatility_expansion, correlation_breakdown, volatility_compression, spread_inflation, slippage_inflation, borrow_cost_increase, short_unavailability, delayed_rebalance, universe_churn, missing_data_shock</code></p>
-<p>Confirmed-failure mechanisms: <b>correlation_breakdown, slippage_inflation</b></p>
-<div class="warn">These are generated worlds, not historical events. They probe <i>fragility</i>, not real future risk. No claim of universal discovery or realism.</div></div>
-
-<div class="slide"><h2>4 &middot; Confirmed failure &rarr; minimize &rarr; adjacent pass</h2>
-<p><b>Minimized failure:</b> correlation_breakdown at intensity <code>0.0051</code> (still fails: True).</p>
-<p><b>Adjacent passing case:</b> correlation_breakdown seed delta <code>-2</code> passes: True.</p>
-<p>Recommendation: tighten the failing mechanism's guard (e.g. cap per-name weight, add a vol-scaling stop, or widen the cost buffer) and re-run the sealed search before any capital decision.</p></div>
-
-<div class="slide"><h2>5 &middot; Honest limitations (read before sharing)</h2>
-<ul><li>Synthetic stress worlds are generated, not historical; they probe fragility, not real future risk.</li>
-<li>Costs are explicit bounded heuristics, not validated broker calibrations.</li>
-<li>Fenrix fundamentals (if used) are not point-in-time; lagged approximation only.</li>
-<li>No claim of live profitability, production execution fidelity, or universal realism.</li></ul></div>
-
-<div class="slide"><h2>6 &middot; How to reproduce</h2>
-<pre style="background:#0b1020;padding:14px;border-radius:8px;overflow:auto">
-make submission-demo      # full pipeline + evidence
-make verify-submission    # tests + invariant checks
-make pitch-deck           # rebuild this deck from evidence</pre>
-<p>All numbers above were rendered from <code>deck_data.json</code> produced by <code>make submission-demo</code>. No hand-entered figures.</p></div>
-
+<div class="slide" data-slide="1"><h1>Fenrix Strategy Validation Lab</h1><h2>Backtesting shows where a strategy worked. Fenrix searches for where it breaks.</h2><ul><li>Product flow: Describe → Review → Lock → Backtest → Stress → Minimize → Export</li><li>Strategy hash (immutable): c9d19b2e8d20667a…</li><li>git SHA: dadce86e53c42573 · data mode of record: yfinance · universe: 30 assets</li></ul></div>
+<div class="slide" data-slide="2"><h1>The problem</h1><h2>A green backtest is a claim, not a validation</h2><ul><li>Backtests only tell you where a strategy already worked — they are silent about fragility.</li><li>Students and retail quants ship strategies validated on one historical path.</li><li>Overfitting, cost blindness and regime fragility hide until real capital finds them.</li><li>There is no cheap, reproducible way to ask: under which conditions does this break?</li></ul></div>
+<div class="slide" data-slide="3"><h1>Product workflow</h1><h2>Describe → Review → Lock → Backtest → Stress → Minimize → Export</h2><ul><li>Describe: plain-English strategy → structured clause ledger (every clause reviewed).</li><li>Review + Lock: mandatory approve step → immutable version + canonical SHA-256 hash.</li><li>Backtest: the SAME locked hash runs a real multi-asset historical backtest.</li><li>Stress: the SAME hash enters a sealed synthetic failure search across mechanisms.</li><li>Minimize: confirmed failures are shrunk to a minimal reproducible counterexample.</li><li>Export: evidence package with manifest, hashes and claim ledger.</li></ul></div>
+<div class="slide" data-slide="4"><div class="wm">TIER 2 · yfinance historical (actual run) · git dadce86e53c42573 · evidence-generated · not investment advice</div><h1>Demo run — Real historical backtest (yfinance)</h1><h2>30 assets · 50 trades · all figures from deck_data.json</h2><div class="kpi"><div class="card"><b>10.47%</b><span>cumulative return</span></div><div class="card"><b>0.16</b><span>Sharpe</span></div><div class="card"><b>-26.82%</b><span>max drawdown</span></div><div class="card"><b>14.65%</b><span>ann. volatility</span></div><div class="card"><b>15.40%</b><span>cost % of capital</span></div><div class="card"><b>50</b><span>trades</span></div></div><ul><li>CAGR 1.26% · Sortino 0.20 · Calmar 0.05</li><li>Benchmark CAGR n/a · information ratio n/a</li><li>Gross exposure avg 109.52% · net exposure avg 0.00%</li><li>Costs are explicit bounded heuristics (commission/spread/slippage/borrow) — not broker calibrations.</li></ul><img src="../../../artifacts/submission/dadce86e53c42573/pitch/equity_curve.png" alt="equity curve" style="width:100%;border-radius:8px;margin-top:10px"></div>
+<div class="slide" data-slide="5"><div class="wm">TIER 2 · yfinance historical (actual run) · git dadce86e53c42573 · evidence-generated · not investment advice</div><h1>What the normal backtest missed</h1><h2>Baseline vs confirmed stress failure</h2><ul><li>Baseline (Real historical backtest (yfinance)): Sharpe 0.16, max drawdown -26.82%, cumulative return 10.47%.</li><li>Sealed stress search: 21 confirmed failures out of 24 worlds (87.50% failure rate).</li><li>Confirmed-failure mechanisms: borrow_cost_increase, correlation_breakdown, delayed_rebalance, missing_data_shock, momentum_reversal, short_unavailability, slippage_inflation, spread_inflation, universe_churn, volatility_expansion.</li></ul></div>
+<div class="slide" data-slide="6"><div class="wm">TIER 2 · yfinance historical (actual run) · git dadce86e53c42573 · evidence-generated · not investment advice</div><h1>Minimized counterexample</h1><h2>Smallest reproducible world where the locked strategy still fails</h2><ul><li>Mechanism: momentum_reversal · seed n/a.</li><li>Intensity minimized 1.449 → 0.0057 and it STILL fails: True.</li><li>Violated predicates: n/a.</li><li>Adjacent pass: no adjacent pass within radius — reported honestly, not fabricated.</li></ul></div>
+<div class="slide" data-slide="7"><h1>Education & research value</h1><h2>A falsification lab, not a profit promise</h2><ul><li>Students see WHY a strategy fails — mechanism, intensity, seed — not just an equity curve.</li><li>Every claim is bound to a hash and an evidence file; grading and review become reproducible.</li><li>Instructors can replay the minimized counterexample deterministically.</li><li>Mechanism library searched this run: borrow_cost_increase, correlation_breakdown, delayed_rebalance, missing_data_shock, momentum_reversal, short_unavailability, slippage_inflation, spread_inflation, universe_churn, volatility_compression, volatility_expansion.</li></ul></div>
+<div class="slide" data-slide="8"><h1>Architecture & moat</h1><h2>Immutable contracts + sealed synthetic worlds</h2><ul><li>Clause ledger → canonical hash: the same immutable artifact flows through every stage.</li><li>Sealed synthetic world generator: seeds + mechanisms are reproducible and tamper-evident.</li><li>Evidence packages carry SHA-256 manifests binding data, backtest, campaign and replay.</li><li>Failure minimizer + adjacent-pass search turn red flags into actionable counterexamples.</li><li>Moat: the corpus of confirmed, minimized failures compounds with every run.</li></ul></div>
+<div class="slide" data-slide="9"><h1>Honest boundary & roadmap</h1><h2>What this is NOT — and what comes next</h2><ul><li>Synthetic stress worlds are generated, not historical; they probe fragility, not real future risk.</li><li>Costs are explicit bounded heuristics (flat bps), not validated broker calibrations.</li><li>Fenrix fundamentals (if used) are not point-in-time; lagged approximation only.</li><li>No claim of live profitability, production execution fidelity, or universal realism.</li><li>Failure search is not exhaustive; it reports confirmed failures only.</li><li>Roadmap: point-in-time fundamentals, broker-calibrated costs, richer mechanism library, live paper-trading bridge.</li></ul></div>
+<div class="slide" data-slide="10"><h1>Ask</h1><h2>Help us make strategy falsification the default</h2><ul><li>Pilot with quant-finance classrooms and student funds this semester.</li><li>Feedback on mechanism realism from practitioners.</li><li>Compute credits for larger sealed stress campaigns.</li><li>Reproduce everything: make submission-demo · make verify-submission · make pitch-deck.</li></ul></div>
+<p style="text-align:center;color:#5c6b8a;font-size:12px">All numbers rendered from
+artifacts/submission/dadce86e53c42573/pitch/deck_data.json · no hand-entered figures.</p>
 </body></html>

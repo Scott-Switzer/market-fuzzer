@@ -81,7 +81,12 @@ class CrossSectionalSpec:
     spread_bps: float = 2.0
     slippage_bps: float = 3.0
     borrow_bps: float = 50.0  # annualized cost of short financing
+    locate_bps: float = 10.0  # one-time locate/entry fee on new shorts
     initial_capital: float = 1_000_000.0
+    cost_model_type: str = "heuristic_flat_bps"  # labeled heuristic; not broker-calibrated
+    cost_model_calibrated: bool = False
+    non_shortable: list[str] = field(default_factory=list)  # assets that cannot be shorted
+    execution_delay_days: int = 0  # shift fills by N trading days (stress mechanism)
 
     def to_feature_dict(self) -> dict[str, Any]:
         return {
@@ -122,5 +127,9 @@ class CrossSectionalSpec:
                 "commission_bps": self.commission_bps,
                 "spread_bps": self.spread_bps,
                 "slippage_bps": self.slippage_bps,
+                "borrow_bps": self.borrow_bps,
+                "locate_bps": self.locate_bps,
+                "cost_model_type": self.cost_model_type,
+                "cost_model_calibrated": self.cost_model_calibrated,
             },
         ]

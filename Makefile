@@ -77,24 +77,39 @@ performance:
 clean-artifacts:
 	rm -rf artifacts/smw-*
 
-# --- Fenrix Submission MVP targets ---
+# --- Fenrix Submission Final-Hardening targets ---
+# The pitch deck MUST use the real yfinance historical run of record.
+# If no cached yfinance data exists, the historical target FAILS (refuses synthetic).
+submission-demo-historical:
+	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m app.strategy_lab.submission.cli demo --mode historical
+
+submission-demo-offline:
+	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m app.strategy_lab.submission.cli demo --mode synthetic_fixture
+
 test-portfolio-engine:
 	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m pytest tests/submission/test_portfolio_engine.py -q -p no:cacheprovider --tb=short
 
-test-data-adapters:
-	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m pytest tests/submission/test_data_adapters.py -q -p no:cacheprovider --tb=short
+test-portfolio-accounting:
+	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m pytest tests/submission/test_portfolio_accounting.py -q -p no:cacheprovider --tb=short
 
-test-strategy-identity:
-	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m pytest tests/submission/test_strategy_identity.py -q -p no:cacheprovider --tb=short
+test-execution-timing:
+	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m pytest tests/submission/test_execution_timing.py -q -p no:cacheprovider --tb=short
+
+test-stress-mechanisms:
+	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m pytest tests/submission/test_stress_mechanisms.py -q -p no:cacheprovider --tb=short
+
+test-failure-confirmation:
+	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m pytest tests/submission/test_failure_confirmation.py -q -p no:cacheprovider --tb=short
+
+test-deck-evidence:
+	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m pytest tests/submission_audit/test_deck_evidence.py -q -p no:cacheprovider --tb=short
 
 verify-submission:
 	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m pytest tests/submission -q -p no:cacheprovider --tb=short
 	$(PYTHON) scripts/submission_verify.py
 
-submission-demo:
-	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m app.strategy_lab.submission.cli demo
-
-pitch-deck:
+# Deck uses historical evidence; if historical acquisition fails, the deck target fails.
+pitch-deck: submission-demo-historical
 	env -u PYTHONPATH PYTHONNOUSERSITE=1 $(PYTHON) -m app.strategy_lab.submission.cli build-deck
 
 fenrix-inspect:

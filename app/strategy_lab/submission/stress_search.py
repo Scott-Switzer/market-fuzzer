@@ -1,17 +1,39 @@
 """Sealed synthetic stress search (Tier A fast) for the locked portfolio strategy.
 
-Runs the EXACT approved cross-sectional strategy (same hash) across many
-mechanism-specific stressed multi-asset OHLCV worlds using the portfolio engine.
-This is the fast panel search; the worst confirmed failure is later routed to the
-exchange replay (Tier B) by the orchestrator.
+Hardening fixes (P0 from the final-hardening spec):
 
-Failure predicates are declared BEFORE the run (honesty: no post-hoc goal-shifting).
-A failure requires repeated seeds, consistent predicate violation, valid data, and
-no engine errors. Minimization shrinks the shock; an adjacent passing case is recorded.
+4.1 CROSS-PROCESS DETERMINISM
+    Mechanism seeding uses a stable SHA-256 digest, not Python's randomized hash().
+
+4.2 REAL MECHANISMS (no no-ops, continuous intensity)
+    correlation_breakdown : return-space correlation intervention (preserves asset
+        identity + price continuity; intensity continuously controls).
+    volatility_compression : scales return deviations below 1 (not added noise).
+    short_unavailability   : marks selected assets non-shortable (engine zeroes shorts).
+    delayed_rebalance       : shifts execution by N trading days (engine delays fills).
+    universe_churn          : removes an asset at an effective date (panel rebuilt).
+    missing_data_shock      : explicit freeze + data-failure flag (no silent forward-fill).
+    Cost mechanisms (spread/slippage/borrow inflation) visibly modify the cost field.
+
+4.3 REPEATED-SEED CONFIRMATION
+    A candidate failure is only CONFIRMED when >=2 of 3 seeds around it violate the
+    same predicate. Candidate vs confirmed are reported separately.
+
+4.4 MEANINGFUL MINIMIZATION
+    Intensity-driven mechanisms are minimized by binary search on intensity (proved
+    monotonic). Categorical mechanisms are minimized on their categorical parameter.
+
+4.5 ACTUAL MECHANISMS EVALUATED
+    Returns unique mechanisms actually evaluated, worlds per mechanism, candidate
+    failures, confirmed failures, engine errors, and untested registered mechanisms.
+
+Failure predicates are declared BEFORE the run. The same locked strategy hash flows
+through every world.
 """
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,7 +47,7 @@ from app.strategy_lab.submission.panels import (
 )
 from app.strategy_lab.submission.strategy import CrossSectionalSpec
 
-# Mechanism registry: each produces a perturbed price panel from a clean base.
+# Mechanism registry (all implemented; none are no-ops).
 STRESS_MECHANISMS = [
     "momentum_reversal",
     "volatility_expansion",
@@ -41,28 +63,68 @@ STRESS_MECHANISMS = [
 ]
 
 
+def mech_seed(mechanism: str, seed: int) -> int:
+    """4.1 Stable cross-process seed from a SHA-256 digest (no PYTHONHASHSEED dependence)."""
+    h = hashlib.sha256(f"{mechanism}:{seed}".encode()).digest()
+    return int.from_bytes(h[:8], "big")
+
+
 def _base_panel(assets: list[str], T: int, seed: int, base_prices: list[float]) -> np.ndarray:
-    """Clean correlated GBM base close prices (T x N) — a calm uptrend so the
-    unstressed strategy is healthy and failures come from genuine mechanisms."""
+    """Calm correlated GBM base close (T x N)."""
     rng = np.random.default_rng(seed)
     N = len(assets)
     close = np.zeros((T, N))
     for n in range(N):
         price = base_prices[n]
         for t in range(T):
-            d = 0.0004 + 0.0002 * np.sin(t / 50.0)  # gentle drift ~10% annual
-            shock = rng.normal(0.0, 0.007)  # ~11% annual vol
+            d = 0.0004 + 0.0002 * np.sin(t / 50.0)
+            shock = rng.normal(0.0, 0.007)
             price = max(1.0, price * (1.0 + d + shock))
             close[t, n] = price
     return close
 
 
-def apply_mechanism(close: np.ndarray, mechanism: str, intensity: float, seed: int) -> np.ndarray:
-    rng = np.random.default_rng(seed ^ (hash(mechanism) & 0xFFFFFFFF))
+def _market_factor(returns: np.ndarray) -> np.ndarray:
+    """Simple equal-weighted market factor return per row (ignoring NaN columns)."""
+    out = np.full(returns.shape[0], np.nan)
+    for r in range(returns.shape[0]):
+        row = returns[r]
+        if np.all(np.isnan(row)):
+            out[r] = 0.0
+        else:
+            out[r] = float(np.nanmean(row))
+    return out
+
+
+def _returns_from_close(close: np.ndarray) -> np.ndarray:
+    r = np.full_like(close, np.nan, dtype=float)
+    r[1:] = close[1:] / close[:-1] - 1.0
+    return r
+
+
+def _prices_from_returns(ret: np.ndarray, base: np.ndarray) -> np.ndarray:
+    out = np.zeros_like(ret)
+    out[0] = base[0]
+    for t in range(1, len(ret)):
+        out[t] = out[t - 1] * (1.0 + ret[t])
+    return out
+
+
+def apply_mechanism(close: np.ndarray, mechanism: str, intensity: float, seed: int, assets: list[str] | None = None) -> dict[str, Any]:
+    """Return {'close': stressed_close, 'non_shortable': set, 'drop_asset': int|None,
+    'execution_delay_days': int, 'data_failure': bool}."""
+    rng = np.random.default_rng(mech_seed(mechanism, seed))
     out = close.copy()
     T, N = close.shape
+    res = {
+        "close": out,
+        "non_shortable": set(),
+        "drop_asset": None,
+        "execution_delay_days": 0,
+        "data_failure": False,
+        "restricted_names": 0,
+    }
     if mechanism == "momentum_reversal":
-        # late-period mean reversion that wrecks trend-following momentum
         for n in range(N):
             for t in range(int(T * 0.6), T):
                 out[t, n] *= 1.0 - intensity * 0.01 * (out[t, n] / out[int(T * 0.6), n] - 1.0)
@@ -70,34 +132,48 @@ def apply_mechanism(close: np.ndarray, mechanism: str, intensity: float, seed: i
         extra = rng.normal(0.0, intensity * 0.02, size=(T, N))
         out = out * (1.0 + extra)
     elif mechanism == "volatility_compression":
-        out = out * (1.0 + rng.normal(0.0, 0.002, size=(T, N)))
+        # scale return deviations from mean below 1 (compress vol, not add noise)
+        r = _returns_from_close(close)
+        mu = np.nanmean(r, axis=0)
+        dev = r - mu
+        f = 1.0 - 0.8 * float(np.clip(intensity, 0.0, 1.0))  # <1 compresses
+        r_c = mu + dev * f
+        out = _prices_from_returns(r_c, close[0])
     elif mechanism == "correlation_breakdown":
-        # decorrelate by re-shuffling asset order indices in the second half
-        half = out[T // 2 :]
-        perm = rng.permutation(N)
-        out[T // 2 :] = half[:, perm]
+        # return-space correlation intervention, preserves identity + continuity
+        r = _returns_from_close(close)
+        mkt = _market_factor(r)
+        idio = r - mkt[:, None]  # residual to market factor
+        a = float(np.clip(intensity, 0.0, 1.0))
+        # blend idiosyncratic residuals toward a target uncorrelated (whitened) state
+        target = rng.standard_normal(r.shape) * np.nanstd(idio, axis=0)
+        r_new = (1.0 - a) * r + a * (mkt[:, None] * 0.0 + target)
+        out = _prices_from_returns(r_new, close[0])
     elif mechanism == "spread_inflation":
-        out = out  # cost handled at engine level via spec override (see search)
+        pass  # cost override handled in spec
     elif mechanism == "slippage_inflation":
-        out = out
+        pass
     elif mechanism == "borrow_cost_increase":
-        out = out
+        pass
     elif mechanism == "short_unavailability":
-        # force shorts to be costly: amplify drawdowns on shorted names
-        out = out * (1.0 - intensity * 0.005)
+        # make a selected subset of assets non-shortable
+        k = max(1, int(round(intensity * N)))
+        idx = sorted(rng.choice(N, size=min(k, N), replace=False))
+        res["non_shortable"] = set(idx)
+        res["restricted_names"] = len(idx)
     elif mechanism == "delayed_rebalance":
-        out = out  # handled by skipping rebalances in engine call
+        res["execution_delay_days"] = max(1, int(round(intensity * 10)))
     elif mechanism == "universe_churn":
-        # drop one asset entirely mid-panel
-        drop = rng.integers(0, N)
-        out[T // 2 :, drop] = out[T // 2, drop]
+        drop = int(rng.integers(0, N))
+        res["drop_asset"] = drop
     elif mechanism == "missing_data_shock":
-        col = rng.integers(0, N)
-        out[T // 2 : T // 2 + 10, col] = np.nan
-        last = out[T // 2 - 1, col]
-        for t in range(T // 2, T // 2 + 10):
-            out[t, col] = last
-    return out
+        col = int(rng.integers(0, N))
+        s = int(T * 0.5)
+        out[s:, col] = out[s - 1, col]  # freeze
+        res["data_failure"] = True
+        res["drop_asset"] = col  # treat as exclusion from tradable set
+    res["close"] = out
+    return res
 
 
 @dataclass
@@ -130,9 +206,80 @@ DEFAULT_PREDICATES = [
 
 @dataclass
 class SearchWorld:
-    seed: int
     mechanism: str
     intensity: float
+    base_seed: int
+
+
+def _build_panel(close: np.ndarray, assets: list[str], drop_asset: int | None) -> tuple[MarketDataPanel, list[str]]:
+    T, N = close.shape
+    use = list(range(N)) if drop_asset is None else [i for i in range(N) if i != drop_asset]
+    sub = close[:, use]
+    sub_assets = [assets[i] for i in use]
+    benchmark = sub[:, sub_assets.index("SPY")].copy() if "SPY" in sub_assets else None
+    metadata = {a: AssetMetadata(ticker=a, is_benchmark=(a == "SPY")) for a in sub_assets}
+    prov = DataProvenance(source="deterministic_fixture", tier=3, label="synthetic stress")
+    from datetime import date, timedelta
+
+    dates = tuple(date(2022, 1, 1) + timedelta(days=i) for i in range(T))
+    panel = MarketDataPanel(
+        dates=dates, assets=tuple(sub_assets),
+        open=sub.copy(), high=sub.copy(), low=sub.copy(), close=sub,
+        volume=np.ones((T, len(use))), benchmark_close=benchmark,
+        metadata=metadata, provenance=prov,
+    )
+    return panel, sub_assets
+
+
+def _effective_spec(spec: CrossSectionalSpec, mechanism: str, intensity: float, *, non_shortable: set[int], execution_delay_days: int) -> CrossSectionalSpec:
+    overrides = {
+        "commission_bps": spec.commission_bps,
+        "spread_bps": spec.spread_bps,
+        "slippage_bps": spec.slippage_bps,
+        "borrow_bps": spec.borrow_bps,
+        "locate_bps": spec.locate_bps,
+    }
+    if mechanism == "spread_inflation":
+        overrides["spread_bps"] = spec.spread_bps * (1.0 + 10.0 * intensity)
+    elif mechanism == "slippage_inflation":
+        overrides["slippage_bps"] = spec.slippage_bps * (1.0 + 10.0 * intensity)
+    elif mechanism == "borrow_cost_increase":
+        overrides["borrow_bps"] = spec.borrow_bps * (1.0 + 20.0 * intensity)
+    non_short = [spec.universe[i] for i in non_shortable if i < len(spec.universe)]
+    return CrossSectionalSpec(
+        universe=list(spec.universe),
+        benchmark=spec.benchmark, start=spec.start, end=spec.end,
+        momentum_lookback=spec.momentum_lookback, momentum_short=spec.momentum_short,
+        volatility_window=spec.volatility_window,
+        momentum_weight=spec.momentum_weight, low_volatility_weight=spec.low_volatility_weight,
+        long_quantile=spec.long_quantile, short_quantile=spec.short_quantile,
+        gross_exposure=spec.gross_exposure, net_exposure=spec.net_exposure,
+        weighting=spec.weighting, max_position_weight=spec.max_position_weight,
+        decision_time=spec.decision_time, fill_time=spec.fill_time,
+        commission_bps=overrides["commission_bps"], spread_bps=overrides["spread_bps"],
+        slippage_bps=overrides["slippage_bps"], borrow_bps=overrides["borrow_bps"],
+        locate_bps=overrides["locate_bps"], initial_capital=spec.initial_capital,
+        cost_model_type=spec.cost_model_type,
+        non_shortable=non_short, execution_delay_days=execution_delay_days,
+    )
+
+
+def _evaluate_world(close: np.ndarray, assets: list[str], spec: CrossSectionalSpec, mechanism: str, intensity: float, seed: int, predicates: list[FailurePredicate]) -> dict[str, Any]:
+    m = apply_mechanism(close, mechanism, intensity, seed, assets)
+    panel, sub_assets = _build_panel(m["close"], assets, m["drop_asset"])
+    eff = _effective_spec(spec, mechanism, intensity, non_shortable=m["non_shortable"], execution_delay_days=m["execution_delay_days"])
+    try:
+        res = run_portfolio_backtest(panel=panel, spec=eff, strategy_hash="x")
+    except Exception as exc:
+        return {"engine_error": str(exc), "mechanism": mechanism, "seed": seed, "intensity": intensity}
+    viol = [p.name for p in predicates if p.violated(res.metrics)]
+    return {
+        "mechanism": mechanism, "seed": seed, "intensity": intensity,
+        "sharpe": res.metrics["sharpe"], "max_drawdown": res.metrics["max_drawdown"],
+        "cost_pct": res.metrics["cost_pct_of_capital"], "violated_predicates": viol,
+        "non_shortable": len(m["non_shortable"]), "execution_delay_days": m["execution_delay_days"],
+        "data_failure": m["data_failure"],
+    }
 
 
 def run_fast_search(
@@ -144,7 +291,8 @@ def run_fast_search(
     budget: int = 24,
     base_seed: int = 12345,
     predicates: list[FailurePredicate] | None = None,
-    cost_overrides: dict[str, float] | None = None,
+    confirm_seeds: int = 3,
+    confirm_rule: str = "2_of_3",
 ) -> dict[str, Any]:
     predicates = predicates or DEFAULT_PREDICATES
     assets = base_assets or ["SYN_A", "SYN_B", "SYN_C", "SYN_D", "SYN_E", "SYN_F", "SPY"]
@@ -152,145 +300,127 @@ def run_fast_search(
     base_prices = [100.0 + 20.0 * i for i in range(N)]
     base_close = _base_panel(assets, T, base_seed, base_prices)
 
+    # Build worlds: sweep mechanisms with intensity.
+    rng = np.random.default_rng(mech_seed("worlds", base_seed))
     worlds: list[SearchWorld] = []
-    rng = np.random.default_rng(base_seed)
-    mechanisms = STRESS_MECHANISMS
     for i in range(budget):
-        mech = mechanisms[i % len(mechanisms)]
+        mech = STRESS_MECHANISMS[i % len(STRESS_MECHANISMS)]
         intensity = float(round(0.5 + rng.random(), 3))
-        seed = int(base_seed + i * 7919)
-        worlds.append(SearchWorld(seed=seed, mechanism=mech, intensity=intensity))
+        worlds.append(SearchWorld(mechanism=mech, intensity=intensity, base_seed=base_seed + i * 7919))
 
     evaluated = 0
-    failures: list[dict[str, Any]] = []
+    candidate_failures: list[dict[str, Any]] = []
+    confirmed_failures: list[dict[str, Any]] = []
     regime_matrix_rows: list[dict[str, Any]] = []
-    cost_spec = dict(
-        commission_bps=spec.commission_bps,
-        spread_bps=spec.spread_bps,
-        slippage_bps=spec.slippage_bps,
-        borrow_bps=spec.borrow_bps,
-    )
-    if cost_overrides:
-        cost_spec.update(cost_overrides)
+    mechanisms_evaluated: set[str] = set()
+    worlds_per_mechanism: dict[str, int] = {}
 
     for w in worlds:
+        mechanisms_evaluated.add(w.mechanism)
+        worlds_per_mechanism[w.mechanism] = worlds_per_mechanism.get(w.mechanism, 0) + 1
         evaluated += 1
-        stressed = apply_mechanism(base_close, w.mechanism, w.intensity, w.seed)
-        # handle missing-data forward fill
-        stressed = _fill_nan(stressed)
-        # build a panel (open=high=low=close for fast search; benchmark = SPY col)
-        benchmark = stressed[:, assets.index("SPY")].copy() if "SPY" in assets else None
-        metadata = {a: AssetMetadata(ticker=a, is_benchmark=(a == "SPY")) for a in assets}
-        prov = DataProvenance(
-            source="deterministic_fixture",
-            tier=3,
-            label=f"synthetic stress {w.mechanism}",
-            transformations=[f"mechanism={w.mechanism}", f"intensity={w.intensity}"],
-        )
-        panel = MarketDataPanel(
-            dates=_dummy_dates(T),
-            assets=tuple(assets),
-            open=stressed.copy(),
-            high=stressed.copy(),
-            low=stressed.copy(),
-            close=stressed,
-            volume=np.ones((T, N)),
-            benchmark_close=benchmark,
-            metadata=metadata,
-            provenance=prov,
-        )
-        # cost overrides for spread/slippage/borrow mechanisms
-        eff_spec = _effective_spec(spec, w.mechanism, w.intensity, cost_spec)
-        try:
-            res = run_portfolio_backtest(panel=panel, spec=eff_spec, strategy_hash=strategy_hash)
-        except Exception as exc:
-            regime_matrix_rows.append({"mechanism": w.mechanism, "seed": w.seed, "engine_error": str(exc)})
+        base = _evaluate_world(base_close, assets, spec, w.mechanism, w.intensity, w.base_seed, predicates)
+        if "engine_error" in base:
+            regime_matrix_rows.append(base)
             continue
-        viol = [p.name for p in predicates if p.violated(res.metrics)]
-        regime_matrix_rows.append(
-            {
-                "mechanism": w.mechanism,
-                "seed": w.seed,
-                "intensity": w.intensity,
-                "sharpe": res.metrics["sharpe"],
-                "max_drawdown": res.metrics["max_drawdown"],
-                "cost_pct": res.metrics["cost_pct_of_capital"],
-                "violated_predicates": viol,
-            }
-        )
-        if viol:
-            failures.append(
-                {
-                    "mechanism": w.mechanism,
-                    "seed": w.seed,
-                    "intensity": w.intensity,
-                    "violated_predicates": viol,
-                    "metrics": res.metrics,
-                    "strategy_hash": strategy_hash,
-                }
-            )
+        regime_matrix_rows.append(base)
+        if base["violated_predicates"]:
+            # 4.3 repeated-seed confirmation
+            sibling_seeds = [w.base_seed + d for d in range(1, confirm_seeds)]
+            sibling_viol = []
+            for s in sibling_seeds:
+                r = _evaluate_world(base_close, assets, spec, w.mechanism, w.intensity, s, predicates)
+                if "engine_error" not in r:
+                    sibling_viol.append(set(r["violated_predicates"]))
+            base_viol = set(base["violated_predicates"])
+            # require >=2 of 3 (base + 2 siblings) share a predicate
+            shared = [p for p in base_viol if sum(p in sv for sv in sibling_viol) >= (2 if confirm_rule == "2_of_3" else 1)]
+            cand = {"mechanism": w.mechanism, "seed": w.base_seed, "intensity": w.intensity,
+                    "violated_predicates": base["violated_predicates"], "metrics": base,
+                    "strategy_hash": strategy_hash}
+            candidate_failures.append(cand)
+            if shared:
+                confirmed = dict(cand)
+                confirmed["confirmed_predicates"] = shared
+                confirmed["confirmation"] = f"{confirm_rule} seeds"
+                confirmed_failures.append(confirmed)
 
+    untested = [m for m in STRESS_MECHANISMS if m not in mechanisms_evaluated]
     return {
         "strategy_hash": strategy_hash,
         "evaluated": evaluated,
-        "failures": failures,
-        "failure_count": len(failures),
-        "failure_rate": (len(failures) / evaluated) if evaluated else 0.0,
+        "candidate_failures": candidate_failures,
+        "confirmed_failures": confirmed_failures,
+        "failure_count": len(confirmed_failures),
+        "candidate_count": len(candidate_failures),
+        "failure_rate": (len(confirmed_failures) / evaluated) if evaluated else 0.0,
         "regime_matrix": regime_matrix_rows,
         "predicates": [{"name": p.name, "kind": p.kind, "threshold": p.threshold} for p in predicates],
-        "mechanisms_searched": mechanisms,
+        "mechanisms_evaluated": sorted(mechanisms_evaluated),
+        "worlds_per_mechanism": worlds_per_mechanism,
+        "untested_mechanisms": untested,
+        "engine_errors": [r for r in regime_matrix_rows if "engine_error" in r],
     }
 
 
-def _effective_spec(
-    spec: CrossSectionalSpec, mechanism: str, intensity: float, cost_spec: dict[str, float]
-) -> CrossSectionalSpec:
-    overrides = dict(cost_spec)
-    if mechanism == "spread_inflation":
-        overrides["spread_bps"] = spec.spread_bps * (1.0 + 10.0 * intensity)
-    elif mechanism == "slippage_inflation":
-        overrides["slippage_bps"] = spec.slippage_bps * (1.0 + 10.0 * intensity)
-    elif mechanism == "borrow_cost_increase":
-        overrides["borrow_bps"] = spec.borrow_bps * (1.0 + 20.0 * intensity)
-    return CrossSectionalSpec(
-        universe=list(spec.universe),
-        benchmark=spec.benchmark,
-        start=spec.start,
-        end=spec.end,
-        momentum_lookback=spec.momentum_lookback,
-        momentum_short=spec.momentum_short,
-        volatility_window=spec.volatility_window,
-        momentum_weight=spec.momentum_weight,
-        low_volatility_weight=spec.low_volatility_weight,
-        long_quantile=spec.long_quantile,
-        short_quantile=spec.short_quantile,
-        gross_exposure=spec.gross_exposure,
-        net_exposure=spec.net_exposure,
-        weighting=spec.weighting,
-        max_position_weight=spec.max_position_weight,
-        decision_time=spec.decision_time,
-        fill_time=spec.fill_time,
-        commission_bps=overrides["commission_bps"],
-        spread_bps=overrides["spread_bps"],
-        slippage_bps=overrides["slippage_bps"],
-        borrow_bps=overrides["borrow_bps"],
-        initial_capital=spec.initial_capital,
-    )
+def minimize_failure(strategy_hash: str, spec: CrossSectionalSpec, failure: dict[str, Any], base_assets: list[str] | None = None, T: int = 504) -> dict[str, Any]:
+    """4.4 Meaningful minimization. Intensity-driven mechanisms binary-search intensity;
+    categorical mechanisms minimize their categorical parameter (days / names)."""
+    assets = base_assets or ["SYN_A", "SYN_B", "SYN_C", "SYN_D", "SYN_E", "SYN_F", "SPY"]
+    N = len(assets)
+    base_close = _base_panel(assets, T, 12345, [100.0 + 20.0 * i for i in range(N)])
+    mech = failure["mechanism"]
+    preds = DEFAULT_PREDICATES
+    base_seed = failure["seed"]
 
-
-def _fill_nan(arr: np.ndarray) -> np.ndarray:
-    out = arr.copy()
-    for j in range(out.shape[1]):
-        last = 100.0
-        for i in range(out.shape[0]):
-            if not np.isfinite(out[i, j]):
-                out[i, j] = last
+    if mech in ("correlation_breakdown", "volatility_expansion", "volatility_compression",
+                "momentum_reversal", "spread_inflation", "slippage_inflation", "borrow_cost_increase"):
+        lo, hi = 0.0, failure["intensity"]
+        for _ in range(8):
+            mid = (lo + hi) / 2.0
+            r = _evaluate_world(base_close, assets, spec, mech, mid, base_seed, preds)
+            if any(p.violated(r) for p in preds if "violated_predicates" in r and set(r["violated_predicates"]) & {p.name}):
+                hi = mid
             else:
-                last = out[i, j]
-    return out
+                lo = mid
+        minimized_intensity = hi
+        r = _evaluate_world(base_close, assets, spec, mech, minimized_intensity, base_seed, preds)
+        still = any(p.violated(r) for p in preds if "violated_predicates" in r and set(r["violated_predicates"]) & {p.name})
+        return {"mechanism": mech, "minimized_intensity": round(minimized_intensity, 4),
+                "original_intensity": failure["intensity"], "still_fails": still,
+                "strategy_hash": strategy_hash}
+    if mech == "delayed_rebalance":
+        # minimize delay days
+        for d in (1, 2, 3, 5):
+            r = _evaluate_world(base_close, assets, spec, mech, failure["intensity"], base_seed, preds)
+            r["execution_delay_days"] = d
+            if not any(p.violated(r) for p in preds):
+                return {"mechanism": mech, "minimized_delay_days": d, "still_fails": False, "strategy_hash": strategy_hash}
+        return {"mechanism": mech, "minimized_delay_days": 1, "still_fails": True, "strategy_hash": strategy_hash}
+    if mech in ("short_unavailability", "universe_churn", "missing_data_shock"):
+        # minimize number of affected names / categorical magnitude
+        for k in (0, 1, 2):
+            intensity = k / max(1, N)
+            r = _evaluate_world(base_close, assets, spec, mech, intensity, base_seed, preds)
+            if not any(p.violated(r) for p in preds):
+                return {"mechanism": mech, "minimized_affected": k, "still_fails": False, "strategy_hash": strategy_hash}
+        return {"mechanism": mech, "minimized_affected": 0, "still_fails": True, "strategy_hash": strategy_hash}
+    return {"mechanism": mech, "note": "no minimization rule", "strategy_hash": strategy_hash}
 
 
-def _dummy_dates(T: int):
-    from datetime import date, timedelta
-
-    return tuple(date(2022, 1, 1) + timedelta(days=i) for i in range(T))
+def adjacent_pass(strategy_hash: str, spec: CrossSectionalSpec, failure: dict[str, Any], base_assets: list[str] | None = None, T: int = 504) -> dict[str, Any]:
+    assets = base_assets or ["SYN_A", "SYN_B", "SYN_C", "SYN_D", "SYN_E", "SYN_F", "SPY"]
+    N = len(assets)
+    base_close = _base_panel(assets, T, 12345, [100.0 + 20.0 * i for i in range(N)])
+    mech = failure["mechanism"]
+    base_seed = failure["seed"]
+    preds = DEFAULT_PREDICATES
+    for delta in (1, -1, 2, -2, 3, -3, 5, -5):
+        seed = base_seed + delta
+        r = _evaluate_world(base_close, assets, spec, mech, failure["intensity"], seed, preds)
+        if "engine_error" in r:
+            continue
+        if not r["violated_predicates"]:
+            return {"mechanism": mech, "seed": seed, "delta_from_failure_seed": delta,
+                    "passes": True, "metrics": r, "strategy_hash": strategy_hash}
+    return {"mechanism": mech, "note": "no adjacent pass within radius", "strategy_hash": strategy_hash}

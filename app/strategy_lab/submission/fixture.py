@@ -16,6 +16,7 @@ from app.strategy_lab.submission.panels import (
     DataProvenance,
     MarketDataPanel,
 )
+from app.strategy_lab.submission.strategy import CrossSectionalSpec
 
 FIXTURE_ASSETS = ["SYN_A", "SYN_B", "SYN_C", "SYN_D", "SYN_E", "SYN_F", "SPY"]
 FIXTURE_DATES = [date(2021, 1, 1) + timedelta(days=i) for i in range(504)]
@@ -87,6 +88,33 @@ def build_fixture_panel(seed: int = 20240101) -> MarketDataPanel:
         metadata=metadata,
         provenance=provenance,
     )
+
+
+# Deliberately FEASIBLE spec for the 7-asset CI fixture: 3 long + 3 short at 0.10
+# cap -> max feasible gross 0.60, so a 0.50 target is met without scaling.
+FIXTURE_SPEC = CrossSectionalSpec(
+    universe=list(FIXTURE_ASSETS),
+    benchmark="SPY",
+    start="2021-01-01",
+    end="2023-01-01",
+    momentum_lookback=120,
+    momentum_short=21,
+    volatility_window=30,
+    long_quantile=0.50,
+    short_quantile=0.50,
+    gross_exposure=0.50,
+    net_exposure=0.0,
+    max_position_weight=0.10,
+    commission_bps=5.0,
+    spread_bps=2.0,
+    slippage_bps=3.0,
+    borrow_bps=50.0,
+    locate_bps=10.0,
+)
+
+
+def build_fixture_spec() -> CrossSectionalSpec:
+    return FIXTURE_SPEC
 
 
 def _fill_forward(col: np.ndarray) -> np.ndarray:

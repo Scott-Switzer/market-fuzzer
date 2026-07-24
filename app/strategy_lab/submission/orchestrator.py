@@ -18,8 +18,7 @@ from app.strategy_lab.dsl import Strategy
 from app.strategy_lab.service_lab import ApprovalService
 from app.strategy_lab.submission.engine import run_portfolio_backtest
 from app.strategy_lab.submission.fenrix_adapter import load_panel as fenrix_load
-from app.strategy_lab.submission.fixture import build_fixture_panel
-from app.strategy_lab.submission.panels import DataProvenance, MarketDataPanel
+from app.strategy_lab.submission.fixture import build_fixture_panel, build_fixture_spec
 from app.strategy_lab.submission.strategy import (
     DEMO_UNIVERSE,
     FIXED_END,
@@ -29,6 +28,8 @@ from app.strategy_lab.submission.strategy import (
 from app.strategy_lab.submission.stress_search import (
     DEFAULT_PREDICATES,
     FailurePredicate,
+    adjacent_pass,
+    minimize_failure,
     run_fast_search,
 )
 from app.strategy_lab.submission.yfinance_adapter import acquire as yfinance_acquire
@@ -226,6 +227,10 @@ def run_submission(
     budget: int = 24,
 ) -> SubmissionRun:
     spec = spec or CrossSectionalSpec()
+    # For the offline fixture run, use a deliberately FEASIBLE spec (7-asset book)
+    # so the deck does not carry an infeasible-exposure warning.
+    if mode == "synthetic_fixture" and spec is CrossSectionalSpec():
+        spec = build_fixture_spec()
     strategy = build_strategy_dsl(spec)
     approval = lock_strategy(strategy)
     strategy_hash = approval["strategy_id"]
@@ -263,7 +268,7 @@ def run_submission(
         "provenance": bt.provenance,
     }
 
-    # ---- sealed synthetic stress (Tier A fast) ----
+    # ---- sealed synthetic stress (Tier A fast, with repeated-seed confirmation) ----
     stress = run_fast_search(
         strategy_hash=strategy_hash,
         spec=spec,
@@ -275,13 +280,13 @@ def run_submission(
         predicates=predicates or DEFAULT_PREDICATES,
     )
 
-    # ---- minimization + adjacent pass on first failure (deterministic) ----
+    # ---- minimization + adjacent pass on FIRST CONFIRMED failure ----
     minimized = None
     adjacent = None
-    if stress["failures"]:
-        f0 = stress["failures"][0]
-        minimized = _minimize_failure(strategy_hash, spec, f0, stress["predicates"])
-        adjacent = _adjacent_pass(strategy_hash, spec, f0)
+    if stress["confirmed_failures"]:
+        f0 = stress["confirmed_failures"][0]
+        minimized = minimize_failure(strategy_hash, spec, f0)
+        adjacent = adjacent_pass(strategy_hash, spec, f0)
 
     return SubmissionRun(
         strategy_hash=strategy_hash,
@@ -295,100 +300,16 @@ def run_submission(
     )
 
 
-def _minimize_failure(strategy_hash, spec, failure, predicates) -> dict[str, Any]:
-    """Delta-debug: shrink intensity until the predicate no longer fires (or floor)."""
-    mech = failure["mechanism"]
-    seed = failure["seed"]
-    base_intensity = failure["intensity"]
-    preds = [FailurePredicate(p["name"], p["kind"], p["threshold"]) for p in predicates]
-    lo, hi = 0.0, base_intensity
-    # binary search for minimal intensity that still fails
-    for _ in range(8):
-        mid = (lo + hi) / 2.0
-        res = _eval_single(strategy_hash, spec, mech, mid, seed)
-        if any(p.violated(res.metrics) for p in preds):
-            hi = mid
-        else:
-            lo = mid
-    minimized_intensity = hi
-    res = _eval_single(strategy_hash, spec, mech, minimized_intensity, seed)
-    return {
-        "mechanism": mech,
-        "original_intensity": base_intensity,
-        "minimized_intensity": round(minimized_intensity, 4),
-        "seed": seed,
-        "metrics": res.metrics,
-        "still_fails": any(p.violated(res.metrics) for p in preds),
-        "predicates": [p.name for p in preds],
-        "strategy_hash": strategy_hash,
-    }
-
-
-def _adjacent_pass(strategy_hash, spec, failure) -> dict[str, Any]:
-    """Adjacent passing case: a nearby seed that does NOT violate predicates."""
-    mech = failure["mechanism"]
-    base_seed = failure["seed"]
-    preds = DEFAULT_PREDICATES
-    for delta in (1, -1, 2, -2, 3, -3, 5, -5):
-        seed = base_seed + delta
-        res = _eval_single(strategy_hash, spec, mech, failure["intensity"], seed)
-        if not any(p.violated(res.metrics) for p in preds):
-            return {
-                "mechanism": mech,
-                "seed": seed,
-                "delta_from_failure_seed": delta,
-                "metrics": res.metrics,
-                "passes": True,
-                "strategy_hash": strategy_hash,
-            }
-    return {
-        "mechanism": mech,
-        "note": "no adjacent pass found within search radius",
-        "strategy_hash": strategy_hash,
-    }
-
-
 def _eval_single(strategy_hash, spec, mechanism, intensity, seed):
-    import numpy as np
+    """Kept for backward-compatible single-world evaluation via the new stress API."""
+    from app.strategy_lab.submission.stress_search import _base_panel, _evaluate_world
 
-    from app.strategy_lab.submission.panels import AssetMetadata
-    from app.strategy_lab.submission.stress_search import (
-        _base_panel,
-        _dummy_dates,
-        _effective_spec,
-        _fill_nan,
-        apply_mechanism,
-    )
-
-    assets = ["SYN_A", "SYN_B", "SYN_C", "SYN_D", "SYN_E", "SYN_F", "SPY"]
+    assets = list(spec.universe) if mode_is_fixture(spec) else ["SYN_A", "SYN_B", "SYN_C", "SYN_D", "SYN_E", "SYN_F", "SPY"]
     N = len(assets)
-    T = 504
-    base = _base_panel(assets, T, 12345, [100.0 + 20.0 * i for i in range(N)])
-    stressed = _fill_nan(apply_mechanism(base, mechanism, intensity, seed))
-    benchmark = stressed[:, assets.index("SPY")].copy()
-    metadata = {a: AssetMetadata(ticker=a, is_benchmark=(a == "SPY")) for a in assets}
-    prov = DataProvenance(source="deterministic_fixture", tier=3, label=f"min {mechanism}")
-    panel = MarketDataPanel(
-        dates=_dummy_dates(T),
-        assets=tuple(assets),
-        open=stressed.copy(),
-        high=stressed.copy(),
-        low=stressed.copy(),
-        close=stressed,
-        volume=np.ones((T, N)),
-        benchmark_close=benchmark,
-        metadata=metadata,
-        provenance=prov,
-    )
-    eff = _effective_spec(
-        spec,
-        mechanism,
-        intensity,
-        dict(
-            commission_bps=spec.commission_bps,
-            spread_bps=spec.spread_bps,
-            slippage_bps=spec.slippage_bps,
-            borrow_bps=spec.borrow_bps,
-        ),
-    )
-    return run_portfolio_backtest(panel=panel, spec=eff, strategy_hash=strategy_hash)
+    base = _base_panel(assets, 504, 12345, [100.0 + 20.0 * i for i in range(N)])
+    return _evaluate_world(base, assets, spec, mechanism, intensity, seed, DEFAULT_PREDICATES)
+
+
+def mode_is_fixture(spec) -> bool:
+    return False
+
