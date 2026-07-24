@@ -66,23 +66,28 @@ def test_live_oos_endpoint_returns_summary_or_skip():
         pytest.skip("httpx not available")
 
     client = httpx.Client(base_url=_live_base_url, timeout=30)
+    payload = {
+        "closes": [100 + i * 0.25 for i in range(300)],
+        "strategy_type": "sma_crossover",
+        "params": {"fast": 10, "slow": 30},
+        "mode": "walk_forward",
+        "train_window": 60,
+        "test_window": 20,
+        "step": 20,
+        "embargo": 2,
+        "anchored": False,
+        "regime_aware": False,
+        "adversarial": False,
+        "adversarial_seed": 42,
+        "worlds_per_regime": 10,
+    }
     try:
-        payload = {
-            "closes": [100 + i * 0.25 for i in range(300)],
-            "strategy_type": "sma_crossover",
-            "params": {"fast": 10, "slow": 30},
-            "mode": "walk_forward",
-            "train_window": 60,
-            "test_window": 20,
-            "step": 20,
-            "embargo": 2,
-            "anchored": False,
-            "regime_aware": False,
-            "adversarial": False,
-            "adversarial_seed": 42,
-            "worlds_per_regime": 10,
-        }
-        r = client.post("/api/quant/oos", json=payload)
+        try:
+            r = client.post("/api/quant/oos", json=payload)
+        except httpx.HTTPError as exc:
+            import pytest
+
+            pytest.skip(f"live OOS server unreachable ({exc}); skipping network test")
         if r.status_code == 404:
             import pytest
 
