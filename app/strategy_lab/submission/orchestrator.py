@@ -268,6 +268,11 @@ def run_submission(
         "target_weights": bt.target_weights.tolist(),
         "assets": bt.assets,
         "dates": bt.dates,
+        "benchmark_close": (
+            [round(float(x), 4) for x in bt.benchmark_close]
+            if bt.benchmark_close is not None
+            else None
+        ),
         "data_mode": acquired["mode"],
         "tier": acquired["tier"],
         "provenance": bt.provenance,

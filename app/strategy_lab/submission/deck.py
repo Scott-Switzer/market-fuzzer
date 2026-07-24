@@ -66,6 +66,7 @@ class Evidence:
     watermark: str
     screenshots: list[Path] = field(default_factory=list)
     equity_curve: list[float] = field(default_factory=list)
+    benchmark_curve: list[float] = field(default_factory=list)
 
 
 def load_evidence(require_current_sha: bool = True) -> Evidence:
@@ -109,6 +110,16 @@ def load_evidence(require_current_sha: bool = True) -> Evidence:
             except (IndexError, ValueError):
                 continue
 
+    benchmark: list[float] = []
+    bench_csv = base / "historical" / "benchmark_curve.csv"
+    if bench_csv.exists():
+        for line in bench_csv.read_text().splitlines()[1:]:
+            parts = line.split(",")
+            try:
+                benchmark.append(float(parts[1]))
+            except (IndexError, ValueError):
+                benchmark.append(float("nan"))
+
     return Evidence(
         data=data,
         base_dir=base,
@@ -118,6 +129,7 @@ def load_evidence(require_current_sha: bool = True) -> Evidence:
         watermark=watermark,
         screenshots=screenshots,
         equity_curve=equity,
+        benchmark_curve=benchmark,
     )
 
 
@@ -147,7 +159,18 @@ def _render_equity_chart(ev: Evidence) -> Path | None:
         return None
     out = ev.base_dir / "pitch" / "equity_curve.png"
     fig, ax = plt.subplots(figsize=(8, 3.6), dpi=120)
-    ax.plot(ev.equity_curve, color="#2bd47f", linewidth=1.2)
+    ax.plot(ev.equity_curve, color="#2bd47f", linewidth=1.4, label="Strategy")
+    # overlay the SPY benchmark (rebased to initial capital) when available and
+    # not a degenerate flat line
+    bench = ev.benchmark_curve
+    if bench and len(bench) == len(ev.equity_curve):
+        import numpy as _np
+
+        barr = _np.asarray(bench, dtype=float)
+        finite = barr[_np.isfinite(barr)]
+        if len(finite) > 1 and float(finite.max() - finite.min()) > 1e-6:
+            ax.plot(barr, color="#f5a524", linewidth=1.2, linestyle="--", label="SPY (rebased)")
+    ax.legend(loc="upper left", fontsize=8, framealpha=0.4)
     ax.set_title(f"Equity curve \u2014 {ev.data_mode} run \u00b7 {len(ev.equity_curve)} steps")
     ax.set_xlabel("step")
     ax.set_ylabel("equity")

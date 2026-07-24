@@ -201,6 +201,7 @@ class BacktestResult:
     trades: list[dict[str, Any]]
     warnings: list[dict[str, Any]]
     provenance: dict[str, Any]
+    benchmark_close: np.ndarray | None = None  # T, SPY benchmark price series (raw)
 
 
 # ---------------------------------------------------------------------------
@@ -393,6 +394,9 @@ def run_portfolio_backtest(
         trades=trades,
         warnings=warnings,
         provenance=panel.provenance.__dict__,
+        benchmark_close=(
+            np.asarray(panel.benchmark_close, dtype=float) if panel.benchmark_close is not None else None
+        ),
     )
 
 

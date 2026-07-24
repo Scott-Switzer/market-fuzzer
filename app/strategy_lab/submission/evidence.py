@@ -83,8 +83,22 @@ def build_evidence_package(run: SubmissionRun, save_dir: str | None = None) -> d
     (base / "historical" / "equity_curve.csv").write_text(equity_csv)
     import numpy as np
 
-    bench = bt["metrics"].get("benchmark_cagr") or 0.0
-    benchmark_csv = "step,value\n" + "\n".join(f"{i},{bench}" for i in range(len(bt["equity_curve"])))
+    # Real SPY benchmark curve, rebased to the strategy's initial capital so the
+    # deck can overlay it against the equity curve on the same axis. Falls back to
+    # a flat capital line only when no benchmark series is available.
+    bench_close = bt.get("benchmark_close")
+    cap0 = float(bt["equity_curve"][0]) if bt["equity_curve"] else 1_000_000.0
+    if bench_close:
+        bc = np.asarray(bench_close, dtype=float)
+        finite = np.where(np.isfinite(bc) & (bc > 0))[0]
+        base_px = float(bc[finite[0]]) if len(finite) else 0.0
+        if base_px > 0:
+            rebased = [round(cap0 * float(v) / base_px, 4) if np.isfinite(v) else "" for v in bc]
+        else:
+            rebased = [cap0] * len(bt["equity_curve"])
+    else:
+        rebased = [cap0] * len(bt["equity_curve"])
+    benchmark_csv = "step,value\n" + "\n".join(f"{i},{v}" for i, v in enumerate(rebased))
     (base / "historical" / "benchmark_curve.csv").write_text(benchmark_csv)
     np.save(base / "historical" / "weights.npy", np.asarray(bt["target_weights"]))
     trades_csv = "date,asset,side,quantity,price,commission,slippage,borrow\n" + "\n".join(
