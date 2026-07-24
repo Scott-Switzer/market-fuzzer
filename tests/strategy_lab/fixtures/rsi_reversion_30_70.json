@@ -1,0 +1,41 @@
+{
+  "original_text": "Buy when RSI(14) drops below 30 and sell when it rises above 70.",
+  "expected_clause_ledger": [
+    {
+      "clause_id": "c_0",
+      "original_text": "Buy when RSI(14) drops below 30 and sell when it rises above 70.",
+      "normalized_text": "Buy when RSI(14) drops below 30 and sell when it rises above 70.",
+      "status": "supported_and_compiled",
+      "reason": null,
+      "user_resolution": "approved",
+      "compiler_confidence": 0.8,
+      "provenance": {}
+    }
+  ],
+  "expected_canonical_schema": {
+    "schema_version": "v1",
+    "family": "rsi_reversion",
+    "clauses": [
+      {
+        "order": 0,
+        "clause": {
+          "kind": "Hold",
+          "note": "pre_signal"
+        },
+        "clause_id": "c_0"
+      },
+      {
+        "order": 1,
+        "clause": {
+          "kind": "RsiReversion",
+          "period": 14,
+          "oversold": 30.0,
+          "overbought": 70.0
+        },
+        "clause_id": "c_1"
+      }
+    ]
+  },
+  "expected_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "expected_runtime_behavior": "compile_success"
+}

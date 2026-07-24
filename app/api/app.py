@@ -14,8 +14,11 @@ from datetime import UTC, date, datetime, timedelta
 from functools import lru_cache
 from ipaddress import ip_address
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from app.break_test.costs import TransactionCostModel
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
@@ -38,6 +41,12 @@ from app.arena import (
     public_dataset,
     validate_submission_csv,
 )
+from app.break_test.oos_validation import (
+    combinatorial_purged_cross_validation,
+    walk_forward_validation,
+)
+from app.break_test.quant_validation import sensitivity_analysis
+from app.break_test.service import get_available_strategies, get_session, run_break_test
 from app.calibration import (
     CalibrationPackV1,
     build_demo_calibration_pack,
@@ -130,6 +139,131 @@ _LOCAL_DEMO_SESSION_SECRET = os.urandom(32)
 _EXECUTION_STORE_CACHE_SIZE = 8
 _MAX_CALIBRATION_UPLOAD_BYTES = 20 * 1024 * 1024
 _REQUEST_LOG = logging.getLogger("arena.requests")
+request_logger = _REQUEST_LOG
+
+
+def _build_tcost_model(payload: BreakTestRequest) -> TransactionCostModel | None:
+    if all(value is None for value in [payload.spread_bps, payload.borrow_fee_bps, payload.impact_beta]):
+        return None
+    from app.break_test.costs import TransactionCostModel
+
+    return TransactionCostModel(
+        spread_bps=payload.spread_bps if payload.spread_bps is not None else 2.0,
+        borrow_fee_bps=payload.borrow_fee_bps if payload.borrow_fee_bps is not None else 0.0,
+        impact_beta=payload.impact_beta if payload.impact_beta is not None else 0.0,
+        impact_mode=payload.impact_mode,
+        default_adv=payload.default_adv,
+    )
+
+
+def _resolve_closes(payload: BreakTestRequest) -> tuple:
+    from app.break_test.data_loader import (
+        load_yfinance_bulk,
+        suggest_lookback,
+        validate_prices_after_source,
+        warn_on_short_history,
+    )
+
+    closes = list(payload.closes)
+    default_lookback = suggest_lookback(payload.data_source, payload.yfinance_tickers)
+    validation: dict = {"short_history": False, "warnings": [], "help": {}}
+    if payload.data_source == "yfinance" and payload.yfinance_tickers:
+        start = payload.yfinance_start
+        end = payload.yfinance_end
+        if not start:
+            today = __import__("datetime").date.today()
+            lookback = payload.lookback_period or default_lookback or "5y"
+            days = {"20y": 20 * 365, "10y": 10 * 365, "5y": 5 * 365, "3y": 3 * 365}.get(lookback, 5 * 365)
+            start = (today - __import__("datetime").timedelta(days=days)).isoformat()
+        bulk_kwargs = {
+            "start": start,
+            "corporate_action_adjustment": payload.corporate_action_adjustment,
+        }
+        if end:
+            bulk_kwargs["end"] = end
+        bulk = load_yfinance_bulk(
+            payload.yfinance_tickers,
+            **bulk_kwargs,
+        )
+        primary_payload = next(iter(bulk.get("tickers", {}).values()), {})
+        if isinstance(primary_payload, dict) and "closes" in primary_payload:
+            closes = list(primary_payload["closes"])
+    else:
+        closes = validate_prices_after_source(closes, min_length=252 * 5)
+    validation = warn_on_short_history(closes, min_bars=252 * 5)
+    return closes, default_lookback, validation
+
+
+def _build_cost_and_macro_payload(payload: BreakTestRequest) -> tuple:
+    tcost_model = _build_tcost_model(payload)
+    fred_payload = None
+    regime_hints = None
+    if payload.fred_series:
+        try:
+            from app.break_test.data_loader import load_fred_series
+
+            default_start = (
+                __import__("datetime")
+                .date.today()
+                .replace(year=__import__("datetime").date.today().year - 5)
+                .isoformat()
+            )
+            fred_payload = load_fred_series(
+                [s for s in payload.fred_series if s],
+                start=payload.yfinance_start or default_start,
+                end=payload.yfinance_end,
+            )
+            regime_hints = _fred_to_regime_hints(fred_payload)
+        except Exception as exc:
+            request_logger.info("FRED macro fetch skipped for break test: %s", exc)
+    return tcost_model, fred_payload, regime_hints
+
+
+def _fred_to_regime_hints(fred_payload: dict) -> dict:
+    vix = _last_valid(fred_payload.get("VIXCLS", []))
+    cpi = _last_two_changes(fred_payload.get("CPIAUCSL", []))
+    unrate = _last_valid(fred_payload.get("UNRATE", []))
+    regime = "normal-vol / mixed"
+    if isinstance(vix, float) and vix >= 35.0:
+        regime = "crisis-vol / tail risk"
+    elif isinstance(vix, float) and vix >= 22.0:
+        regime = "elevated-vol / stress risk"
+    elif (
+        isinstance(vix, float)
+        and vix < 15.0
+        and isinstance(cpi, tuple)
+        and len(cpi) == 2
+        and isinstance(cpi[1], float)
+    ):
+        regime = "low-vol / likely trend or range"
+    return {
+        "regime": regime,
+        "vix": vix,
+        "cpi_change_pct": cpi[1] if cpi else None,
+        "unrate": unrate,
+    }
+
+
+def _last_valid(values: list) -> float | None:
+    for value in reversed(values):
+        if value is not None:
+            return value
+    return None
+
+
+def _last_two_changes(values: list) -> tuple:
+    last = prev = None
+    for value in reversed(values):
+        if value is not None:
+            last = value
+            break
+    for value in reversed(values):
+        if value is not None and value is not last:
+            prev = value
+            break
+    if last is None or prev is None:
+        return (prev, None)
+    return (prev, last / prev - 1.0)
 
 
 @app.middleware("http")
@@ -343,6 +477,25 @@ class DemoSessionRequest(BaseModel):
 @app.get("/")
 def index() -> FileResponse:
     """Customer product entry point."""
+    return FileResponse(ROOT / "static" / "break-test.html")
+
+
+app.include_router(
+    __import__("app.strategy_lab.service", fromlist=["router"]).router,
+    prefix="/api/strategy-lab",
+    tags=["strategy-lab"],
+)
+
+
+@app.get("/strategy-lab")
+def strategy_lab() -> FileResponse:
+    """Strategy Validation Lab entry point."""
+    return FileResponse(ROOT / "static" / "strategy-lab.html")
+
+
+@app.get("/legacy-start")
+def legacy_start() -> FileResponse:
+    """Previous start page retained for reference."""
     return FileResponse(ROOT / "static" / "start.html")
 
 
@@ -411,6 +564,7 @@ def readiness() -> dict[str, Any]:
 def sealed_campaign_ui() -> FileResponse:
     return FileResponse(ROOT / "static" / "sealed-campaign.html")
 
+
 @app.get("/start")
 def guided_start_ui() -> FileResponse:
     return FileResponse(ROOT / "static" / "start.html")
@@ -438,9 +592,233 @@ def sma_robustness(payload: SmaRobustnessRequest) -> dict[str, object]:
         raise HTTPException(422, str(exc)) from exc
 
 
+class BreakTestRequest(BaseModel):
+    closes: list[float] = Field(min_length=80, max_length=50_000)
+    strategy_type: Literal["sma_crossover", "breakout", "rsi_reversion", "python"] = "sma_crossover"
+    params: dict[str, int] | None = None
+    worlds_per_regime: int = Field(default=100, ge=10, le=500)
+    fix_and_retest_params: dict[str, int] | None = None
+    forward_mode: Literal["gbm", "exchange"] = "gbm"
+    strategy_code: str | None = Field(default=None, max_length=20_000)
+    data_source: Literal["demo", "yfinance", "csv"] = "demo"
+    yfinance_tickers: list[str] | None = Field(default=None, max_length=20)
+    yfinance_start: str | None = Field(default=None)
+    yfinance_end: str | None = Field(default=None)
+    lookback_period: str | None = Field(default=None, max_length=12)
+    universe_preset: str | None = Field(default=None, max_length=120)
+    asset_count: int | None = Field(default=None, ge=1, le=64)
+    fred_series: list[str] | None = Field(default=None, max_length=12)
+    corporate_action_adjustment: bool = True
+    spread_bps: float | None = Field(default=None, ge=0)
+    borrow_fee_bps: float | None = Field(default=None, ge=0)
+    impact_beta: float | None = Field(default=None, ge=0)
+    impact_mode: Literal["sqrt", "linear"] = "sqrt"
+    default_adv: float | None = Field(default=None, gt=0)
+
+
+class StrategyParamRange(BaseModel):
+    min: int
+    max: int
+
+
+class StrategyInfo(BaseModel):
+    name: str
+    description: str
+    default_params: dict[str, int]
+    param_ranges: dict[str, StrategyParamRange]
+
+
+class QuantSensitivityRequest(BaseModel):
+    closes: list[float] = Field(min_length=80, max_length=50_000)
+    strategy_type: Literal["sma_crossover", "breakout", "rsi_reversion", "python"] = "sma_crossover"
+    params: dict[str, int] | None = None
+
+
+class QuantWorstCaseRequest(BaseModel):
+    closes: list[float] = Field(min_length=80, max_length=50_000)
+    strategy_type: Literal["sma_crossover", "breakout", "rsi_reversion", "python"] = "sma_crossover"
+    params: dict[str, int] | None = None
+    worlds_per_regime: int = Field(default=40, ge=10, le=200)
+
+
+class OOSValidationRequest(BaseModel):
+    closes: list[float] = Field(min_length=80, max_length=50_000)
+    strategy_type: Literal["sma_crossover", "breakout", "rsi_reversion", "python"] = "sma_crossover"
+    params: dict[str, int] | None = None
+    mode: Literal["walk_forward", "cpcv", "nested_cpcv"] = "walk_forward"
+    train_window: int = Field(default=120, ge=20, le=5000)
+    test_window: int | None = Field(default=None, ge=1, le=2000)
+    step: int | None = Field(default=None, ge=1, le=2000)
+    embargo: int = Field(default=5, ge=0, le=200)
+    anchored: bool = False
+    regime_aware: bool = False
+    adversarial: bool = False
+    adversarial_seed: int = 42
+    worlds_per_regime: int = Field(default=40, ge=10, le=200)
+    benchmark_returns: list[float] | None = Field(default=None, max_length=50_000)
+
+
+def _to_jsonable(value):
+    if isinstance(value, dict):
+        return {str(k): _to_jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_jsonable(v) for v in value]
+    numpy = __import__("numpy")
+    if isinstance(value, numpy.ndarray):
+        return _to_jsonable(value.tolist())
+    if isinstance(value, numpy.generic):
+        return value.item()
+    return value
+
+
+@app.post("/api/quant/oos")
+def quant_oos_validation(payload: OOSValidationRequest) -> dict[str, object]:
+    try:
+        if payload.mode == "walk_forward":
+            result = walk_forward_validation(
+                payload.closes,
+                payload.strategy_type,
+                payload.params or {},
+                train_window=payload.train_window,
+                test_window=payload.test_window,
+                step=payload.step,
+                embargo=payload.embargo,
+                anchored=payload.anchored,
+                regime_aware=payload.regime_aware,
+                benchmark_returns=payload.benchmark_returns,
+                adversarial=payload.adversarial,
+                adversarial_seed=payload.adversarial_seed,
+            )
+        elif payload.mode == "cpcv":
+            result = combinatorial_purged_cross_validation(
+                payload.closes,
+                payload.strategy_type,
+                payload.params or {},
+                embargo=payload.embargo,
+                benchmark_returns=payload.benchmark_returns,
+                nested=False,
+                adversarial=payload.adversarial,
+                adversarial_seed=payload.adversarial_seed,
+            )
+        elif payload.mode == "nested_cpcv":
+            result = combinatorial_purged_cross_validation(
+                payload.closes,
+                payload.strategy_type,
+                payload.params or {},
+                embargo=payload.embargo,
+                benchmark_returns=payload.benchmark_returns,
+                nested=True,
+                adversarial=payload.adversarial,
+                adversarial_seed=payload.adversarial_seed,
+            )
+        else:
+            raise HTTPException(422, f"unsupported oos mode: {payload.mode}")
+        return _to_jsonable(result)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"oos validation failed: {exc}") from exc
+
+
+@app.get("/api/break-test/strategies")
+def break_test_strategies() -> dict[str, StrategyInfo]:
+    raw = get_available_strategies()
+    result: dict[str, StrategyInfo] = {}
+    for key, info in raw.items():
+        ranges = info.get("param_ranges", {})
+        result[key] = StrategyInfo(
+            name=str(info["name"]),
+            description=str(info["description"]),
+            default_params=dict(info["default_params"]),  # type: ignore[arg-type]
+            param_ranges={k: StrategyParamRange(min=v[0], max=v[1]) for k, v in ranges.items()},  # type: ignore[misc]
+        )
+    return result
+
+
+@app.post("/api/break-test/run")
+def break_test_run(payload: BreakTestRequest) -> dict[str, object]:
+    try:
+        closes, default_lookback, validation = _resolve_closes(payload)
+        if validation.get("short_history"):
+            request_logger.info("Short history warning: %s", validation)
+        tcost_model, fred_payload, regime_hints = _build_cost_and_macro_payload(payload)
+        return run_break_test(
+            closes,
+            strategy_type=payload.strategy_type,
+            params=payload.params,
+            worlds_per_regime=payload.worlds_per_regime,
+            fix_and_retest_params=payload.fix_and_retest_params,
+            forward_mode=payload.forward_mode,
+            strategy_code=payload.strategy_code,
+            tcost_model=tcost_model,
+            default_adv=payload.default_adv,
+            data_source=payload.data_source,
+            lookback_period=payload.lookback_period or default_lookback,
+            universe_preset=payload.universe_preset,
+            asset_count=payload.asset_count,
+            fred_series=payload.fred_series,
+            fred=fred_payload,
+            regime_hints=regime_hints,
+            validation=validation,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(500, f"break-test failed: {exc}") from exc
+
+
+@app.get("/api/break-test/session/{session_id}")
+def break_test_session(session_id: str) -> dict[str, object]:
+    result = get_session(session_id)
+    if result is None:
+        raise HTTPException(404, "Session not found")
+    return result
+
+
+@app.post("/api/quant/sensitivity")
+def quant_sensitivity(payload: QuantSensitivityRequest) -> dict[str, object]:
+    try:
+        return sensitivity_analysis(
+            payload.closes,
+            payload.strategy_type,
+            payload.params or {},
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"sensitivity failed: {exc}") from exc
+
+
+@app.post("/api/quant/worst-case")
+def quant_worst_case(payload: QuantWorstCaseRequest) -> dict[str, object]:
+    try:
+        from app.break_test.quant_validation import worst_case_attribution
+    except Exception as exc:
+        raise HTTPException(500, f"quant module unavailable: {exc}") from exc
+    try:
+        return worst_case_attribution(
+            payload.closes,
+            payload.strategy_type,
+            payload.params or {},
+            worlds_per_regime=payload.worlds_per_regime,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"worst-case failed: {exc}") from exc
+
+
+@app.get("/break-test")
+def break_test_ui() -> FileResponse:
+    return FileResponse(ROOT / "static" / "break-test.html")
+
+
 @app.get("/synthetic-market-world")
 def synthetic_market_world_landing() -> FileResponse:
-    """Enterprise product entry point; the existing Arena remains at /."""
+    """Enterprise product entry point; the Arena teaching surface remains at /arena."""
     return FileResponse(ROOT / "static" / "synthetic-market-world.html")
 
 

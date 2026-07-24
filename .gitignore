@@ -13,3 +13,9 @@ __pycache__/
 # Experiment outputs are reproducible and can be large. Keep the directory contract only.
 artifacts/*
 !artifacts/README.md
+
+# Local Python envs and scratch
+.venv*/
+tmp/
+tmp_check.py
+.supercode-launch.sh

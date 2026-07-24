@@ -27,7 +27,7 @@ def test_batch_generates_self_contained_artifacts(tmp_path):
 
 def test_realism_and_failure_surface_are_component_level(tmp_path):
     result = run_batch(build_demo_world(8), tmp_path, quick=True)
-    assert result.realism_report["classification"] == "component diagnostics only"
+    assert result.realism_report["classification"] == "component diagnostics with invariant harness"
     assert all(
         row["status"] in {"Pass", "Partial", "Fail", "Not evaluated"}
         for row in result.realism_report["metrics"]

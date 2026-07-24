@@ -88,7 +88,7 @@ def _startup_and_browser_load(database: Path) -> tuple[float, float]:
             browser = playwright.chromium.launch(headless=True)
             page = browser.new_page()
             loaded = time.perf_counter()
-            page.goto(base_url, wait_until="networkidle")
+            page.goto(f"{base_url}/arena", wait_until="networkidle")
             page.get_by_role("heading", name="Can your strategy survive", exact=False).wait_for()
             browser_load_ms = (time.perf_counter() - loaded) * 1_000
             browser.close()

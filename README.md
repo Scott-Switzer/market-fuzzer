@@ -1,17 +1,37 @@
 # Synthetic Market World
 
-**A governed synthetic market environment for strategy validation and adversarial stress testing.**
+**The only sealed, deterministic, self-hostable execution stress-test platform for quants who cannot accept black-box backtests.**
 
-Quant Challenge Arena is the training and assessment surface built on the
-platform. Open the enterprise entry point at `/synthetic-market-world`.
+Synthetic Market World is a post-backtest validation layer: deterministic, data-license-free execution stress-testing with hidden-world evaluation. Quant Challenge Arena is the training and assessment surface built on the platform. Open the enterprise entry point at `/synthetic-market-world`.
+
+**Wedge.** Can this strategy survive a hidden execution shock? Run a ~30-minute local test on one existing strategy, get a plain-English failure report, and export an evidence package—without buying a market-data license.
 
 **Problem.** A strategy can top a visible backtest by exploiting one friendly market and still fail when liquidity disappears, latency rises, order flow crowds, or an event changes the price path.
 
-**Product.** Synthetic Market World lets a research or trading team register reproducible synthetic market worlds, apply controlled stress scenarios, run strategies against protected conditions, and produce governed evidence packages. Quant Challenge Arena is the learner-facing demonstration of that platform. Deterministic code owns market events, orders, fills, metrics, scores, ranks, phase state, and release state.
+**Product.** Synthetic Market World lets a research or trading team register reproducible synthetic market worlds, apply controlled stress scenarios, run strategies against protected conditions, and produce governed evidence packages. The exchange path supports sealed V2 event-kernel provenance, Almgren-Chriss / toxicity cost models, and TCA metrics on backtest and forward stress runs. Quant Challenge Arena is the learner-facing demonstration of that platform. Deterministic code owns market events, orders, fills, metrics, scores, ranks, phase state, and release state.
 
-**Audience.** The primary users are prop-shop quant researchers, trading technology teams, and model-validation practitioners. Training, recruiting, and education are supported workflows. It evaluates strategy behavior inside declared synthetic markets; it does not prove alpha, production capacity, or live-trading safety.
+**Audience (ICP).** Lean prop-shop quants and quant-tech leads at 2–20 person firms running Python research without a dedicated execution-validation gate. Training, recruiting, and education are supported workflows. It evaluates strategy behavior inside declared synthetic markets; it does not prove alpha, production capacity, or live-trading safety.
+
+## Pricing
+
+| Tier | What you get |
+|------|----------------|
+| **Free** | Full local single-user install (this repo) |
+| **Research** | $99/seat/mo — calibration packs, Scenario Studio |
+| **Team** | $399/mo — 3 seats, audit exports, adapter registration |
+| **Enterprise** | Custom — private packs / on-prem |
+
+Local Free use requires no market-data subscription and no OpenAI API key for the core deterministic workflow.
 
 ## Three-step demo
+
+**Fastest local stress path (~30 minutes):**
+
+1. Launch the app (below), open <http://127.0.0.1:8000/break-test>, and run a built-in strategy (for example SMA crossover) against synthetic forward regimes.
+2. Read the failure summary: which regimes lose, drawdown, and TCA fields such as slippage vs arrival/VWAP when present in the metrics payload.
+3. Optionally open the Arena at `/` for the ranking-reversal teaching fixture, or `/synthetic-market-world` for the enterprise research appliance.
+
+**Arena ranking-reversal path (classroom / judge demo):**
 
 1. Select **Aggressive POV**, edit the permitted policy controls, and run public practice.
 2. Save the final declarative policy; an instructor locks submissions and runs the protected evaluation matrix.
@@ -20,6 +40,13 @@ platform. Open the enterprise entry point at `/synthetic-market-world`.
 The central reveal is simple:
 
 > A strategy can win the visible practice leaderboard but lose after hidden robustness testing.
+
+**Strategy Validation Lab path:**
+
+1. Launch the app (below) and submit a natural-language strategy to the `/compile` API.
+2. Resolve ambiguous clauses, lock the strategy with the `/approve` API.
+3. Run historical backtests, observe metrics, and review the Evidence-Linked Suggestions.
+4. Export the deterministic validation package.
 
 ## Launch
 
@@ -31,7 +58,7 @@ ARENA_DEMO_INSTRUCTOR_CODE=change-this-local-demo-code \
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open <http://127.0.0.1:8000>. `ARENA_DEMO_AUTH=1` enables deliberately scoped demo sessions. The server generates the student or instructor identity; the browser does not submit a user ID. Re-selecting a role with its still-valid role cookie resumes that persisted identity, including its practice count and saved submission. The instructor role additionally requires the server-configured local code entered in the UI. Choose a different code for your run. The code is compared server-side and is never returned in the session payload. When `ARENA_SESSION_SECRET` is omitted in demo mode, the server generates a process-random secret: reloads work, but cookies intentionally stop validating after a process restart. Set a stable secret of at least 32 bytes only when restart continuity is needed.
+Open <http://127.0.0.1:8000> for Strategy Break Test (also `/break-test`). Arena teaching demo is at <http://127.0.0.1:8000/arena>. `ARENA_DEMO_AUTH=1` enables deliberately scoped demo sessions. The server generates the student or instructor identity; the browser does not submit a user ID. Re-selecting a role with its still-valid role cookie resumes that persisted identity, including its practice count and saved submission. The instructor role additionally requires the server-configured local code entered in the UI. Choose a different code for your run. The code is compared server-side and is never returned in the session payload. When `ARENA_SESSION_SECRET` is omitted in demo mode, the server generates a process-random secret: reloads work, but cookies intentionally stop validating after a process restart. Set a stable secret of at least 32 bytes only when restart continuity is needed.
 
 Cookies are `Secure` by default. The direct HTTP loopback launch above is detected narrowly and may omit `Secure`; `ARENA_COOKIE_SECURE=1` forces it. `ARENA_COOKIE_SECURE=0` is valid only with `ARENA_DEMO_AUTH=1` and is effective only for the same verified loopback/test scope—non-loopback clients still receive `Secure` cookies. Any other override value fails closed. This is not institutional authentication. No market-data subscription or OpenAI API key is required.
 
@@ -64,7 +91,8 @@ for the supported boundary and local-data workflow.
 ## Product map
 
 ```text
-Primary        Execution Challenge Arena (/ and /api/arena/execution/...)
+Primary        Strategy Break Test (/ and /break-test)
+Teaching       Execution Challenge Arena (/arena and /api/arena/execution/...)
 Secondary      Research/positions challenge (/api/arena/challenges/...)
 Advanced       Market Fuzzer (/market-fuzzer)
 Infrastructure Synthetic world, agents, and price-time-priority exchange
@@ -109,6 +137,24 @@ make docker-smoke
 `make verify` runs formatting, lint, typing, pytest, determinism and provenance checks, both offline smoke paths, JavaScript syntax checks, and the headless Chromium lifecycle test. The E2E test covers student practice/submission, pre-release hidden denial, instructor lock/evaluate/release, ranking reversal, released feedback, a clean browser console, and `/market-fuzzer`. `make docker-smoke` builds the real image, waits for container health, and verifies the primary page, public hidden-data boundary, and advanced route from the host.
 
 See [execution challenge contract](docs/EXECUTION_CHALLENGE.md), [architecture](docs/ARCHITECTURE.md), [five-minute judge path](docs/JUDGE_GUIDE.md), [testing](docs/TESTING.md), [performance evidence](docs/PERFORMANCE.md), [research references](docs/RESEARCH_REFERENCES.md), [Build Week provenance](docs/BUILD_WEEK_PROVENANCE.md), and [limitations](docs/LIMITATIONS.md).
+
+## Quant validation / robustness
+
+Institutional-style OOS and multiple-testing helpers live under `app/break_test/`:
+
+| Endpoint / module | Purpose |
+|-------------------|---------|
+| `POST /api/quant/oos` | Walk-forward / CPCV with deflated Sharpe |
+| `POST /api/quant/multi-test` | White Reality Check, SPA, MCS |
+| `POST /api/quant/overfit-bounds` | Flajolet–Karlin SDB + López de Prado DSB |
+| `POST /api/quant/sensitivity` | Parameter sensitivity + `rank_family` |
+| `app/break_test/metrics.py` | Bootstrap CIs (`sharpe_ci_95`, …) |
+| `app/break_test/cross_val.py` | Purged K-fold CV |
+| `app/break_test/attribution.py` | Regime / factor attribution |
+
+Related surfaces: [](/docs) · [](/openapi.json) · [](/api/quant/oos) · [](/api/quant/multi-test) · [](/api/quant/overfit-bounds) · [](/arena)
+
+OpenAPI is available at `/docs` and `/openapi.json`. Break-test sessions attach an `environment` block (`python_version`, `platform`, `git_sha`, `seed_manifest`) and support HTML/PDF export via `/api/break-test/session/{id}/export`.
 
 ## License and safety
 

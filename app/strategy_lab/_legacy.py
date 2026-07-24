@@ -8,8 +8,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ExternalAdapterContract(BaseModel):
-    """Bounded adapter metadata; executable strategy code stays outside the API process."""
-
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["1.0"] = "1.0"

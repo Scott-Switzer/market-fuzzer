@@ -29,7 +29,9 @@ def _strategy_positions(kind: str, prices: np.ndarray, fast: int, slow: int) -> 
             raise ValueError("Breakout lookback must be at least 3 and shorter than the price history")
         positions = np.zeros(len(prices))
         for index in range(slow, len(prices)):
-            positions[index] = 1.0 if prices[index] > np.max(prices[index - slow : index]) else positions[index - 1]
+            positions[index] = (
+                1.0 if prices[index] > np.max(prices[index - slow : index]) else positions[index - 1]
+            )
             if prices[index] < np.min(prices[index - fast : index]):
                 positions[index] = 0.0
         return "Breakout momentum", positions
@@ -48,20 +50,38 @@ def _strategy_positions(kind: str, prices: np.ndarray, fast: int, slow: int) -> 
     raise ValueError("Unsupported strategy type")
 
 
-def _metrics(prices: np.ndarray, positions: np.ndarray, fee_bps: float = 2.0) -> dict[str, float | int]:
-    returns = np.diff(prices) / prices[:-1]
-    held = positions[:-1]
-    turnover = np.abs(np.diff(positions, prepend=0.0))[:-1]
-    strategy_returns = held * returns - turnover * fee_bps / 10_000
+def _metrics(
+    prices: np.ndarray, positions: np.ndarray, exchange_spec: object | None = None
+) -> dict[str, float | int]:
+    import numpy as np
+
+    px = np.asarray(prices, dtype=float)
+    pos = np.asarray(positions, dtype=float)
+    returns = np.diff(px) / px[:-1]
+    held = pos[:-1]
+    turnover = np.abs(np.diff(pos, prepend=0.0))[:-1]
+    if exchange_spec is None:
+        costs = turnover * 2.0 / 10_000
+    else:
+        from app.break_test.metrics import compute_turnover_cost
+
+        costs = np.asarray(compute_turnover_cost(px, pos, exchange_spec=exchange_spec))
+        if costs.size != returns.size:
+            costs = np.resize(costs, returns.size)
+    strategy_returns = held * returns - costs
     equity = np.cumprod(1 + strategy_returns)
     peaks = np.maximum.accumulate(equity)
     drawdown = equity / peaks - 1
     std = float(np.std(strategy_returns, ddof=1)) if len(strategy_returns) > 1 else 0.0
     sharpe = float(np.mean(strategy_returns) / std * math.sqrt(252)) if std > 0 else 0.0
-    trades = int(np.sum(np.diff(positions, prepend=0.0) > 0))
-    entries = np.flatnonzero(np.diff(positions, prepend=0.0) > 0)
-    exits = np.flatnonzero(np.diff(positions, append=0.0) < 0)
-    trade_returns = [prices[exit_] / prices[entry] - 1 for entry, exit_ in zip(entries, exits) if exit_ > entry]
+    trades = int(np.sum(np.diff(pos, prepend=0.0) > 0))
+    entries = np.flatnonzero(np.diff(pos, prepend=0.0) > 0)
+    exits = np.flatnonzero(np.diff(pos, append=0.0) < 0)
+    trade_returns = [
+        prices[exit_] / prices[entry] - 1
+        for entry, exit_ in zip(entries, exits, strict=False)
+        if exit_ > entry
+    ]
     win_rate = sum(value > 0 for value in trade_returns) / len(trade_returns) * 100 if trade_returns else 0.0
     return {
         "total_return_pct": round((float(equity[-1]) - 1) * 100, 2),
@@ -74,7 +94,11 @@ def _metrics(prices: np.ndarray, positions: np.ndarray, fee_bps: float = 2.0) ->
 
 
 def evaluate_sma_robustness(
-    closes: list[float], *, fast: int = 20, slow: int = 50, worlds_per_regime: int = 30,
+    closes: list[float],
+    *,
+    fast: int = 20,
+    slow: int = 50,
+    worlds_per_regime: int = 30,
     strategy_type: str = "sma_crossover",
 ) -> dict[str, object]:
     prices = np.asarray(closes, dtype=float)
@@ -108,19 +132,24 @@ def evaluate_sma_robustness(
             returns.append(value)
             drawdowns.append(float(result["max_drawdown_pct"]))
             losses += value < 0
-        regime_results.append({
-            "regime": name,
-            "worlds": worlds_per_regime,
-            "loss_rate_pct": round(losses / worlds_per_regime * 100, 1),
-            "median_return_pct": round(float(np.median(returns)), 2),
-            "worst_drawdown_pct": round(float(np.min(drawdowns)), 2),
-        })
+        regime_results.append(
+            {
+                "regime": name,
+                "worlds": worlds_per_regime,
+                "loss_rate_pct": round(losses / worlds_per_regime * 100, 1),
+                "median_return_pct": round(float(np.median(returns)), 2),
+                "worst_drawdown_pct": round(float(np.min(drawdowns)), 2),
+            }
+        )
     weakest = max(regime_results, key=lambda item: float(item["loss_rate_pct"]))
     suggested_slow = max(slow + 10, round(slow * 1.5))
     return {
         "strategy": {"name": strategy_name, "type": strategy_type, "fast_window": fast, "slow_window": slow},
         "historical_backtest": historical,
-        "synthetic_forward_test": {"worlds": worlds_per_regime * len(regimes), "regimes": regime_results},
+        "synthetic_forward_test": {
+            "worlds": worlds_per_regime * len(regimes),
+            "regimes": regime_results,
+        },
         "failure_summary": (
             f"The strategy was most vulnerable in {weakest['regime']} markets: "
             f"it lost money in {weakest['loss_rate_pct']}% of {weakest['worlds']} unseen worlds, "
@@ -131,5 +160,5 @@ def evaluate_sma_robustness(
             "slow_window": suggested_slow,
             "reason": "A slower confirmation window may reduce repeated entries in noisy markets. Test it as a comparison; it is not guaranteed to improve performance.",
         },
-        "limitations": "Synthetic regimes are diagnostic models, not forecasts. Historical results depend on the uploaded data and include a 2 bps turnover cost.",
+        "limitations": "Synthetic regimes are diagnostic models, not forecasts. Historical results include a 2 bps turnover cost baseline.",
     }
