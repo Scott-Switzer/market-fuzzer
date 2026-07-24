@@ -59,10 +59,33 @@ def defect(reason: str):
 # Fixtures / helpers
 # ---------------------------------------------------------------------------
 def _latest_package() -> Path:
+    """Return the evidence package to audit.
+
+    Prefers the package whose recorded git_sha equals the current HEAD (the
+    canonical run-of-record), so a stray synthetic demo dir can never shadow the
+    real yfinance run-of-record. Falls back to newest manifest mtime only when no
+    HEAD-matched package exists.
+    """
+    import subprocess
+
     base = REPO_ROOT / "artifacts" / "submission"
     candidates = [p for p in base.glob("*") if (p / "submission_manifest.json").exists()]
     if not candidates:
         pytest.skip("no submission evidence package found; run the pipeline first")
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=REPO_ROOT
+        ).stdout.strip()
+    except Exception:
+        head = ""
+    if head:
+        for p in candidates:
+            try:
+                sha = json.loads((p / "submission_manifest.json").read_text()).get("git_sha", "")
+            except Exception:
+                sha = ""
+            if sha == head:
+                return p
     return max(candidates, key=lambda p: (p / "submission_manifest.json").stat().st_mtime)
 
 
