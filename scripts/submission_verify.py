@@ -52,8 +52,8 @@ def main() -> int:
     # 3) evidence artifact hashes are non-trivial
     ev = build_evidence_package(run)
     m = ev["manifest"]
-    if not m["artifact_hashes"].get("equity_curve.csv"):
-        errors.append("equity_curve.csv artifact hash missing")
+    if not m["artifact_hashes"].get("historical/equity_curve.csv"):
+        errors.append("historical/equity_curve.csv artifact hash missing")
 
     # 4) deck_data exists and carries the same hash + watermark
     deck = json.loads((Path(ev["base_dir"]) / "pitch" / "deck_data.json").read_text())
