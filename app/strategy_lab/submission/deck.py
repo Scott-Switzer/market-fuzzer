@@ -652,13 +652,25 @@ def build_deck_all(require_current_sha: bool = True) -> dict[str, str]:
     html = render_html(slides, ev)
     DECK_PATH.write_text(html)
 
-    pptx_path = render_pptx(slides, ev, DECK_DIR / "fenrix_deck.pptx")
-    pdf_path = render_pdf(slides, ev, DECK_DIR / "fenrix_deck.pdf")
+    # PPTX/PDF rendering needs python-pptx (+ a PDF backend). These are deck
+    # distribution artifacts only -- the HTML deck is what the app and the audit
+    # actually serve. If the optional renderers are unavailable (e.g. a CI image
+    # without python-pptx), build the HTML deck and skip PPTX/PDF rather than
+    # failing the whole pipeline.
+    pptx_path, pdf_path = None, None
+    try:
+        pptx_path = render_pptx(slides, ev, DECK_DIR / "fenrix_deck.pptx")
+    except ImportError as exc:
+        print(f"[deck] PPTX skipped ({exc}); HTML deck built.")
+    try:
+        pdf_path = render_pdf(slides, ev, DECK_DIR / "fenrix_deck.pdf")
+    except ImportError as exc:
+        print(f"[deck] PDF skipped ({exc}); HTML deck built.")
 
     return {
         "html": str(DECK_PATH),
-        "pptx": str(pptx_path),
-        "pdf": str(pdf_path),
+        "pptx": str(pptx_path) if pptx_path else None,
+        "pdf": str(pdf_path) if pdf_path else None,
         "evidence": str(ev.base_dir / "pitch" / "deck_data.json"),
         "sha": ev.sha,
         "tier": str(ev.tier),
