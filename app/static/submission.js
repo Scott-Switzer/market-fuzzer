@@ -10,7 +10,7 @@ const STAGES = [
   ["Approval", "Mandatory lock → immutable canonical strategy hash."],
   ["Data source", "Declared tier + provenance watermark (no silent fallback)."],
   ["Historical results", "Real T×N portfolio backtest vs SPY, costs, exposures."],
-  ["Sealed stress", "Approved hash replayed across synthetic failure regimes."],
+  ["Sealed stress", "Approved hash replayed across synthetic failure regimes (mechanism-level proxy stress — uses a fixed synthetic asset universe, not your selected tickers)."],
   ["Failure replay", "Minimized failing case + nearest adjacent passing case."],
   ["Evidence export", "Signed manifest binding hash → backtest → campaign → replay."],
 ];
@@ -628,7 +628,7 @@ if (_modeSel && _fpWrap) {
   _applyFp(false); // default hidden on public build
   // reveal only for fenrix mode AND when the build flag permits it
   const _toggleFp = () => { _applyFp(_modeSel.value === "fenrix" && _fpWrap.dataset.allowed === "1"); };
-  fetch(BASE + "/build-flags").then(r => r.json()).then(f => {
+  fetch("/api/build-flags").then(r => r.json()).then(f => {
     _fpWrap.dataset.allowed = f.show_fenrix_path ? "1" : "0";
     _toggleFp();
   }).catch(() => _applyFp(false));

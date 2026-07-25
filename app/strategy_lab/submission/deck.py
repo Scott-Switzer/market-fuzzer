@@ -94,8 +94,8 @@ def load_evidence(require_current_sha: bool = True) -> Evidence:
 
     data_mode = data["data_mode"]
     watermark = (
-        f"{TIER_LABELS.get(tier, f'TIER {tier}')} \u00b7 git {data['git_sha']} "
-        f"\u00b7 evidence-generated \u00b7 not investment advice"
+        f"{TIER_LABELS.get(tier, f'TIER {tier}')} · source code {data['git_sha']} "
+        f"· evidence-generated · not investment advice"
     )
 
     # every screenshot must come from the CURRENT sha evidence dir
@@ -171,7 +171,7 @@ def _render_equity_chart(ev: Evidence) -> Path | None:
         if len(finite) > 1 and float(finite.max() - finite.min()) > 1e-6:
             ax.plot(barr, color="#f5a524", linewidth=1.2, linestyle="--", label="SPY (rebased)")
     ax.legend(loc="upper left", fontsize=8, framealpha=0.4)
-    ax.set_title(f"Equity curve \u2014 {ev.data_mode} run \u00b7 {len(ev.equity_curve)} steps")
+    ax.set_title(f"Equity curve — {ev.data_mode} run · {len(ev.equity_curve)} steps")
     ax.set_xlabel("step")
     ax.set_ylabel("equity")
     ax.grid(alpha=0.25)
@@ -190,6 +190,13 @@ def _render_equity_chart(ev: Evidence) -> Path | None:
     fig.tight_layout()
     fig.savefig(out)
     plt.close(fig)
+    # Also copy into the served /static directory so the chart loads on any host
+    # (the app only mounts /static; a relative ../../../artifacts path 404s).
+    assets_dir = DECK_DIR / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    import shutil
+
+    shutil.copyfile(out, assets_dir / "equity_curve.png")
     return out
 
 
@@ -215,6 +222,22 @@ def build_slides(ev: Evidence) -> list[dict[str, Any]]:
     confirmed = sorted(s.get("failed_mechanisms", []))
     failed_str = ", ".join(confirmed) if confirmed else "none confirmed"
 
+    # stress-mechanism result matrix (slide 5)
+    regime_rows = s.get("regime_matrix", []) or []
+    matrix_lines = []
+    seen = set()
+    for row in regime_rows:
+        mech = row.get("mechanism")
+        if mech in seen:
+            continue
+        seen.add(mech)
+        viol = row.get("violated_predicates") or []
+        status = "FAIL" if viol else ("engine_error" if "engine_error" in row else "pass")
+        detail = ", ".join(viol) if viol else (row.get("note", "") if status != "pass" else "ok")
+        matrix_lines.append(f"{mech}: {status}" + (f" ({detail})" if detail and status != "pass" else ""))
+    if not matrix_lines:
+        matrix_lines = ["see confirmed-failure mechanisms below"]
+
     min_metrics = minz.get("metrics") or {}
     adj_metrics = adj.get("metrics") or {}
     adj_found = bool(adj.get("passes"))
@@ -230,31 +253,31 @@ def build_slides(ev: Evidence) -> list[dict[str, Any]]:
         baseline_vs.append(
             f"Worst confirmed stress case ({minz.get('mechanism')}): Sharpe {_f2(min_metrics['sharpe'])}, "
             f"max drawdown {_pct(min_metrics['max_drawdown'])}, cost {_pct(min_metrics['cost_pct_of_capital'])} "
-            f"of capital \u2014 invisible to the plain backtest."
+            f"of capital — invisible to the plain backtest."
         )
 
     min_bullets = [
-        f"Mechanism: {minz.get('mechanism', 'n/a')} \u00b7 seed {minz.get('seed', 'n/a')}.",
-        f"Intensity minimized {minz.get('original_intensity', 'n/a')} \u2192 "
-        f"{minz.get('minimized_intensity', 'n/a')} and it STILL fails: {minz.get('still_fails', 'n/a')}.",
-        f"Violated predicates: {', '.join(minz.get('predicates', [])) or 'n/a'}.",
+        "Three-world comparison — the failure boundary, shrunk to a minimal reproducible counterexample:",
+        f"• BASELINE ({hist_label}): Sharpe {_f2(h['sharpe'])}, cum. return {_pct(h['cumulative_return'])}.",
+        f"• MINIMIZED FAILING WORLD ({minz.get('mechanism', 'n/a')} @ intensity {minz.get('minimized_intensity', 'n/a')}, "
+        f"seed {minz.get('seed', 'n/a')}): still fails = {minz.get('still_fails', 'n/a')}; "
+        f"violated predicates = {', '.join(minz.get('predicates', []) or ['n/a'])}.",
     ]
     if min_metrics:
         min_bullets.append(
-            f"Minimized-case metrics: Sharpe {_f2(min_metrics['sharpe'])}, "
+            f"  minimized-case metrics: Sharpe {_f2(min_metrics['sharpe'])}, "
             f"cum. return {_pct(min_metrics['cumulative_return'])}, "
             f"max DD {_pct(min_metrics['max_drawdown'])}."
         )
     if adj_found:
         min_bullets.append(
-            f"Adjacent PASSING case: {adj.get('mechanism')} seed delta "
-            f"{adj.get('delta_from_failure_seed')} passes (Sharpe {_f2(adj_metrics['sharpe'])}) "
-            "\u2014 the failure boundary is sharp and reproducible."
+            f"• ADJACENT PASSING WORLD ({adj.get('mechanism')} seed delta {adj.get('delta_from_failure_seed')}): "
+            f"PASSES (Sharpe {_f2(adj_metrics['sharpe'])}) — the failure boundary is sharp and reproducible."
         )
     else:
         min_bullets.append(
-            f"Adjacent pass: {adj.get('note', 'no adjacent pass found within search radius')} "
-            "\u2014 reported honestly, not fabricated."
+            f"• Adjacent pass: {adj.get('note', 'no adjacent pass found within search radius')} "
+            "— reported honestly, not fabricated."
         )
 
     slides: list[dict[str, Any]] = [
@@ -264,7 +287,7 @@ def build_slides(ev: Evidence) -> list[dict[str, Any]]:
             "bullets": [
                 f"Product flow: {FLOW}",
                 f"Strategy hash (immutable): {d['strategy_hash'][:16]}\u2026",
-                f"git SHA: {d['git_sha']} \u00b7 data mode of record: {d['data_mode']} \u00b7 universe: {d['universe_size']} assets",
+                f"Source code SHA: {d['git_sha']} · data mode of record: {d['data_mode']} · universe: {d['universe_size']} assets",
             ],
             "watermark": False,
         },
@@ -283,13 +306,14 @@ def build_slides(ev: Evidence) -> list[dict[str, Any]]:
             "title": "Product workflow",
             "subtitle": FLOW,
             "bullets": [
-                "Describe: plain-English strategy \u2192 structured clause ledger (every clause reviewed).",
-                "Review + Lock: mandatory approve step \u2192 immutable version + canonical SHA-256 hash.",
+                "Describe: plain-English strategy → structured clause ledger (every clause reviewed).",
+                "Review + Lock: mandatory approve step → immutable version + canonical SHA-256 hash.",
                 "Backtest: the SAME locked hash runs a real multi-asset historical backtest.",
                 "Stress: the SAME hash enters a sealed synthetic failure search across mechanisms.",
                 "Minimize: confirmed failures are shrunk to a minimal reproducible counterexample.",
                 "Export: evidence package with manifest, hashes and claim ledger.",
             ],
+            "image": "interface.png",
             "watermark": False,
         },
         {  # 4
@@ -315,7 +339,9 @@ def build_slides(ev: Evidence) -> list[dict[str, Any]]:
         {  # 5
             "title": "What the normal backtest missed",
             "subtitle": "Baseline vs confirmed stress failure",
-            "bullets": baseline_vs,
+            "bullets": baseline_vs
+            + ["Stress-mechanism result matrix (per mechanism, base seed):"]
+            + [f"  {m}" for m in matrix_lines],
             "watermark": True,
         },
         {  # 6
@@ -391,11 +417,17 @@ def render_html(slides: list[dict[str, Any]], ev: Evidence) -> str:
         if sl.get("image"):
             img_path = ev.base_dir / "pitch" / sl["image"]
             if img_path.exists():
-                rel = f"../../../artifacts/submission/{ev.sha}/pitch/{sl['image']}"
-                img_html = f'<img src="{rel}" alt="equity curve" style="width:100%;border-radius:8px;margin-top:10px">'
+                img_html = f'<img src="/static/pitch-deck/assets/{sl["image"]}" alt="equity curve" style="width:100%;border-radius:8px;margin-top:10px">'
         for shot in ev.screenshots if sl.get("image") else []:
+            shot_name = shot.name
+            # copy screenshot into the served /static assets dir so it loads on any host
+            assets_dir = DECK_DIR / "assets"
+            assets_dir.mkdir(parents=True, exist_ok=True)
+            import shutil
+
+            shutil.copyfile(shot, assets_dir / shot_name)
             img_html += (
-                f'<img src="../../../{shot}" alt="screenshot" '
+                f'<img src="/static/pitch-deck/assets/{shot_name}" alt="screenshot" '
                 'style="width:100%;border-radius:8px;margin-top:10px">'
             )
         wm = f'<div class="wm">{ev.watermark}</div>' if sl.get("watermark") else ""

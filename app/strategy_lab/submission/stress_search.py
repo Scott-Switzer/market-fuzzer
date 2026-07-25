@@ -495,7 +495,9 @@ def minimize_failure(
         lo, hi = 0.0, failure["intensity"]
         for _ in range(8):
             mid = (lo + hi) / 2.0
-            r = _evaluate_world(base_close, assets, spec, mech, mid, base_seed, preds)
+            r = _evaluate_world(
+                base_close, assets, spec, mech, mid, base_seed, preds, strategy_hash=strategy_hash
+            )
             if any(
                 p.violated(r)
                 for p in preds
@@ -505,7 +507,9 @@ def minimize_failure(
             else:
                 lo = mid
         minimized_intensity = hi
-        r = _evaluate_world(base_close, assets, spec, mech, minimized_intensity, base_seed, preds)
+        r = _evaluate_world(
+            base_close, assets, spec, mech, minimized_intensity, base_seed, preds, strategy_hash=strategy_hash
+        )
         still = any(
             p.violated(r)
             for p in preds
@@ -522,19 +526,33 @@ def minimize_failure(
             "passing_intensity": passing_lower_bound,
             "original_intensity": failure["intensity"],
             "still_fails": still,
+            "predicates": r.get("violated_predicates", []),
             "strategy_hash": strategy_hash,
         }
     if mech == "delayed_rebalance":
-        # minimize delay days
+        # Minimize delay days. The delay is applied during world construction
+        # (apply_mechanism -> _effective_spec -> backtest), so we re-run the
+        # backtest FOR EACH candidate delay rather than mutating a prior result.
         for d in (1, 2, 3, 5):
-            r = _evaluate_world(base_close, assets, spec, mech, failure["intensity"], base_seed, preds)
-            r["execution_delay_days"] = d
-            if not any(p.violated(r) for p in preds):
+            world = apply_mechanism(base_close, mech, failure["intensity"], base_seed, assets)
+            world["execution_delay_days"] = d
+            panel, sub_assets = _build_panel(world["close"], assets, world["drop_asset"])
+            eff = _effective_spec(
+                spec,
+                mech,
+                failure["intensity"],
+                non_shortable=world["non_shortable"],
+                execution_delay_days=d,
+            )
+            res = run_portfolio_backtest(panel=panel, spec=eff, strategy_hash=strategy_hash)
+            viol = [p.name for p in preds if p.violated(res.metrics)]
+            if not any(p.name in viol for p in preds):
                 return {
                     "mechanism": mech,
                     "seed": base_seed,
                     "minimized_delay_days": d,
                     "still_fails": False,
+                    "predicates": viol,
                     "strategy_hash": strategy_hash,
                 }
         return {
@@ -542,19 +560,23 @@ def minimize_failure(
             "seed": base_seed,
             "minimized_delay_days": 1,
             "still_fails": True,
+            "predicates": [],
             "strategy_hash": strategy_hash,
         }
     if mech in ("short_unavailability", "universe_churn", "missing_data_shock"):
         # minimize number of affected names / categorical magnitude
         for k in (0, 1, 2):
             intensity = k / max(1, N)
-            r = _evaluate_world(base_close, assets, spec, mech, intensity, base_seed, preds)
+            r = _evaluate_world(
+                base_close, assets, spec, mech, intensity, base_seed, preds, strategy_hash=strategy_hash
+            )
             if not any(p.violated(r) for p in preds):
                 return {
                     "mechanism": mech,
                     "seed": base_seed,
                     "minimized_affected": k,
                     "still_fails": False,
+                    "predicates": r.get("violated_predicates", []),
                     "strategy_hash": strategy_hash,
                 }
         return {
@@ -562,9 +584,15 @@ def minimize_failure(
             "seed": base_seed,
             "minimized_affected": 0,
             "still_fails": True,
+            "predicates": [],
             "strategy_hash": strategy_hash,
         }
-    return {"mechanism": mech, "note": "no minimization rule", "strategy_hash": strategy_hash}
+    return {
+        "mechanism": mech,
+        "note": "no minimization rule",
+        "predicates": [],
+        "strategy_hash": strategy_hash,
+    }
 
 
 def adjacent_pass(
@@ -582,7 +610,9 @@ def adjacent_pass(
     preds = DEFAULT_PREDICATES
     for delta in (1, -1, 2, -2, 3, -3, 5, -5):
         seed = base_seed + delta
-        r = _evaluate_world(base_close, assets, spec, mech, failure["intensity"], seed, preds)
+        r = _evaluate_world(
+            base_close, assets, spec, mech, failure["intensity"], seed, preds, strategy_hash=strategy_hash
+        )
         if "engine_error" in r:
             continue
         if not r["violated_predicates"]:

@@ -87,7 +87,7 @@ a.link{color:var(--accent)}
     <summary>👋 New here? How to use this page</summary>
     <ol>
       <li><b>Pick a universe</b> — the list of tickers your strategy trades. For SAA/TAA class work, choose <b>“SAA / TAA building blocks”</b> (asset-class ETFs: stocks, bonds, gold, commodities…), or pick <b>Custom</b> and type your own comma-separated tickers.</li>
-      <li><b>Optionally pick a strategy template</b> — a plain-English starting point (60/40, risk parity, momentum). Its description appears below the controls so you know exactly what you're about to run.</li>
+      <li><b>Optionally pick a strategy goal</b> — a plain-English starting point (60/40, risk parity, momentum). Note: these are goal descriptions; the engine always runs the flagship long/short momentum model. Its description appears below the controls.</li>
       <li><b>Click “▶ Run live pipeline”</b> to compile, approve, backtest and stress-test your setup end-to-end. Or click <b>“✓ Run verified judge demo”</b> to see a finished, canned example first.</li>
       <li><b>Read the 8 stages</b> as they light up, then <b>download the signed evidence JSON</b> at the end (stage 8).</li>
     </ol>
@@ -108,14 +108,15 @@ a.link{color:var(--accent)}
     <label id="custom-universe-wrap" style="display:none">Tickers
       <input id="custom_universe" type="text" placeholder="e.g. SPY,QQQ,GLD,TLT" style="width:220px">
     </label>
-    <label>Strategy template
+    <label>Example strategy goal — not executed
       <select id="template">
-        <option value="flagship">Flagship L/S momentum (default)</option>
+        <option value="flagship">Flagship L/S momentum (default — the engine that actually runs)</option>
         <option value="saa6040">60/40 SAA</option>
         <option value="riskparity">Risk-parity-ish TAA</option>
         <option value="momtaa">Momentum TAA</option>
       </select>
     </label>
+    <p class="mut" style="font-size:11px;margin:2px 0 0;max-width:360px">Templates are plain-English <b>starting points only</b>. Every run executes the flagship long/short momentum engine; the SAA/TAA labels describe a goal, not a different allocator. Full SAA/TAA execution is on the roadmap.</p>
     <label>Mode
       <select id="mode">
         <option value="synthetic_fixture">Tier 3 · deterministic synthetic (offline)</option>
