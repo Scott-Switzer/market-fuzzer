@@ -18,6 +18,11 @@ jobs:
       - run: node --check app/static/submission.js
       - run: make verify
       - run: make verify-submission
+      # Hard-enforce the independent audit: with AUDIT_FINAL=1 the @defect
+      # xfail guards are disabled, so every applicable final-audit assertion
+      # must pass (the yfinance-specific exposure test is intentionally skipped
+      # under the offline synthetic fixture used here).
+      - run: AUDIT_FINAL=1 python -m pytest tests/submission_audit/test_independent_audit.py -q
   docker:
     runs-on: ubuntu-latest
     steps:

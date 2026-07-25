@@ -18,12 +18,12 @@ const STAGES = [
 const $ = (id) => document.getElementById(id);
 const el = (t, cls, txt) => { const d = document.createElement(t); if (cls) d.className = cls; if (txt != null) d.textContent = txt; return d; };
 
-// ---- Universe presets (sent as "universe" to /submission/* endpoints) ----
-const FLAGSHIP_29 = ["AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","JPM","V","UNH","XOM","JNJ","WMT","MA","PG","HD","CVX","KO","PEP","COST","ABBV","AVGO","MRK","PFE","T","BAC","DIS","CSCO","ADBE"];
-const UNIVERSE_PRESETS = {
-  flagship29: { label: "Flagship 29 (default)", tickers: FLAGSHIP_29 },
-  sp500proxy: { label: "S&P 500 proxy (liquid 30)", tickers: ["SPY","QQQ","IWM","DIA","XLK","XLV","XLF","XLE","XLY","XLI","XLP","XLB","XLU","XLC","XLRE","AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","JPM","V","UNH","XOM","JNJ","WMT","HD"] },
-  largecaps:  { label: "Large caps (top 20)", tickers: FLAGSHIP_29.slice(0, 20) },
+const FLAGSHIP_30 = ["AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","JPM","V","UNH","XOM","JNJ","WMT","MA","PG","HD","CVX","KO","PEP","COST","ABBV","AVGO","MRK","PFE","T","BAC","DIS","CSCO","ADBE"];
+
+const PRESETS = {
+  flagship30: { label: "Flagship 30 (default)", tickers: FLAGSHIP_30 },
+  sp500proxy: { label: "Diversified liquid 30", tickers: ["SPY","QQQ","IWM","DIA","XLK","XLV","XLF","XLE","XLY","XLI","XLP","XLB","XLU","XLC","XLRE","AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","JPM","V","UNH","XOM","JNJ","WMT","HD"] },
+  largecaps:  { label: "Large caps (top 20)", tickers: FLAGSHIP_30.slice(0, 20) },
   sectors:    { label: "Sector ETFs", tickers: ["SPY","XLK","XLV","XLF","XLE","XLY","XLI","XLP","XLB","XLU","XLC","XLRE","KIE"] },
   saa_taa:    { label: "SAA / TAA building blocks", tickers: ["SPY","QQQ","IWM","VEA","VWO","EFA","GLD","TLT","IEF","TIP","HYG","LQD","DBC","VNQ"] },
   custom:     { label: "Custom", tickers: null },
@@ -43,7 +43,7 @@ const TEMPLATES = {
 // Resolve the selected universe. Returns a ticker array, or null if invalid (warns user).
 function selectedUniverse() {
   const key = $("universe-preset").value;
-  if (key !== "custom") return UNIVERSE_PRESETS[key].tickers.slice();
+  if (key !== "custom") return PRESETS[key].tickers.slice();
   const raw = ($("custom_universe").value || "");
   const tickers = raw.split(",").map((t) => t.trim().toUpperCase()).filter((t) => t.length);
   if (!tickers.length) {
@@ -57,7 +57,7 @@ function selectedUniverse() {
 function updateTemplateBox() {
   const t = TEMPLATES[$("template").value];
   const key = $("universe-preset").value;
-  const p = UNIVERSE_PRESETS[key];
+  const p = PRESETS[key];
   $("tpl-name").textContent = t.label;
   $("tpl-uni").textContent = "· universe: " + (key === "custom" ? "custom (type tickers above)" : p.label + " — " + p.tickers.length + " tickers");
   $("tpl-desc").textContent = t.desc + (($("template").value !== "flagship") ? " (Shown as a plain-English goal; the backtest engine currently runs the flagship long/short model on your chosen universe.)" : "");

@@ -351,6 +351,7 @@ def _evaluate_world(
         "sharpe": res.metrics["sharpe"],
         "max_drawdown": res.metrics["max_drawdown"],
         "cost_pct": res.metrics["cost_pct_of_capital"],
+        "cumulative_return": res.metrics["cumulative_return"],
         "violated_predicates": viol,
         "non_shortable": len(m["non_shortable"]),
         "execution_delay_days": m["execution_delay_days"],
@@ -527,12 +528,22 @@ def minimize_failure(
             "original_intensity": failure["intensity"],
             "still_fails": still,
             "predicates": r.get("violated_predicates", []),
+            "metrics": {
+                "sharpe": r["sharpe"],
+                "max_drawdown": r["max_drawdown"],
+                "cost_pct_of_capital": r["cost_pct"],
+                "cumulative_return": r.get("cumulative_return", float("nan")),
+            },
             "strategy_hash": strategy_hash,
         }
     if mech == "delayed_rebalance":
         # Minimize delay days. The delay is applied during world construction
         # (apply_mechanism -> _effective_spec -> backtest), so we re-run the
         # backtest FOR EACH candidate delay rather than mutating a prior result.
+        # We scan candidates in increasing order and return the FIRST candidate
+        # that still fails, reporting the largest passing delay as the
+        # lower bound (a genuine minimal-failure boundary).
+        last_passing = 0
         for d in (1, 2, 3, 5):
             world = apply_mechanism(base_close, mech, failure["intensity"], base_seed, assets)
             world["execution_delay_days"] = d
@@ -546,45 +557,69 @@ def minimize_failure(
             )
             res = run_portfolio_backtest(panel=panel, spec=eff, strategy_hash=strategy_hash)
             viol = [p.name for p in preds if p.violated(res.metrics)]
-            if not any(p.name in viol for p in preds):
+            if viol:
                 return {
                     "mechanism": mech,
                     "seed": base_seed,
                     "minimized_delay_days": d,
-                    "still_fails": False,
+                    "passing_lower_bound": last_passing,
+                    "still_fails": True,
                     "predicates": viol,
+                    "metrics": {
+                        "sharpe": res.metrics["sharpe"],
+                        "max_drawdown": res.metrics["max_drawdown"],
+                        "cost_pct_of_capital": res.metrics["cost_pct_of_capital"],
+                        "cumulative_return": res.metrics["cumulative_return"],
+                    },
                     "strategy_hash": strategy_hash,
                 }
+            last_passing = d
         return {
             "mechanism": mech,
             "seed": base_seed,
             "minimized_delay_days": 1,
-            "still_fails": True,
+            "passing_lower_bound": last_passing,
+            "still_fails": False,
             "predicates": [],
+            "metrics": {},
             "strategy_hash": strategy_hash,
         }
     if mech in ("short_unavailability", "universe_churn", "missing_data_shock"):
-        # minimize number of affected names / categorical magnitude
+        # minimize number of affected names / categorical magnitude.
+        # Scan candidate affected counts in increasing order and return the
+        # FIRST count that still fails, with the largest passing count as the
+        # lower bound (a genuine minimal-failure boundary).
+        last_passing = 0
         for k in (0, 1, 2):
             intensity = k / max(1, N)
             r = _evaluate_world(
                 base_close, assets, spec, mech, intensity, base_seed, preds, strategy_hash=strategy_hash
             )
-            if not any(p.violated(r) for p in preds):
+            if any(p.violated(r) for p in preds):
                 return {
                     "mechanism": mech,
                     "seed": base_seed,
                     "minimized_affected": k,
-                    "still_fails": False,
+                    "passing_lower_bound": last_passing,
+                    "still_fails": True,
                     "predicates": r.get("violated_predicates", []),
+                    "metrics": {
+                        "sharpe": r["sharpe"],
+                        "max_drawdown": r["max_drawdown"],
+                        "cost_pct_of_capital": r["cost_pct"],
+                        "cumulative_return": r.get("cumulative_return", float("nan")),
+                    },
                     "strategy_hash": strategy_hash,
                 }
+            last_passing = k
         return {
             "mechanism": mech,
             "seed": base_seed,
             "minimized_affected": 0,
-            "still_fails": True,
+            "passing_lower_bound": last_passing,
+            "still_fails": False,
             "predicates": [],
+            "metrics": {},
             "strategy_hash": strategy_hash,
         }
     return {

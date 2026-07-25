@@ -222,9 +222,9 @@ def build_slides(ev: Evidence) -> list[dict[str, Any]]:
     confirmed = sorted(s.get("failed_mechanisms", []))
     failed_str = ", ".join(confirmed) if confirmed else "none confirmed"
 
-    # stress-mechanism result matrix (slide 5)
+    # stress-mechanism result matrix (slide 5) — one row per mechanism (base seed)
     regime_rows = s.get("regime_matrix", []) or []
-    matrix_lines = []
+    matrix = []
     seen = set()
     for row in regime_rows:
         mech = row.get("mechanism")
@@ -232,11 +232,15 @@ def build_slides(ev: Evidence) -> list[dict[str, Any]]:
             continue
         seen.add(mech)
         viol = row.get("violated_predicates") or []
-        status = "FAIL" if viol else ("engine_error" if "engine_error" in row else "pass")
-        detail = ", ".join(viol) if viol else (row.get("note", "") if status != "pass" else "ok")
-        matrix_lines.append(f"{mech}: {status}" + (f" ({detail})" if detail and status != "pass" else ""))
-    if not matrix_lines:
-        matrix_lines = ["see confirmed-failure mechanisms below"]
+        if "engine_error" in row:
+            status, detail = "ERROR", row.get("engine_error", "")
+        elif viol:
+            status, detail = "FAIL", ", ".join(viol)
+        else:
+            status, detail = "pass", ""
+        matrix.append({"mechanism": mech, "status": status, "detail": detail})
+    if not matrix:
+        matrix = [{"mechanism": "no mechanisms evaluated", "status": "n/a", "detail": ""}]
 
     min_metrics = minz.get("metrics") or {}
     adj_metrics = adj.get("metrics") or {}
@@ -267,7 +271,8 @@ def build_slides(ev: Evidence) -> list[dict[str, Any]]:
         min_bullets.append(
             f"  minimized-case metrics: Sharpe {_f2(min_metrics['sharpe'])}, "
             f"cum. return {_pct(min_metrics['cumulative_return'])}, "
-            f"max DD {_pct(min_metrics['max_drawdown'])}."
+            f"max DD {_pct(min_metrics['max_drawdown'])}, "
+            f"cost {_pct(min_metrics['cost_pct_of_capital'])} of capital."
         )
     if adj_found:
         min_bullets.append(
@@ -339,10 +344,9 @@ def build_slides(ev: Evidence) -> list[dict[str, Any]]:
         },
         {  # 5
             "title": "What the normal backtest missed",
-            "subtitle": "Baseline vs confirmed stress failure",
-            "bullets": baseline_vs
-            + ["Stress-mechanism result matrix (per mechanism, base seed):"]
-            + [f"  {m}" for m in matrix_lines],
+            "subtitle": "Sealed stress search — per-mechanism pass/fail (base seed)",
+            "bullets": baseline_vs,
+            "matrix": matrix,
             "watermark": True,
         },
         {  # 6
@@ -414,6 +418,25 @@ def render_html(slides: list[dict[str, Any]], ev: Evidence) -> str:
             )
             kpi_html = f'<div class="kpi">{cards}</div>'
         bullets = "".join(f"<li>{b}</li>" for b in sl.get("bullets", []))
+        matrix_html = ""
+        if sl.get("matrix"):
+            rows = []
+            for row in sl["matrix"]:
+                status = row.get("status", "")
+                color = {"FAIL": "#ff6b6b", "pass": "#9affc4", "ERROR": "#ffb020"}.get(status, "#e7ecf3")
+                detail = row.get("detail", "")
+                rows.append(
+                    f'<tr><td style="padding:3px 10px">{row.get("mechanism", "")}</td>'
+                    f'<td style="padding:3px 10px;color:{color};font-weight:600">{status}</td>'
+                    f'<td style="padding:3px 10px;color:#9fb3d1">{detail}</td></tr>'
+                )
+            matrix_html = (
+                '<table style="border-collapse:collapse;margin-top:10px;width:100%;font-size:14px">'
+                "<tr style='color:#7fd1ff'><td style='padding:3px 10px'>mechanism</td>"
+                "<td style='padding:3px 10px'>result</td><td style='padding:3px 10px'>violated predicate</td></tr>"
+                + "".join(rows)
+                + "</table>"
+            )
         img_html = ""
         if sl.get("image"):
             img_path = ev.base_dir / "pitch" / sl["image"]
@@ -434,7 +457,7 @@ def render_html(slides: list[dict[str, Any]], ev: Evidence) -> str:
         wm = f'<div class="wm">{ev.watermark}</div>' if sl.get("watermark") else ""
         parts.append(
             f'<div class="slide" data-slide="{i}">{wm}<h1>{sl["title"]}</h1>'
-            f"<h2>{sl['subtitle']}</h2>{kpi_html}<ul>{bullets}</ul>{img_html}</div>"
+            f"<h2>{sl['subtitle']}</h2>{kpi_html}<ul>{bullets}</ul>{matrix_html}{img_html}</div>"
         )
 
     body = "\n".join(parts)
@@ -474,6 +497,7 @@ def render_pptx(slides: list[dict[str, Any]], ev: Evidence, out_path: Path) -> P
     ACCENT = RGBColor(0x7F, 0xD1, 0xFF)
     GREEN = RGBColor(0x9A, 0xFF, 0xC4)
     AMBER = RGBColor(0xFF, 0xB0, 0x20)
+    RED = RGBColor(0xFF, 0x6B, 0x6B)
 
     prs = Presentation()
     prs.slide_width = Inches(13.333)
@@ -526,6 +550,26 @@ def render_pptx(slides: list[dict[str, Any]], ev: Evidence, out_path: Path) -> P
             bp.font.size = Pt(15)
             bp.font.color.rgb = FG
 
+        if sl.get("matrix"):
+            mtop = top + 0.32 * (len(sl.get("bullets", [])) + 1) + 0.15
+            mtb = slide.shapes.add_textbox(Inches(0.6), Inches(mtop), Inches(12.1), Inches(6.6 - mtop))
+            mtf = mtb.text_frame
+            mtf.word_wrap = True
+            mp = mtf.paragraphs[0]
+            mp.text = "Per-mechanism result (base seed):"
+            mp.font.size = Pt(13)
+            mp.font.bold = True
+            mp.font.color.rgb = ACCENT
+            for row in sl["matrix"]:
+                rp = mtf.add_paragraph()
+                rp.text = f"\u2022 {row.get('mechanism', '')}: {row.get('status', '')}" + (
+                    f" ({row.get('detail', '')})" if row.get("detail") else ""
+                )
+                rp.font.size = Pt(13)
+                rp.font.color.rgb = (
+                    RED if row.get("status") == "FAIL" else (AMBER if row.get("status") == "ERROR" else GREEN)
+                )
+
         if sl.get("image"):
             img = ev.base_dir / "pitch" / sl["image"]
             if img.exists():
@@ -568,6 +612,7 @@ def render_pdf(slides: list[dict[str, Any]], ev: Evidence, out_path: Path) -> Pa
     ACCENT = HexColor("#7fd1ff")
     GREEN = HexColor("#9affc4")
     AMBER = HexColor("#ffb020")
+    RED = HexColor("#ff6b6b")
 
     for sl in slides:
         c.setFillColor(BG)
@@ -602,6 +647,24 @@ def render_pdf(slides: list[dict[str, Any]], ev: Evidence, out_path: Path) -> Pa
                 c.drawString(40, y, ln)
                 y -= 16
             y -= 4
+
+        if sl.get("matrix"):
+            y -= 8
+            c.setFillColor(ACCENT)
+            c.setFont("Helvetica-Bold", 12)
+            c.drawString(40, y, "Per-mechanism result (base seed):")
+            y -= 16
+            c.setFont("Helvetica", 12)
+            for row in sl["matrix"]:
+                status = row.get("status", "")
+                c.setFillColor(RED if status == "FAIL" else (AMBER if status == "ERROR" else GREEN))
+                line = f"\u2022 {row.get('mechanism', '')}: {status}" + (
+                    f" ({row.get('detail', '')})" if row.get("detail") else ""
+                )
+                for ln in simpleSplit(line, "Helvetica", 12, W - 80):
+                    c.drawString(40, y, ln)
+                    y -= 16
+                y -= 2
 
         if sl.get("image"):
             img = ev.base_dir / "pitch" / sl["image"]
