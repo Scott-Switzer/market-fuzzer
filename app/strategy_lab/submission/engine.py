@@ -320,11 +320,13 @@ def run_portfolio_backtest(
         equity[t] = cash[t] + float(np.sum(shares[t] * close[t]))
 
     # daily borrow accrual already applied inside _charge_costs on held shorts.
-    # ---- exposures & turnover ----
-    gross_exp = np.abs(shares * close).sum(axis=1) / cap
-    net_exp = (shares * close).sum(axis=1) / cap
+    # ---- exposures & turnover (denominator = contemporaneous portfolio equity) ----
+    denom = np.where(equity > 1e-9, equity, cap)
+    gross_exp = np.abs(shares * close).sum(axis=1) / denom
+    net_exp = (shares * close).sum(axis=1) / denom
     turnover = np.zeros(T, dtype=float)
-    turnover[1:] = np.sum(np.abs(shares[1:] - shares[:-1]) * close[:-1], axis=1) / cap
+    denom_prev = np.where(equity[:-1] > 1e-9, equity[:-1], cap)
+    turnover[1:] = np.sum(np.abs(shares[1:] - shares[:-1]) * close[:-1], axis=1) / denom_prev
 
     # ---- accounting invariant assertion ----
     for t in range(T):
@@ -441,16 +443,21 @@ def _charge_costs(
             continue
         px = float(fill_px[n])
         notional = abs(qty) * px
-        # execution price after half-spread: buyer pays ask, seller receives bid
+        # 3.4 SPREAD: buyer pays ask, seller receives bid. The half-spread is
+        # embedded in the execution price (exec_px) and is the ONLY place it is
+        # charged — it is NOT separately deducted again (that would double-count).
         exec_px = px * (1.0 + half_spread) if qty > 0 else px * (1.0 - half_spread)
         commission = spec.commission_bps / 10_000.0 * notional
         slippage = spec.slippage_bps / 10_000.0 * notional
+        # spread cost reported for attribution only (already paid via exec_px above)
         spread_cost = half_spread * notional
-        # locate/entry fee on newly shorted notional (one-time)
-        locate = spec.locate_bps / 10_000.0 * notional if (qty < 0 and spec.locate_bps) else 0.0
+        # locate/entry fee ONLY when this trade opens or increases a short position
+        # (ending short), not when selling/covering an existing long or short.
+        ends_short = (prev_shares[n] + qty) < -1e-9
+        locate = spec.locate_bps / 10_000.0 * notional if (ends_short and spec.locate_bps) else 0.0
         # daily borrow accrual handled separately below (held shorts)
         cash += -qty * exec_px
-        cash -= commission + slippage + spread_cost + locate
+        cash -= commission + slippage + locate
         commission_total += commission
         slippage_total += slippage
         spread_total += spread_cost

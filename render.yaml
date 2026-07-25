@@ -3,16 +3,21 @@
 # time-limited trial (card required, auto-stop) — Render free web service is the
 # better fit for a student/GitHub-connected deploy.
 #
-# Render reads this file on "New > Web Service > connect repo". If you prefer the
-# dashboard, the equivalent settings are: Runtime=Python 3, Build Command=
-# "pip install -r requirements-render.txt", Start Command=
-# "uvicorn app.main:app --host 0.0.0.0 --port $PORT".
+# IMPORTANT: a repository-level render.yaml is a BLUEPRINT. Deploy it via
+#   Dashboard -> New + -> Blueprint -> connect repo -> select branch -> Deploy
+# (NOT "New -> Web Service" — that flow ignores some Blueprint fields and will
+# not pick up this file's branch). Alternatively use New -> Web Service and enter
+# the build/start commands manually (see DEPLOY_RENDER.md).
 
 services:
   - type: web
     name: fenrix-submission
     runtime: python
     plan: free
+    # Deploy THIS branch (the PR you want tested), not the repo default branch.
+    # For the final deploy, merge the stack into the branch Render follows.
+    branch: fix/fenrix-submission-final-hardening
+    autoDeployTrigger: checksPass
     region: oregon        # pick the region nearest you
     buildCommand: "pip install -r requirements-render.txt"
     startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
@@ -22,10 +27,16 @@ services:
         value: "8000"
       - key: PYTHONUNBUFFERED
         value: "1"
-      # Evidence packages are written under artifacts/ at runtime. On Render's
-      # ephemeral filesystem they vanish on redeploy — fine for live runs; the
-      # committed deck (app/static/pitch-deck/) is served statically regardless.
-      # For persistent evidence, add a Render Disk and set MARKET_FUZZER_ARTIFACT_ROOT.
+      # Free web services CANNOT use persistent disks; the filesystem is wiped on
+      # every redeploy / restart / idle spin-down. Treat all generated evidence,
+      # yfinance cache, and SQLite state as TEMPORARY. The committed deck
+      # (app/static/pitch-deck/) is served statically and survives because it is
+      # in the repo. For persistent classroom runs use Postgres/object storage or
+      # a paid instance with a disk.
+      # NOTE: the app currently writes evidence under relative artifacts/ paths;
+      # MARKET_FUZZER_ARTIFACT_ROOT is NOT yet wired into those paths, so setting
+      # it does not currently create persistence. Left here for when that wiring
+      # lands.
       - key: MARKET_FUZZER_ARTIFACT_ROOT
         value: "/data/artifacts/market_fuzzer"
       - key: ARENA_DB_PATH

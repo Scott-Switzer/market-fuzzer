@@ -11,3 +11,7 @@ pydantic>=2.10,<3
 pyyaml>=6,<7
 typer>=0.15,<1
 uvicorn>=0.34,<1
+# Tier 2 yfinance data source (used by the yfinance/historical run mode).
+# Without it the deployed app silently reports "yfinance unavailable" and falls
+# back to the synthetic fixture. Pinned loosely to avoid resolver surprises.
+yfinance>=0.2,<1

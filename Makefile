@@ -1,4 +1,4 @@
-.PHONY: install install-browser verify verify-fast test e2e demo run run-example arena-demo decision-benchmark regression judge-demo docker-smoke performance clean-artifacts verify-submission test-portfolio-engine test-data-adapters test-strategy-identity submission-demo pitch-deck fenrix-inspect
+.PHONY: install install-browser verify verify-fast test e2e demo run run-example arena-demo decision-benchmark regression judge-demo docker-smoke performance clean-artifacts verify-submission test-portfolio-engine test-data-adapters test-strategy-identity submission-demo pitch-deck fenrix-inspect render-smoke
 
 # Default to the project Python 3.12 virtualenv if present,
 # otherwise fall back to whatever `python3` resolves to.
@@ -59,6 +59,12 @@ run-example:
 
 arena-demo:
 	$(PYTHON) scripts/arena_smoke.py
+
+# Clean deploy smoke test: install ONLY the Render dependency set (no -e . dev
+# editable) and confirm the app imports + boots, mirroring the Render build.
+render-smoke:
+	$(PYTHON) -m pip install -r requirements-render.txt
+	$(PYTHON) -c "import app.main; print('render import ok')"
 
 decision-benchmark:
 	$(PYTHON) scripts/decision_benchmark_smoke.py

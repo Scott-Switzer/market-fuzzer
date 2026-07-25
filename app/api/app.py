@@ -517,6 +517,15 @@ def legacy_market_fuzzer() -> FileResponse:
     return FileResponse(ROOT / "static" / "index.html")
 
 
+@app.get("/api/build-flags")
+def build_flags() -> dict:
+    """Public-build capability flags. The Fenrix local-bundle path field is a
+    single-user dev escape hatch (it lets a user point the server at an arbitrary
+    filesystem path) and must stay HIDDEN on the public hosted build. It is only
+    revealed when FENRIX_SHOW_PATH=1 is set in the environment (local dev)."""
+    return {"show_fenrix_path": os.environ.get("FENRIX_SHOW_PATH") == "1"}
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {

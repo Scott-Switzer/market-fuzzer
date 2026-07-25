@@ -111,7 +111,10 @@ def _returns_from_close(close: np.ndarray) -> np.ndarray:
 
 def _prices_from_returns(ret: np.ndarray, base: np.ndarray) -> np.ndarray:
     out = np.zeros_like(ret)
-    out[0] = base[0]
+    # First price ROW is supplied by the caller (base[0] is the full first row,
+    # NOT a scalar). Seed the reconstruction with the WHOLE row (out[0] = base),
+    # not a scalar (out[0] = base[0] would broadcast one asset's price to all).
+    out[0] = base
     for t in range(1, len(ret)):
         out[t] = out[t - 1] * (1.0 + ret[t])
     return out
@@ -172,22 +175,32 @@ def apply_mechanism(
     elif mechanism == "borrow_cost_increase":
         pass
     elif mechanism == "short_unavailability":
-        # make a selected subset of assets non-shortable
-        k = max(1, int(round(intensity * N)))
-        idx = sorted(rng.choice(N, size=min(k, N), replace=False))
-        res["non_shortable"] = set(idx)
-        res["restricted_names"] = len(idx)
+        # make a selected subset of assets non-shortable. At intensity 0 no asset
+        # is restricted (the mechanism is a genuine no-op at zero intensity).
+        k = int(round(intensity * N))
+        if k <= 0:
+            res["non_shortable"] = set()
+            res["restricted_names"] = 0
+        else:
+            idx = sorted(rng.choice(N, size=min(k, N), replace=False))
+            res["non_shortable"] = set(idx)
+            res["restricted_names"] = len(idx)
     elif mechanism == "delayed_rebalance":
-        res["execution_delay_days"] = max(1, int(round(intensity * 10)))
+        # At intensity 0 no delay (genuine no-op).
+        res["execution_delay_days"] = int(round(intensity * 10))
     elif mechanism == "universe_churn":
-        drop = int(rng.integers(0, N))
-        res["drop_asset"] = drop
+        # At intensity 0 no asset is dropped (genuine no-op).
+        if intensity > 0:
+            drop = int(rng.integers(0, N))
+            res["drop_asset"] = drop
     elif mechanism == "missing_data_shock":
-        col = int(rng.integers(0, N))
-        s = int(T * 0.5)
-        out[s:, col] = out[s - 1, col]  # freeze
-        res["data_failure"] = True
-        res["drop_asset"] = col  # treat as exclusion from tradable set
+        # At intensity 0 no data failure (genuine no-op).
+        if intensity > 0:
+            col = int(rng.integers(0, N))
+            s = int(T * 0.5)
+            out[s:, col] = out[s - 1, col]  # freeze
+            res["data_failure"] = True
+            res["drop_asset"] = col  # treat as exclusion from tradable set
     res["close"] = out
     return res
 
@@ -315,6 +328,7 @@ def _evaluate_world(
     intensity: float,
     seed: int,
     predicates: list[FailurePredicate],
+    strategy_hash: str = "x",
 ) -> dict[str, Any]:
     m = apply_mechanism(close, mechanism, intensity, seed, assets)
     panel, sub_assets = _build_panel(m["close"], assets, m["drop_asset"])
@@ -326,7 +340,7 @@ def _evaluate_world(
         execution_delay_days=m["execution_delay_days"],
     )
     try:
-        res = run_portfolio_backtest(panel=panel, spec=eff, strategy_hash="x")
+        res = run_portfolio_backtest(panel=panel, spec=eff, strategy_hash=strategy_hash)
     except Exception as exc:
         return {"engine_error": str(exc), "mechanism": mechanism, "seed": seed, "intensity": intensity}
     viol = [p.name for p in predicates if p.violated(res.metrics)]
@@ -381,7 +395,16 @@ def run_fast_search(
         mechanisms_evaluated.add(w.mechanism)
         worlds_per_mechanism[w.mechanism] = worlds_per_mechanism.get(w.mechanism, 0) + 1
         evaluated += 1
-        base = _evaluate_world(base_close, assets, spec, w.mechanism, w.intensity, w.base_seed, predicates)
+        base = _evaluate_world(
+            base_close,
+            assets,
+            spec,
+            w.mechanism,
+            w.intensity,
+            w.base_seed,
+            predicates,
+            strategy_hash=strategy_hash,
+        )
         if "engine_error" in base:
             regime_matrix_rows.append(base)
             continue
@@ -391,15 +414,25 @@ def run_fast_search(
             sibling_seeds = [w.base_seed + d for d in range(1, confirm_seeds)]
             sibling_viol = []
             for s in sibling_seeds:
-                r = _evaluate_world(base_close, assets, spec, w.mechanism, w.intensity, s, predicates)
+                r = _evaluate_world(
+                    base_close,
+                    assets,
+                    spec,
+                    w.mechanism,
+                    w.intensity,
+                    s,
+                    predicates,
+                    strategy_hash=strategy_hash,
+                )
                 if "engine_error" not in r:
                     sibling_viol.append(set(r["violated_predicates"]))
             base_viol = set(base["violated_predicates"])
-            # require >=2 of 3 (base + 2 siblings) share a predicate
+            # require >=1 sibling to share a predicate: base + 1 sibling = 2 of 3.
+            # (Base already violates; a second agreeing seed is sufficient.)
             shared = [
                 p
                 for p in base_viol
-                if sum(p in sv for sv in sibling_viol) >= (2 if confirm_rule == "2_of_3" else 1)
+                if sum(p in sv for sv in sibling_viol) >= (1 if confirm_rule == "2_of_3" else 1)
             ]
             cand = {
                 "mechanism": w.mechanism,

@@ -620,11 +620,19 @@ async function runDemo() {
 renderStageBar(new Array(8).fill(""));
 $("run").onclick = runLive;
 $("demo").onclick = runDemo;
-// toggle Fenrix local-path field only when Fenrix mode is selected (local single-user)
+// toggle Fenrix local-path field only when the build flag allows it (hidden on
+// the public hosted build by default; local dev sets FENRIX_SHOW_PATH=1).
 const _modeSel = $("mode"), _fpWrap = $("fenrix-path-wrap");
 if (_modeSel && _fpWrap) {
-  const _toggleFp = () => { _fpWrap.style.display = (_modeSel.value === "fenrix") ? "" : "none"; };
-  _modeSel.addEventListener("change", _toggleFp); _toggleFp();
+  const _applyFp = (show) => { _fpWrap.style.display = show ? "" : "none"; };
+  _applyFp(false); // default hidden on public build
+  // reveal only for fenrix mode AND when the build flag permits it
+  const _toggleFp = () => { _applyFp(_modeSel.value === "fenrix" && _fpWrap.dataset.allowed === "1"); };
+  fetch(BASE + "/build-flags").then(r => r.json()).then(f => {
+    _fpWrap.dataset.allowed = f.show_fenrix_path ? "1" : "0";
+    _toggleFp();
+  }).catch(() => _applyFp(false));
+  _modeSel.addEventListener("change", _toggleFp);
 }
 // universe preset: show the custom-ticker input only for "Custom"; keep template box in sync
 const _uniSel = $("universe-preset"), _custWrap = $("custom-universe-wrap"), _tplSel = $("template");

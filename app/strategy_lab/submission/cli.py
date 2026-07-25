@@ -12,7 +12,7 @@ import argparse
 import sys
 
 from app.strategy_lab.submission.deck import build_deck
-from app.strategy_lab.submission.evidence import build_evidence_package
+from app.strategy_lab.submission.evidence import _git_sha, build_evidence_package
 from app.strategy_lab.submission.orchestrator import run_submission
 from app.strategy_lab.submission.strategy import CrossSectionalSpec
 
@@ -34,10 +34,12 @@ def cmd_demo(args: argparse.Namespace) -> int:
             print("  Refusing to overwrite the primary evidence deck with synthetic-fixture results.")
             return 2
     run = run_submission(spec=spec, mode=mode, use_cache=not args.no_cache, budget=args.budget)
-    # Reserve the canonical <sha> dir for the yfinance run-of-record; synthetic
-    # writes to <sha>-synthetic so it never clobbers the audited package.
-    suffix = "" if run.data_mode == "yfinance" else "-synthetic"
-    ev = build_evidence_package(run, save_dir=f"artifacts/submission/{run.strategy_hash}{suffix}")
+    # Reserve the canonical <git_sha> dir for the yfinance run-of-record; synthetic
+    # writes to <git_sha>-synthetic so it never clobbers the audited package.
+    # (build_evidence_package defaults the dir to _git_sha(); we only override for
+    # the synthetic case.)
+    save_dir = None if run.data_mode == "yfinance" else f"artifacts/submission/{_git_sha()}-synthetic"
+    ev = build_evidence_package(run, save_dir=save_dir)
     print("SUBMISSION DEMO COMPLETE")
     print(f"  strategy_hash : {run.strategy_hash}")
     print(f"  data_mode     : {run.data_mode}")
