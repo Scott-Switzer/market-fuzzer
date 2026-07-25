@@ -1,0 +1,329 @@
+"""Submission orchestrator: ties the locked strategy through the full pipeline.
+
+compile -> approve -> hash -> historical backtest -> sealed synthetic stress ->
+minimization -> adjacent pass -> evidence package.
+
+The strategy hash is the invariant that binds every stage. We compute it from the
+canonical DSL `Strategy` (reusing `dsl.ledger_hash` + `ApprovalService.lock`) so the
+same hash appears in backtest, campaign, replay, and export.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from typing import Any
+
+from app.strategy_lab.dsl import Strategy
+from app.strategy_lab.service_lab import ApprovalService
+from app.strategy_lab.submission.engine import run_portfolio_backtest
+from app.strategy_lab.submission.fenrix_adapter import load_panel as fenrix_load
+from app.strategy_lab.submission.fixture import build_fixture_panel, build_fixture_spec
+from app.strategy_lab.submission.strategy import (
+    DEMO_UNIVERSE,
+    FIXED_END,
+    FIXED_START,
+    CrossSectionalSpec,
+)
+from app.strategy_lab.submission.stress_search import (
+    DEFAULT_PREDICATES,
+    FailurePredicate,
+    adjacent_pass,
+    minimize_failure,
+    run_fast_search,
+)
+from app.strategy_lab.submission.yfinance_adapter import acquire as yfinance_acquire
+
+
+# ---------------------------------------------------------------------------
+# Strategy identity (reuses the existing DSL/hash infrastructure)
+# ---------------------------------------------------------------------------
+def build_strategy_dsl(spec: CrossSectionalSpec) -> Strategy:
+    """Construct a canonical Strategy from the flagship spec (every clause ledgered)."""
+    from app.strategy_lab.dsl import (
+        ClauseLedgerEntry,
+        ClauseResolution,
+        ClauseStatus,
+        CostCap,
+        ExecutionPolicy,
+        FillTarget,
+        Hold,
+        OrderedClause,
+        TimeInForce,
+        ValueQualityLongShort,
+    )
+
+    ledger = []
+    for frag in spec.to_clause_ledger_fragment():
+        ledger.append(
+            ClauseLedgerEntry(
+                clause_id=frag["id"],
+                original_text=json.dumps(frag),
+                normalized_text=json.dumps(frag),
+                status=ClauseStatus.SUPPORTED_AND_COMPILED,
+                user_resolution=ClauseResolution.APPROVED,
+                compiler_confidence=1.0,
+            )
+        )
+    clauses = [
+        OrderedClause(order=0, clause=Hold(note="pre_signal"), clause_id="c_0"),
+        OrderedClause(
+            order=1,
+            clause=ValueQualityLongShort(
+                long_top_n=int(round(spec.long_quantile * len(spec.universe))),
+                short_bottom_n=int(round(spec.short_quantile * len(spec.universe))),
+                beta_neutralize=False,
+            ),
+            clause_id="c_1",
+        ),
+        OrderedClause(
+            order=2,
+            clause=CostCap(max_bps=spec.commission_bps + spec.spread_bps + spec.slippage_bps),
+            clause_id="c_2",
+        ),
+        OrderedClause(order=3, clause=Hold(note="exit_when_rebalanced"), clause_id="c_3"),
+    ]
+    strategy = Strategy(
+        family="cross_sectional_momentum_volatility",
+        name="Fenrix Flagship Long/Short Momentum-Volatility",
+        description=(
+            "Each month rank eligible equities by 12-1 momentum and trailing volatility; "
+            "go long strong low-vol names and short weak high-vol names, equal weight, "
+            "100% gross / ~0% net, max 10% position, trade at next open."
+        ),
+        description_original=(
+            "Buy the strongest low-volatility names and short the weakest high-volatility names "
+            "using 12-1 month momentum, rebalanced monthly at the next open."
+        ),
+        is_locked=False,
+        execution_policy=ExecutionPolicy(
+            fill_target=FillTarget.mid, max_order_qty=0, time_in_force=TimeInForce.day
+        ),
+        clauses=clauses,
+        clause_ledger=ledger,
+        universe={"type": "fixed_demo_universe", "assets": list(spec.universe), "benchmark": spec.benchmark},
+        frequency={"signal": spec.signal_frequency, "rebalance": spec.rebalance_frequency},
+        portfolio={
+            "type": "cross_sectional_long_short",
+            "long_quantile": spec.long_quantile,
+            "short_quantile": spec.short_quantile,
+            "gross_exposure": spec.gross_exposure,
+            "net_exposure": spec.net_exposure,
+            "weighting": spec.weighting,
+            "max_position_weight": spec.max_position_weight,
+        },
+        execution={
+            "decision_time": spec.decision_time,
+            "fill_time": spec.fill_time,
+            "commission_bps": spec.commission_bps,
+            "spread_bps": spec.spread_bps,
+            "slippage_bps": spec.slippage_bps,
+            "borrow_bps": spec.borrow_bps,
+        },
+        benchmark={"symbol": spec.benchmark},
+    )
+    return strategy
+
+
+def lock_strategy(strategy: Strategy, actor: str = "submission") -> dict[str, Any]:
+    approval = ApprovalService.lock(strategy, actor=actor)
+    return approval
+
+
+# ---------------------------------------------------------------------------
+# Data acquisition (three tiers)
+# ---------------------------------------------------------------------------
+def acquire_panel(
+    *,
+    mode: str = "auto",
+    use_cache: bool = True,
+    fenrix_path: str | None = None,
+    universe: list[str] | None = None,
+    start: str | None = None,
+    end: str | None = None,
+) -> dict[str, Any]:
+    """Returns {'panel', 'mode', 'tier', 'quality', 'error'?}."""
+    uni = universe or list(DEMO_UNIVERSE)
+    st = start or FIXED_START
+    en = end or FIXED_END
+    # Ensure the SPY benchmark is fetched alongside the tradable universe so the
+    # panel carries benchmark_close (the strategy universe still excludes SPY).
+    fetch_tickers = list(uni)
+    if "SPY" not in fetch_tickers:
+        fetch_tickers = fetch_tickers + ["SPY"]
+
+    if mode in ("auto", "fenrix"):
+        fr = fenrix_load(explicit=fenrix_path, write_inventory=(mode == "fenrix"))
+        if fr.get("panel") is not None:
+            return {
+                "panel": fr["panel"],
+                "mode": "fenrix",
+                "tier": 1,
+                "quality": fr.get("inventory", {}),
+                "fundamentals": fr.get("fundamentals"),
+            }
+        if mode == "fenrix":
+            return {
+                "panel": None,
+                "mode": "fenrix",
+                "tier": 1,
+                "error": fr.get("error"),
+                "quality": fr.get("inventory", {}),
+            }
+        # fall through to yfinance
+
+    if mode in ("auto", "yfinance"):
+        yf = yfinance_acquire(tickers=fetch_tickers, start=st, end=en, use_cache=use_cache)
+        if yf.get("panel") is not None:
+            return {
+                "panel": yf["panel"],
+                "mode": "yfinance",
+                "tier": 2,
+                "quality": yf.get("quality", {}),
+                "provenance": yf.get("provenance"),
+            }
+        if mode == "yfinance":
+            return {
+                "panel": None,
+                "mode": "yfinance",
+                "tier": 2,
+                "error": yf.get("error"),
+                "quality": yf.get("quality", {}),
+            }
+        # fall through to fixture
+
+    # Tier 3: deterministic synthetic fixture (always available, labeled)
+    panel = build_fixture_panel()
+    return {
+        "panel": panel,
+        "mode": "synthetic_fixture",
+        "tier": 3,
+        "quality": {
+            "status": "ok",
+            "notice": "Deterministic synthetic fixture (Tier 3). Not historical data.",
+        },
+        "warning": "Falling back to synthetic fixture; historical data unavailable.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Top-level run
+# ---------------------------------------------------------------------------
+@dataclass
+class SubmissionRun:
+    strategy_hash: str
+    approval: dict[str, Any]
+    panel_meta: dict[str, Any]
+    data_mode: str
+    backtest: dict[str, Any]
+    stress: dict[str, Any]
+    minimized: dict[str, Any] | None
+    adjacent_pass: dict[str, Any] | None
+    clause_ledger: list[dict[str, Any]] = field(default_factory=list)
+    evidence: dict[str, Any] = field(default_factory=dict)
+
+
+def run_submission(
+    *,
+    spec: CrossSectionalSpec | None = None,
+    mode: str = "auto",
+    use_cache: bool = True,
+    fenrix_path: str | None = None,
+    predicates: list[FailurePredicate] | None = None,
+    budget: int = 24,
+) -> SubmissionRun:
+    spec = spec or CrossSectionalSpec()
+    # For the offline fixture run, use a deliberately FEASIBLE spec (7-asset book)
+    # so the deck does not carry an infeasible-exposure warning.
+    if mode == "synthetic_fixture" and spec is CrossSectionalSpec():
+        spec = build_fixture_spec()
+    strategy = build_strategy_dsl(spec)
+    approval = lock_strategy(strategy)
+    strategy_hash = approval["strategy_id"]
+    # hash invariant: the approval's canonical hash must equal the strategy's ledger hash
+    assert approval["canonical_hash"] == strategy_hash, "strategy hash invariant broken at lock"
+
+    # ---- historical backtest (Tier per mode) ----
+    acquired = acquire_panel(
+        mode=mode,
+        use_cache=use_cache,
+        fenrix_path=fenrix_path,
+        universe=list(spec.universe),
+        start=spec.start,
+        end=spec.end,
+    )
+    panel = acquired["panel"]
+    if panel is None:
+        raise RuntimeError(f"Data acquisition failed: {acquired.get('error')}")
+    bt = run_portfolio_backtest(panel=panel, spec=spec, strategy_hash=strategy_hash)
+    backtest_payload = {
+        "backtest_id": bt.backtest_id,
+        "strategy_hash": bt.strategy_hash,
+        "equity_curve": [round(float(x), 4) for x in bt.equity_curve],
+        "metrics": bt.metrics,
+        "cost_summary": bt.cost_summary,
+        "trades": bt.trades[:50],
+        "gross_exposure": [round(float(x), 4) for x in bt.gross_exposure],
+        "net_exposure": [round(float(x), 4) for x in bt.net_exposure],
+        "turnover": [round(float(x), 4) for x in bt.turnover],
+        "target_weights": bt.target_weights.tolist(),
+        "assets": bt.assets,
+        "dates": bt.dates,
+        "benchmark_close": (
+            [round(float(x), 4) for x in bt.benchmark_close] if bt.benchmark_close is not None else None
+        ),
+        "data_mode": acquired["mode"],
+        "tier": acquired["tier"],
+        "provenance": bt.provenance,
+    }
+
+    # ---- sealed synthetic stress (Tier A fast, with repeated-seed confirmation) ----
+    stress = run_fast_search(
+        strategy_hash=strategy_hash,
+        spec=spec,
+        base_assets=list(spec.universe)
+        if mode == "synthetic_fixture"
+        else ["SYN_A", "SYN_B", "SYN_C", "SYN_D", "SYN_E", "SYN_F", "SPY"],
+        T=504,
+        budget=budget,
+        predicates=predicates or DEFAULT_PREDICATES,
+    )
+
+    # ---- minimization + adjacent pass on FIRST CONFIRMED failure ----
+    minimized = None
+    adjacent = None
+    if stress["confirmed_failures"]:
+        f0 = stress["confirmed_failures"][0]
+        minimized = minimize_failure(strategy_hash, spec, f0)
+        adjacent = adjacent_pass(strategy_hash, spec, f0)
+
+    return SubmissionRun(
+        strategy_hash=strategy_hash,
+        approval=approval,
+        panel_meta={"assets": bt.assets, "dates": bt.dates, "source": acquired["mode"]},
+        data_mode=acquired["mode"],
+        backtest=backtest_payload,
+        stress=stress,
+        minimized=minimized,
+        adjacent_pass=adjacent,
+        clause_ledger=[c.__dict__ for c in strategy.clause_ledger],
+        evidence={},
+    )
+
+
+def _eval_single(strategy_hash, spec, mechanism, intensity, seed):
+    """Kept for backward-compatible single-world evaluation via the new stress API."""
+    from app.strategy_lab.submission.stress_search import _base_panel, _evaluate_world
+
+    assets = (
+        list(spec.universe)
+        if mode_is_fixture(spec)
+        else ["SYN_A", "SYN_B", "SYN_C", "SYN_D", "SYN_E", "SYN_F", "SPY"]
+    )
+    N = len(assets)
+    base = _base_panel(assets, 504, 12345, [100.0 + 20.0 * i for i in range(N)])
+    return _evaluate_world(base, assets, spec, mechanism, intensity, seed, DEFAULT_PREDICATES)
+
+
+def mode_is_fixture(spec) -> bool:
+    return False

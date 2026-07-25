@@ -49,7 +49,7 @@ class Exchange:
         )
         self._pending_log_indexes[order.order_id] = len(self.order_log) - 1
 
-    def submit(self, order: Order, step: int) -> list[Trade]:
+    def submit(self, order: Order, step: int, *, max_match_quantity: int | None = None) -> list[Trade]:
         if order.agent_id not in self.accounts:
             raise KeyError(f"unregistered agent {order.agent_id}")
         self.record_submission(order)
@@ -59,7 +59,7 @@ class Exchange:
             order.exchange_arrival_time_ms = step
         order.acknowledgment_time_ms = order.exchange_arrival_time_ms
         try:
-            raw = self.books[order.symbol].submit(order, step)
+            raw = self.books[order.symbol].submit(order, step, max_match_quantity=max_match_quantity)
         except Exception as exc:
             self.order_log[log_index].update(
                 {

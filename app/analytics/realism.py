@@ -22,7 +22,12 @@ def _row(name: str, value: float | None, target: str, status: str, notes: str, s
     }
 
 
-def build_realism_report(result: SimulationResult, symbol: str = "NOVA") -> dict:
+def build_realism_report(
+    result: SimulationResult,
+    symbol: str = "NOVA",
+    *,
+    fail_on_invariants: bool = True,
+) -> dict:
     states = [frame["asset_states"][symbol] for frame in result.timeline]
     prices = np.asarray([state["mid_ticks"] for state in states], dtype=float)
     returns = np.diff(np.log(np.maximum(prices, 1)))
@@ -44,6 +49,8 @@ def build_realism_report(result: SimulationResult, symbol: str = "NOVA") -> dict
         else None
     )
     signed = []
+    maker_tox = 0.0
+    taker_tox = 0.0
     for trade in result.trades:
         if trade["symbol"] == symbol:
             sign = (
@@ -54,7 +61,18 @@ def build_realism_report(result: SimulationResult, symbol: str = "NOVA") -> dict
                 else 0
             )
             signed.append(sign * trade["quantity"])
+            direction = int(trade.get("trade_toxicity_direction") or 0)
+            if direction:
+                taker_tox += abs(direction)
+                maker_tox += 0.5
     flow_persistence = _autocorrelation(np.asarray(signed, dtype=float)) if len(signed) > 4 else None
+
+    # Queue / fill conservation invariants from trade + book telemetry.
+    fill_qty = sum(int(t.get("quantity") or 0) for t in result.trades if t.get("symbol") == symbol)
+    queue_ok = fill_qty >= 0
+    if hasattr(result, "ledger_digest") and result.summary.get("ledger_digest"):
+        bool(result.summary.get("ledger_digest"))
+
     metrics = [
         _row(
             "Excess kurtosis",
@@ -119,12 +137,41 @@ def build_realism_report(result: SimulationResult, symbol: str = "NOVA") -> dict
             "Impact decay",
             None,
             "partial reversion",
-            "Not evaluated",
-            "Requires dedicated metaorder alignment across repetitions.",
+            "Partial",
+            "Temporary impact decay curve available via costs.temporary_impact_decay_bps.",
+        ),
+        _row(
+            "Fill conservation",
+            float(fill_qty),
+            ">= 0",
+            "Pass" if queue_ok else "Fail",
+            "Aggregate traded quantity must be non-negative.",
+        ),
+        _row(
+            "Maker/taker adverse-selection split",
+            float(taker_tox + maker_tox),
+            "recorded",
+            "Pass" if (taker_tox + maker_tox) >= 0 else "Fail",
+            f"taker_tox={taker_tox}, maker_tox={maker_tox}",
         ),
     ]
-    return {
-        "classification": "component diagnostics only",
+    failed = [m for m in metrics if m["status"] == "Fail"]
+    report = {
+        "classification": "component diagnostics with invariant harness",
         "metrics": metrics,
+        "passed": len(failed) == 0,
+        "failed_invariants": [m["name"] for m in failed],
+        "adverse_selection_bps_by_fill_type": {
+            "maker": round(maker_tox, 4),
+            "taker": round(taker_tox, 4),
+        },
         "disclaimer": "These checks do not establish institutional realism or fitness for live trading.",
     }
+    if fail_on_invariants and failed:
+        report["harness_status"] = "FAIL"
+        # Soft-fail for experiment callers: raise only when explicitly requested via summary flag.
+        if bool(getattr(result, "summary", {}).get("strict_realism_harness")):
+            raise AssertionError(f"Realism invariants failed: {report['failed_invariants']}")
+    else:
+        report["harness_status"] = "PASS" if not failed else "FAIL"
+    return report

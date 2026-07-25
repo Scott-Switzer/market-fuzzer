@@ -37,6 +37,10 @@ class Order:
     displayed_quantity_ahead_at_entry: int | None = None
     level_executed_quantity_at_entry: int | None = None
     rested_quantity_at_entry: int = 0
+    display_quantity: int | None = None  # iceberg visible size
+    hidden_quantity: int = 0
+    priority_score: float = 0.0
+    rested_step: int | None = None
 
     def __post_init__(self) -> None:
         if self.quantity <= 0:
@@ -47,6 +51,11 @@ class Order:
             raise ValueError("market order must not set price_ticks")
         if self.remaining is None:
             self.remaining = self.quantity
+        if self.display_quantity is None:
+            self.display_quantity = self.quantity
+        else:
+            self.display_quantity = max(1, min(int(self.display_quantity), int(self.quantity)))
+        self.hidden_quantity = max(0, int(self.quantity) - int(self.display_quantity))
         ordered_times = [
             self.market_event_time_ms,
             self.publication_time_ms,
@@ -59,6 +68,16 @@ class Order:
         present_times = [value for value in ordered_times if value is not None]
         if present_times != sorted(present_times):
             raise ValueError("order lifecycle timestamps must be monotonic")
+
+    @property
+    def disclosed_size(self) -> int:
+        return int(self.display_quantity or 0)
+
+    @property
+    def visible_remaining(self) -> int:
+        rem = int(self.remaining or 0)
+        disp = int(self.display_quantity or rem)
+        return min(rem, disp)
 
     def to_dict(self) -> dict:
         return {
@@ -83,6 +102,10 @@ class Order:
             "displayed_quantity_ahead_at_entry": self.displayed_quantity_ahead_at_entry,
             "level_executed_quantity_at_entry": self.level_executed_quantity_at_entry,
             "rested_quantity_at_entry": self.rested_quantity_at_entry,
+            "display_quantity": self.display_quantity,
+            "hidden_quantity": self.hidden_quantity,
+            "priority_score": self.priority_score,
+            "rested_step": self.rested_step,
         }
 
 
@@ -120,6 +143,9 @@ class Trade:
     quantity_traded_at_level_before_fill: int | None = None
     maker_fee_cents: int = 0
     taker_fee_cents: int = 0
+    trade_toxicity_direction: int = 0  # +1 when taker hits ask / buys aggression
+    fill_probability: float | None = None
+    queue_position_score: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -145,4 +171,7 @@ class Trade:
             "quantity_traded_at_level_before_fill": self.quantity_traded_at_level_before_fill,
             "maker_fee_cents": self.maker_fee_cents,
             "taker_fee_cents": self.taker_fee_cents,
+            "trade_toxicity_direction": self.trade_toxicity_direction,
+            "fill_probability": self.fill_probability,
+            "queue_position_score": self.queue_position_score,
         }

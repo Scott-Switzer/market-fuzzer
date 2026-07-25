@@ -1,0 +1,90 @@
+{
+  "scope": "strategy_validation_lab",
+  "screens": [
+    {
+      "id": "brief",
+      "purpose": "Describe strategy, parse clauses, resolve ambiguity, approve/lock",
+      "page_state_keys": [
+        "strategy.draft",
+        "strategy.ambiguities[]",
+        "strategy.suggestions[]",
+        "strategy.compileError"
+      ]
+    },
+    {
+      "id": "data",
+      "purpose": "Select data source, universe, execution/cost inputs",
+      "page_state_keys": [
+        "world.candidates[]",
+        "data.validation",
+        "data.short_history"
+      ]
+    },
+    {
+      "id": "backtest",
+      "purpose": "Run historical baseline and review report",
+      "page_state_keys": [
+        "backtest.status",
+        "backtest.result.historical",
+        "backtest.result.forward_test",
+        "backtest.result.failure_analysis",
+        "backtest.result.correction_suggestion"
+      ]
+    },
+    {
+      "id": "sealed",
+      "purpose": "Start sealed synthetic test, monitor job, review failures",
+      "page_state_keys": [
+        "sealed.status",
+        "sealed.progress",
+        "sealed.failures[]",
+        "sealed.report"
+      ]
+    },
+    {
+      "id": "replay",
+      "purpose": "Open minimized replay, review suggestions",
+      "page_state_keys": [
+        "playback.minimized_failure_id",
+        "playback.frames[]",
+        "playback.evidence_rows[]",
+        "suggestions[]"
+      ]
+    },
+    {
+      "id": "export",
+      "purpose": "Export evidence package in scoped envelope",
+      "page_state_keys": [
+        "evidence.exported",
+        "evidence.artifacts[]",
+        "evidence.validation",
+        "evidence.limitations[]"
+      ]
+    }
+  ],
+  "top_level_state": {
+    "screen": "string enum: brief|data|backtest|sealed|replay|export",
+    "strategy": { "strategy_id": null, "strategy_type": null, "policy": null, "locked": false },
+    "campaign": { "campaign_id": null, "state": null, "commitment": null },
+    "world": { "world_id": null, "pack_id": null },
+    "backtest": { "session_id": null, "status": null, "result": null },
+    "sealed": { "job_id": null, "experiment_id": null, "status": null, "failures": [] },
+    "playback": { "replay_id": null, "minimized": false, "frames": [] },
+    "evidence": { "exported": false, "artifacts": [], "validation": null }
+  },
+  "legacy_route_preservation": {
+    "unchanged": [
+      "/",
+      "/break-test",
+      "/synthetic-market-world",
+      "/strategy-stress-lab",
+      "/arena",
+      "/market-fuzzer"
+    ],
+    "added": [
+      "/strategy-lab",
+      "/api/strategy-lab/evidence/summary"
+    ],
+    "policy": "Additive new routes only. No legacy route removed or retagged."
+  }
+}

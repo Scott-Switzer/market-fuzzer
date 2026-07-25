@@ -18,6 +18,7 @@ from .v2 import (
     SideV2,
     TimeInForceV2,
 )
+from .v2_compat import ExchangeEngineV2, build_run_manifest_v2
 from .v2_matching import (
     AccountRiskLimitsV2,
     AccountStateV2,
@@ -38,6 +39,7 @@ __all__ = [
     "EventKindV2",
     "ExchangeInvariantError",
     "Exchange",
+    "ExchangeEngineV2",
     "ExchangeValidationError",
     "ImmutableEventLedgerV2",
     "MatchingExchangeV2",
@@ -57,4 +59,5 @@ __all__ = [
     "TimeInForceV2",
     "Trade",
     "TradeV2",
+    "build_run_manifest_v2",
 ]

@@ -35,7 +35,11 @@ def main() -> None:
     assert ready["database"] == "ok"
     assert ready["artifact_store"] == "ok"
 
-    status, _, arena = _get("/")
+    status, _, home = _get("/")
+    assert status == 200
+    assert "Strategy Break Test" in home or "Synthetic Market World" in home
+
+    status, _, arena = _get("/arena")
     assert status == 200
     assert "Quant Challenge Arena" in arena
 
@@ -45,7 +49,10 @@ def main() -> None:
 
     status, _, sealed = _get("/sealed-campaign")
     assert status == 200
-    assert "Campaign lifecycle" in sealed
+    # Current page is the strategy sealed-evaluation surface. It documents the
+    # sealed campaign lifecycle (Lock -> Run hidden markets -> Reveal evidence).
+    assert "sealed" in sealed.lower()
+    assert "hidden" in sealed.lower()
 
     status, content_type, body = _get("/api/arena/execution/challenges/trade-the-shock")
     public_challenge = json.loads(body)

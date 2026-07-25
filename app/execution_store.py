@@ -2037,3 +2037,156 @@ class ArenaStore:
         value = dict(row)
         value["report"] = json.loads(value.pop("report_json"))
         return value
+
+
+class StrategyLabStore:
+    def __init__(self, store: ArenaStore) -> None:
+        self.store = store
+
+    def initialize(self) -> None:
+        with self.store.connection() as connection:
+            try:
+                existing = connection.execute(
+                    "SELECT migration_id FROM strategy_lab_migrations WHERE migration_id = 'schema_v1'"
+                ).fetchone()
+            except sqlite3.OperationalError:
+                existing = None
+        if existing is not None:
+            return
+        with self.store.connection() as connection:
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS strategy_lab_migrations (
+                    migration_id TEXT PRIMARY KEY,
+                    applied_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS strategy_versions (
+                    strategy_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    strategy_type TEXT NOT NULL,
+                    builtin_policy_id TEXT,
+                    version_label TEXT NOT NULL,
+                    intended_use TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    canonical_hash TEXT NOT NULL,
+                    spec_json TEXT NOT NULL,
+                    FOREIGN KEY(strategy_id) REFERENCES strategies(strategy_id)
+                );
+                CREATE TABLE IF NOT EXISTS strategy_clauses (
+                    clause_id TEXT PRIMARY KEY,
+                    strategy_id TEXT NOT NULL,
+                    order_index INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    clause_json TEXT NOT NULL,
+                    original_text TEXT NOT NULL,
+                    normalized_text TEXT,
+                    status TEXT NOT NULL,
+                    reason TEXT,
+                    user_resolution TEXT NOT NULL,
+                    compiler_confidence REAL,
+                    provenance_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(strategy_id) REFERENCES strategy_versions(strategy_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_strategy_clauses_strategy
+                    ON strategy_clauses(strategy_id, order_index);
+                CREATE TABLE IF NOT EXISTS strategy_approvals (
+                    approval_id TEXT PRIMARY KEY,
+                    strategy_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    approved_at TEXT NOT NULL,
+                    approved_by TEXT NOT NULL,
+                    canonical_hash TEXT NOT NULL,
+                    approval_json TEXT NOT NULL,
+                    FOREIGN KEY(strategy_id) REFERENCES strategy_versions(strategy_id)
+                );
+                CREATE TABLE IF NOT EXISTS strategy_backtests (
+                    backtest_id TEXT PRIMARY KEY,
+                    strategy_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    result_json TEXT NOT NULL,
+                    result_hash TEXT NOT NULL,
+                    metrics_json TEXT NOT NULL,
+                    failure_ids_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(strategy_id) REFERENCES strategy_versions(strategy_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_strategy_backtests_strategy
+                    ON strategy_backtests(strategy_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS strategy_campaigns (
+                    campaign_id TEXT PRIMARY KEY,
+                    strategy_id TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    commitment_digest TEXT,
+                    artifact_digest TEXT,
+                    artifact_byte_length INTEGER,
+                    public_document_json TEXT NOT NULL,
+                    policy_json TEXT NOT NULL,
+                    generator_bundle_digest TEXT NOT NULL,
+                    secret_seed_material_hex TEXT NOT NULL,
+                    instruments_json TEXT NOT NULL,
+                    steps INTEGER NOT NULL,
+                    result_json TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(strategy_id) REFERENCES strategy_versions(strategy_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_strategy_campaigns_strategy
+                    ON strategy_campaigns(strategy_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS strategy_failures (
+                    failure_id TEXT PRIMARY KEY,
+                    strategy_id TEXT NOT NULL,
+                    campaign_id TEXT,
+                    backtest_id TEXT,
+                    category TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL,
+                    minimized_candidate_json TEXT,
+                    replay_artifact_id TEXT,
+                    suggestions_json TEXT NOT NULL,
+                    extra_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(strategy_id) REFERENCES strategy_versions(strategy_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_strategy_failures_strategy_campaign
+                    ON strategy_failures(strategy_id, campaign_id);
+                CREATE TABLE IF NOT EXISTS strategy_replay_events (
+                    event_id TEXT PRIMARY KEY,
+                    failure_id TEXT NOT NULL,
+                    campaign_id TEXT,
+                    step_index INTEGER NOT NULL,
+                    event_kind TEXT NOT NULL,
+                    event_json TEXT NOT NULL,
+                    recorded_at TEXT NOT NULL,
+                    FOREIGN KEY(failure_id) REFERENCES strategy_failures(failure_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_strategy_replay_events_failure
+                    ON strategy_replay_events(failure_id, step_index);
+                CREATE TABLE IF NOT EXISTS strategy_evidence_exports (
+                    export_id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    manifest_json TEXT NOT NULL,
+                    report_html TEXT NOT NULL,
+                    csv_hashes_json TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(campaign_id) REFERENCES strategy_campaigns(campaign_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_strategy_evidence_exports_campaign
+                    ON strategy_evidence_exports(campaign_id, created_at DESC);
+                """
+            )
+            now = utc_now()
+            connection.execute(
+                "INSERT INTO strategy_lab_migrations VALUES (?, ?)",
+                ("schema_v1", now),
+            )
+
+    def ensure_default_challenge(self, challenge_id: str, hidden_worlds: list[str]) -> dict[str, Any]:
+        return self.store.ensure_default_challenge(challenge_id, hidden_worlds)

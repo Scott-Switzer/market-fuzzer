@@ -53,3 +53,9 @@ packages = ["app"]
 ignore_missing_imports = true
 warn_unused_ignores = false
 disable_error_code = ["import-untyped"]
+follow_imports = "silent"
+exclude = [
+    "^app/break_test/",
+    "^app/api/app\\.py$",
+    "^docs/",
+]
