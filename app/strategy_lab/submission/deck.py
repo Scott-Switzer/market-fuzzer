@@ -669,8 +669,8 @@ def build_deck_all(require_current_sha: bool = True) -> dict[str, str]:
 
     return {
         "html": str(DECK_PATH),
-        "pptx": str(pptx_path) if pptx_path else None,
-        "pdf": str(pdf_path) if pdf_path else None,
+        "pptx": str(pptx_path) if pptx_path else "",
+        "pdf": str(pdf_path) if pdf_path else "",
         "evidence": str(ev.base_dir / "pitch" / "deck_data.json"),
         "sha": ev.sha,
         "tier": str(ev.tier),
