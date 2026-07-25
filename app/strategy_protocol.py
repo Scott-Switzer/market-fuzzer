@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, TypeAlias
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -133,8 +133,8 @@ class StrategyActionV2(BaseModel):
         return self
 
 
-StrategyObservation: TypeAlias = StrategyObservationV1 | StrategyObservationV2
-StrategyAction: TypeAlias = StrategyActionV1 | StrategyActionV2
+StrategyObservation = StrategyObservationV1 | StrategyObservationV2
+StrategyAction = StrategyActionV1 | StrategyActionV2
 
 
 def parse_strategy_observation(value: dict) -> StrategyObservation:
