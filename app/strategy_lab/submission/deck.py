@@ -308,7 +308,8 @@ def build_slides(ev: Evidence) -> list[dict[str, Any]]:
             "bullets": [
                 "Describe: plain-English strategy → structured clause ledger (every clause reviewed).",
                 "Review + Lock: mandatory approve step → immutable version + canonical SHA-256 hash.",
-                "Backtest: the SAME locked hash runs a real multi-asset historical backtest.",
+                "Backtest: the SAME locked hash runs the historical backtest on the run-of-record data"
+                f" ({ev.data_mode}).",
                 "Stress: the SAME hash enters a sealed synthetic failure search across mechanisms.",
                 "Minimize: confirmed failures are shrunk to a minimal reproducible counterexample.",
                 "Export: evidence package with manifest, hashes and claim ledger.",

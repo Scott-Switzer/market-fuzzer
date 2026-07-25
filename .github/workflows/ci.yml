@@ -13,7 +13,7 @@ jobs:
       # independent audit has a package to check. The committed deck is the
       # yfinance run of record (validated locally where network is available);
       # here we regenerate offline purely to exercise the audit gate in CI.
-      - run: python -m app.strategy_lab.submission.cli demo --mode synthetic_fixture
+      - run: python -m app.strategy_lab.submission.cli demo --mode synthetic_fixture --allow-synthetic-current-sha
       - run: python -m app.strategy_lab.submission.cli build-deck
       - run: node --check app/static/submission.js
       - run: make verify

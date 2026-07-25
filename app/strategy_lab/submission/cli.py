@@ -38,7 +38,15 @@ def cmd_demo(args: argparse.Namespace) -> int:
     # writes to <git_sha>-synthetic so it never clobbers the audited package.
     # (build_evidence_package defaults the dir to _git_sha(); we only override for
     # the synthetic case.)
-    save_dir = None if run.data_mode == "yfinance" else f"artifacts/submission/{_git_sha()}-synthetic"
+    # The --allow-synthetic-current-sha flag (used by CI offline audit regen) writes
+    # the synthetic evidence into the plain <git_sha> dir so load_evidence / build-deck
+    # can find it without a network-dependent yfinance run.
+    if run.data_mode == "yfinance":
+        save_dir = None
+    elif getattr(args, "allow_synthetic_current_sha", False):
+        save_dir = f"artifacts/submission/{_git_sha()}"
+    else:
+        save_dir = f"artifacts/submission/{_git_sha()}-synthetic"
     ev = build_evidence_package(run, save_dir=save_dir)
     print("SUBMISSION DEMO COMPLETE")
     print(f"  strategy_hash : {run.strategy_hash}")
@@ -67,6 +75,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     d.add_argument("--no-cache", action="store_true")
     d.add_argument("--budget", type=int, default=24)
+    d.add_argument(
+        "--allow-synthetic-current-sha",
+        action="store_true",
+        help="Write synthetic evidence into the plain <git_sha> dir (CI offline audit regen).",
+    )
     d.set_defaults(func=cmd_demo)
     b = sub.add_parser("build-deck")
     b.set_defaults(func=cmd_build_deck)
