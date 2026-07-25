@@ -9,7 +9,15 @@ jobs:
         with: {python-version: "3.12"}
       - run: python -m pip install -e '.[dev]'
       - run: python -m playwright install --with-deps chromium
+      # Generate evidence + deck at HEAD (offline, deterministic) so the
+      # independent audit has a package to check. The committed deck is the
+      # yfinance run of record (validated locally where network is available);
+      # here we regenerate offline purely to exercise the audit gate in CI.
+      - run: python -m app.strategy_lab.submission.cli demo --mode synthetic_fixture
+      - run: python -m app.strategy_lab.submission.cli build-deck
+      - run: node --check app/static/submission.js
       - run: make verify
+      - run: make verify-submission
   docker:
     runs-on: ubuntu-latest
     steps:

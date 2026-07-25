@@ -217,8 +217,10 @@ def build_evidence_package(run: SubmissionRun, save_dir: str | None = None) -> d
             "worlds_per_mechanism": st["worlds_per_mechanism"],
             "untested_mechanisms": st["untested_mechanisms"],
             "failed_mechanisms": sorted({f["mechanism"] for f in st["confirmed_failures"]}),
+            # full per-(mechanism, seed) result rows for the deck's stress matrix
+            "regime_matrix": st["regime_matrix"],
         },
-        "minimized": minimized,
+        "minimized": {**minimized, "predicates": minimized.get("predicates", [])},
         "adjacent_pass": adjacent,
         "limitations": [
             "Synthetic stress worlds are generated, not historical; they probe fragility, not real future risk.",

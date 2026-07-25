@@ -257,7 +257,7 @@ def build_slides(ev: Evidence) -> list[dict[str, Any]]:
         )
 
     min_bullets = [
-        "Three-world comparison — the failure boundary, shrunk to a minimal reproducible counterexample:",
+        "Baseline vs minimized failure — the breaking condition, shrunk to a minimal reproducible counterexample:",
         f"• BASELINE ({hist_label}): Sharpe {_f2(h['sharpe'])}, cum. return {_pct(h['cumulative_return'])}.",
         f"• MINIMIZED FAILING WORLD ({minz.get('mechanism', 'n/a')} @ intensity {minz.get('minimized_intensity', 'n/a')}, "
         f"seed {minz.get('seed', 'n/a')}): still fails = {minz.get('still_fails', 'n/a')}; "
@@ -637,6 +637,14 @@ def build_deck_all(require_current_sha: bool = True) -> dict[str, str]:
     """Build HTML + PPTX + PDF decks from current-SHA evidence. Returns paths."""
     ev = load_evidence(require_current_sha=require_current_sha)
     _render_equity_chart(ev)
+    # Ensure the committed static screenshot (app/static/pitch-deck/assets/interface.png)
+    # is available to the HTML/PPTX/PDF renderers, which read from the evidence dir.
+    committed_shot = DECK_DIR / "assets" / "interface.png"
+    if committed_shot.exists():
+        ev.base_dir.joinpath("pitch").mkdir(parents=True, exist_ok=True)
+        import shutil
+
+        shutil.copyfile(committed_shot, ev.base_dir / "pitch" / "interface.png")
     slides = build_slides(ev)
 
     DECK_DIR.mkdir(parents=True, exist_ok=True)

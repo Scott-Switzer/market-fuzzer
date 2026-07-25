@@ -536,7 +536,7 @@ def minimize_failure(
         for d in (1, 2, 3, 5):
             world = apply_mechanism(base_close, mech, failure["intensity"], base_seed, assets)
             world["execution_delay_days"] = d
-            panel, sub_assets = _build_panel(world["close"], assets, world["drop_asset"])
+            panel, _ = _build_panel(world["close"], assets, world["drop_asset"])
             eff = _effective_spec(
                 spec,
                 mech,

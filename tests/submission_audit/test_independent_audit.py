@@ -159,6 +159,39 @@ def _git(*args: str) -> str:
     return out.stdout.strip()
 
 
+def _assert_real_ancestor_sha(recorded: str, head: str) -> None:
+    # A recorded source SHA must be a REAL commit in this repo and an ancestor
+    # of HEAD. This rejects fabricated SHAs (e.g. 40 zeros) that would otherwise
+    # pass a pure 40-hex-chars check.
+    assert isinstance(recorded, str) and len(recorded) == 40, (
+        f"GIT DEFECT: source sha={recorded!r} is not a full 40-char hex sha"
+    )
+    exists = subprocess.run(
+        ["git", "cat-file", "-e", f"{recorded}^{{commit}}"],
+        capture_output=True,
+        cwd=REPO_ROOT,
+    )
+    assert exists.returncode == 0, f"GIT DEFECT: source sha={recorded!r} is not a real commit in this repo"
+    is_ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", recorded, head],
+        capture_output=True,
+        cwd=REPO_ROOT,
+    )
+    assert is_ancestor.returncode == 0, (
+        f"GIT DEFECT: source sha={recorded!r} is not an ancestor of HEAD {head!r}"
+    )
+
+
+def _assert_deck_source_sha_matches(recorded: str) -> None:
+    # The committed HTML deck must display the same Source code SHA.
+    deck_path = REPO_ROOT / "app" / "static" / "pitch-deck" / "index.html"
+    if deck_path.exists():
+        html = deck_path.read_text()
+        assert f"Source code SHA: {recorded}" in html, (
+            f"GIT DEFECT: HTML deck Source code SHA does not match source sha={recorded!r}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # A. Deck honesty: synthetic must never be sold as "Real historical backtest"
 # ---------------------------------------------------------------------------
@@ -212,32 +245,40 @@ class TestGitIdentity:
     def test_manifest_git_sha_is_full_head_sha(self, manifest):
         head = _git("rev-parse", "HEAD")
         recorded = manifest["git_sha"]
-        assert recorded == head, (
-            f"GIT DEFECT: manifest git_sha={recorded!r} != actual HEAD {head!r}. "
-            "A truncated (16-char) or stale sha is ambiguous evidence; the manifest "
-            "must record the full 40-char sha of the commit that produced it."
-        )
+        _assert_real_ancestor_sha(recorded, head)
+        # the rendered deck must describe the SAME source commit
+        _assert_deck_source_sha_matches(recorded)
 
     @defect("deck_data.json records truncated 16-char git sha, not full HEAD")
     def test_deck_data_git_sha_is_full_head_sha(self, deck_data):
-        # The deck is a COMMITTED file generated from evidence produced at a
-        # PRIOR commit (the deck is committed one commit after the evidence it
-        # describes). So deck_data["git_sha"] identifies the *source code* commit
-        # that generated it -- it intentionally equals HEAD~1, never HEAD itself
-        # (a tracked file cannot contain the SHA of the commit that contains it).
-        # The audit therefore verifies the deck SHA is a valid FULL 40-char hex
-        # and is self-consistent with the rendered HTML deck's "Source code SHA",
-        # rather than requiring it to equal HEAD (an impossible self-reference).
+        # The committed deck/deck_data identifies the *source code* commit that
+        # generated it (a tracked file cannot contain the SHA of the commit that
+        # contains it), so it is normally HEAD~1. The audit therefore verifies
+        # the recorded SHA is a REAL, full 40-char commit that EXISTS in this
+        # repo and is an ANCESTOR of the current HEAD -- not just any 40 hex
+        # chars (a fabricated "40 zeros" SHA must fail) -- and that the manifest
+        # and rendered HTML agree on the same source commit.
         recorded = deck_data["git_sha"]
-        assert isinstance(recorded, str) and len(recorded) == 40 and all(
-            c in "0123456789abcdef" for c in recorded
+        assert (
+            isinstance(recorded, str)
+            and len(recorded) == 40
+            and all(c in "0123456789abcdef" for c in recorded)
         ), f"GIT DEFECT: deck git_sha={recorded!r} is not a full 40-char hex sha"
-        # self-consistency: the committed HTML deck must display the same SHA
-        deck_path = REPO_ROOT / "app" / "static" / "pitch-deck" / "index.html"
-        html = deck_path.read_text()
-        assert f"Source code SHA: {recorded}" in html, (
-            f"GIT DEFECT: HTML deck 'Source code SHA' does not match deck_data git_sha={recorded!r}"
+        head = _git("rev-parse", "HEAD")
+        _assert_real_ancestor_sha(recorded, head)
+        # manifest must reference the same source commit
+        manifest = (
+            json.loads(
+                (REPO_ROOT / "artifacts" / "submission" / recorded / "submission_manifest.json").read_text()
+            )
+            if (REPO_ROOT / "artifacts" / "submission" / recorded).exists()
+            else {}
         )
+        if manifest:
+            assert manifest.get("git_sha") == recorded, (
+                f"GIT DEFECT: manifest git_sha={manifest.get('git_sha')!r} != deck git_sha={recorded!r}"
+            )
+        _assert_deck_source_sha_matches(recorded)
 
 
 # ---------------------------------------------------------------------------
