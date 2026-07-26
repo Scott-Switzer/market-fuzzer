@@ -76,7 +76,7 @@ class DraftStrategy(BaseModel):
                 "version": self.version,
                 "schema_version": self.spec.schema_version,
                 "canonical_hash": self.spec.compute_hash(),
-                "canonical_json": self.spec.canonical_json(),
+                "canonical_json": self.spec.full_json(),
                 "approved_by": approved_by,
                 "approved_at": datetime.now(UTC),
             }
@@ -92,6 +92,9 @@ class ApprovedStrategyVersion(BaseModel):
     version: int = Field(ge=1)
     schema_version: str
     canonical_hash: str
+    # Complete reconstruction payload (StrategySpec.full_json): keeps name/thesis
+    # etc. so the spec round-trips exactly. The HASH, however, is computed over the
+    # volatile-excluded canonical form, so intent-only edits never change the hash.
     canonical_json: str
     approved_by: str
     approved_at: datetime

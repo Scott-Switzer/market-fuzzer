@@ -93,3 +93,15 @@ def test_tactical_allocation_blocked_until_registered():
     reg = StrategyRegistry()
     reg.register(_FakeExecutor(StrategyType.STATIC_ALLOCATION))
     assert StrategyType.TACTICAL_ALLOCATION not in reg.supported_types()
+
+
+def test_default_registry_backs_all_advertised_types():
+    """After importing executors, every non-UNSUPPORTED enum member has an
+    executor: UI/compiler/API 'supported' == registry 'implemented'."""
+    import app.strategies.executors  # noqa: F401  registers all executors
+    from app.strategies.registry import default_registry
+
+    advertised = set(StrategyType) - {StrategyType.UNSUPPORTED}
+    assert advertised == default_registry.supported_types()
+    # validate_complete must not raise for the full advertised set
+    default_registry.validate_complete()

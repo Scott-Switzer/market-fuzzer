@@ -41,14 +41,29 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_valida
 SCHEMA_VERSION = "strategy-spec/v1.1"
 
 # Keys excluded from the canonical serialization used for the hash. These are
-# identity/volatile (they change without changing the declarative intent) and
-# must never influence ``canonical_hash``. Kept in ONE place so every consumer
-# excludes the SAME keys (a divergence here silently breaks the hash invariant).
+# identity/volatile OR human-facing intent / compiler-trace metadata: they change
+# without changing the *executable* strategy, so they must never influence
+# ``canonical_hash``. Kept in ONE place so every consumer excludes the SAME keys
+# (a divergence here silently breaks the hash invariant). Consequence (reset brief
+# item 26): a template and its plain-English equivalent hash identically when all
+# executable fields match, even though their ``name``/``original_thesis`` differ.
 VOLATILE_KEYS: frozenset[str] = frozenset(
     {
+        # identity / versioning
         "strategy_id",
         "strategy_version",
         "compiler_metadata",
+        # human-facing intent (not executable)
+        "name",
+        "original_thesis",
+        "intended_use",
+        "known_limitations",
+        "expected_failure_conditions",
+        # compiler trace / clause ledger (not executable)
+        "clauses",
+        "unsupported_clauses",
+        "assumptions",
+        "user_resolutions",
     }
 )
 
@@ -436,6 +451,19 @@ class StrategySpec(BaseModel):
 
     def compute_hash(self) -> str:
         return hashlib.sha256(self.canonical_json().encode("utf-8")).hexdigest()
+
+    def full_json(self) -> str:
+        """Complete, deterministic serialization for durable STORAGE/reconstruction.
+
+        Unlike ``canonical_json`` (which drops volatile/intent keys so the hash is
+        stable), this keeps every field EXCEPT pure identity/versioning (which the
+        approved envelope carries separately). It lets an approved snapshot be
+        reconstructed byte-for-byte including ``name``/``original_thesis``.
+        """
+        data = self.model_dump(mode="python", exclude_none=False)
+        for key in ("strategy_id", "strategy_version", "compiler_metadata"):
+            data.pop(key, None)
+        return json.dumps(data, sort_keys=True, separators=(",", ":"), default=_canonical_json_default)
 
     @property
     def canonical_hash(self) -> str:

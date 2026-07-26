@@ -11,6 +11,7 @@ explicitly (Phase 2); Phase 1.1 ships the registry + contracts foundation.
 
 from __future__ import annotations
 
+from app.strategies.accounting import BacktestResult, CostModel, run_accounting
 from app.strategies.contracts import (
     StrategyExecutionContext,
     StrategyExecutor,
@@ -24,6 +25,7 @@ from app.strategies.errors import (
     StrategyError,
     UnknownStrategyType,
 )
+from app.strategies.pipeline import run_strategy
 from app.strategies.registry import StrategyRegistry, default_registry, supported_types
 
 __all__ = [
@@ -39,4 +41,8 @@ __all__ = [
     "StrategyRegistry",
     "default_registry",
     "supported_types",
+    "BacktestResult",
+    "CostModel",
+    "run_accounting",
+    "run_strategy",
 ]
