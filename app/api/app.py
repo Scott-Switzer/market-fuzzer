@@ -486,6 +486,14 @@ app.include_router(
     tags=["strategy-lab"],
 )
 
+# Authoritative Phase 2.5 canonical product API (carries its own /api/strategy-lab/v2 prefix).
+try:
+    app.include_router(
+        __import__("app.strategy_lab.canonical", fromlist=["router"]).router,
+    )
+except Exception:  # pragma: no cover - optional dependency guard
+    pass
+
 
 @app.get("/strategy-lab")
 def strategy_lab() -> FileResponse:

@@ -46,15 +46,18 @@ def _compilation_payload(raw_text: str, resolutions: dict[str, Any] | None) -> d
 @router.post("/compile")
 def compile_strategy(body: dict[str, Any]) -> dict[str, Any]:
     raw_text = body.get("description", "")
-    resolutions = body.get("resolutions") or body.get("resolution_overrides")
-    # Legacy planner result (back-compat shape: spec.family + strategy_hash).
+    # DEPRECATED legacy endpoint. The authoritative product compiler is
+    # /api/strategy-lab/v2/compile (single deterministic result, no family
+    # swaps). This endpoint preserves the legacy planner shape ONLY for
+    # backward compatibility and is not used by the authoritative UI. It does
+    # NOT nest the new compiler nor swallow its exceptions.
     legacy = StrategyPlanner.plan_from_text(raw_text)
-    # New typed deterministic compilation result (no silent family swaps).
-    try:
-        compilation = _compilation_payload(raw_text, resolutions)
-    except Exception as exc:  # keep legacy path usable even if new compiler trips
-        compilation = {"error": str(exc), "is_supported": False}
-    return {"ok": True, **legacy, "compilation": compilation}
+    return {
+        "ok": True,
+        "deprecated": True,
+        "replacement": "/api/strategy-lab/v2/compile",
+        **legacy,
+    }
 
 
 @router.post("/approve")
@@ -74,7 +77,13 @@ def approve_strategy(body: dict[str, Any]) -> dict[str, Any]:
 
     approval = ApprovalService.lock(spec, actor=body.get("actor", "user"))
     strategy = Strategy.model_validate(spec)
-    return {"ok": True, "approval": approval, "strategy_id": strategy.ledger_hash}
+    return {
+        "ok": True,
+        "deprecated": True,
+        "replacement": "/api/strategy-lab/v2/approve",
+        "approval": approval,
+        "strategy_id": strategy.ledger_hash,
+    }
 
 
 try:
