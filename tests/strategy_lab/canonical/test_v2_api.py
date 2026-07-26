@@ -154,7 +154,7 @@ def test_sma_slice_no_ranking(client):
     a, bt = _run_slice(
         client,
         "Buy SPY when its 20-day average is above its 50-day average, otherwise hold cash.",
-        ["SPY", "AGG"],
+        ["SPY"],
     )
     assert bt.status_code == 200, bt.text
     assert bt.json()["canonical_hash"] == a["canonical_hash"]

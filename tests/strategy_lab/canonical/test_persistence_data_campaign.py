@@ -112,7 +112,7 @@ def test_campaign_uses_approved_hash(client):
             "mechanism_families": ["drawdown", "vol_spike"],
             "seed_list": [1, 2, 3],
             "world_budget": 6,
-            "failure_predicates": ["negative_return"],
+            "failure_predicates": ["sharpe_below_0"],
             "idempotency_key": "cmp-" + a["canonical_hash"],
         },
     )
@@ -139,7 +139,7 @@ def test_campaign_confirmed_failure_minimizes_and_finds_adjacent(client):
             "mechanism_families": ["drawdown"],
             "seed_list": [1, 2],
             "world_budget": 6,
-            "failure_predicates": ["negative_return"],
+            "failure_predicates": ["sharpe_below_0"],
             "idempotency_key": "cmp-confirm-" + a["canonical_hash"],
         },
     )
