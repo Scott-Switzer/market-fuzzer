@@ -1,8 +1,34 @@
-.PHONY: install install-browser verify verify-fast test e2e demo run run-example arena-demo decision-benchmark regression judge-demo docker-smoke performance clean-artifacts verify-submission test-portfolio-engine test-data-adapters test-strategy-identity submission-demo pitch-deck fenrix-inspect render-smoke
+.PHONY: install install-browser verify verify-fast test e2e demo run run-example arena-demo decision-benchmark regression judge-demo docker-smoke performance clean-artifacts verify-submission test-portfolio-engine test-data-adapters test-strategy-identity submission-demo pitch-deck fenrix-inspect render-smoke lock lock-check test-postgres
 
 # Default to the project Python 3.12 virtualenv if present,
 # otherwise fall back to whatever `python3` resolves to.
 PYTHON ?= $(firstword $(wildcard .venv312/bin/python .venv/bin/python) python3)
+
+# Single documented lock command. Regenerates requirements.lock (hashed) from
+# pyproject.toml's runtime + dev dependency graph. Do NOT hand-edit the lock or
+# use `pip freeze` -- the lock must describe the same graph as pyproject.
+lock:
+	$(PYTHON) -m piptools compile \
+	  --extra dev \
+	  --resolver backtracking \
+	  --generate-hashes \
+	  --strip-extras \
+	  --output-file requirements.lock \
+	  pyproject.toml
+
+# CI consistency gate: verify the committed lock satisfies every pyproject
+# dependency specifier. Stable against transient upstream releases (unlike a
+# raw `pip-compile | git diff`, which is flaky against live PyPI).
+lock-check:
+	$(PYTHON) scripts/lock_consistency_check.py
+
+# Real-PostgreSQL verification (reset brief section 11/12). Requires
+# FENRIX_TEST_POSTGRES_URL + FENRIX_DATABASE_URL pointing at a live Postgres.
+test-postgres:
+	$(PYTHON) -m alembic upgrade head
+	$(PYTHON) -m alembic check
+	$(PYTHON) -m pytest tests/integration/test_postgres_persistence.py tests/integration/test_migrations.py -q -p no:cacheprovider
+
 
 install:
 	$(PYTHON) -m pip install -e '.[dev]'

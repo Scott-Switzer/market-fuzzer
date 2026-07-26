@@ -1,5 +1,10 @@
 name: verify
 on: [push, pull_request]
+
+# Least-privilege default (security hardening, reset brief section 14).
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -23,6 +28,54 @@ jobs:
       # must pass (the yfinance-specific exposure test is intentionally skipped
       # under the offline synthetic fixture used here).
       - run: AUDIT_FINAL=1 python -m pytest tests/submission_audit/test_independent_audit.py -q
+
+  # Dependency reproducibility gate (reset brief section 2). Two checks:
+  #  (1) the committed hashed lock installs cleanly under --require-hashes;
+  #  (2) the lock satisfies every dependency specifier declared in pyproject.
+  # This proves reproducibility + pyproject/lock consistency WITHOUT a flaky
+  # `pip-compile | git diff` that races transient upstream releases.
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.lock
+      - run: python -m pip install --no-deps -e .
+      - run: python -c "import alembic, sqlalchemy, matplotlib, yfinance, psycopg"
+      - run: python scripts/lock_consistency_check.py
+
+  # PostgreSQL is the authoritative production database (reset brief section 11). SQLite
+  # unit tests are not sufficient; migrations + constraints must be proven on
+  # real Postgres. Pinned by exact image tag.
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.4
+        env:
+          POSTGRES_USER: fenrix
+          POSTGRES_PASSWORD: fenrix
+          POSTGRES_DB: fenrix_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U fenrix"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      FENRIX_DATABASE_URL: postgresql+psycopg://fenrix:fenrix@localhost:5432/fenrix_test
+      FENRIX_TEST_POSTGRES_URL: postgresql+psycopg://fenrix:fenrix@localhost:5432/fenrix_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: python -m pip install -e '.[dev]'
+      - run: python -m alembic upgrade head
+      - run: python -m alembic check
+      - run: python -m pytest tests/integration/test_postgres_persistence.py tests/integration/test_migrations.py -q -p no:cacheprovider
+
   docker:
     runs-on: ubuntu-latest
     steps:
