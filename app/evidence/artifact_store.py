@@ -12,15 +12,18 @@ Implementations:
   this phase; the interface makes it a drop-in.
 
 Public callers only ever see ``ArtifactRef`` (store name + opaque key + sha256 +
-size), never an absolute path. A signed/temporary URL is produced by
-``public_url`` which returns a store-relative handle, not a disk path.
+size), never an absolute path. ``handle`` returns an opaque ``artifact://``
+handle (NOT a signed URL) that a production S3 store overrides with a presigned
+URL.
 """
 
 from __future__ import annotations
 
 import hashlib
 import io
+import os
 import shutil
+import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -81,14 +84,16 @@ class ArtifactStore(ABC):
     ) -> ArtifactRef:
         return self.put(key, stream.read(), content_type=content_type)
 
-    def public_url(self, key: str) -> str:
-        """Return a store-relative handle. NEVER a local filesystem path.
+    def handle(self, key: str) -> str:
+        """Return an opaque store handle (``artifact://<store>/<key>``).
 
-        Production S3 store overrides this with a presigned URL.
+        This is NOT a signed or time-limited URL. A production S3-backed store
+        overrides this to return a presigned URL; until then callers must treat
+        the return value as an internal handle, not a shareable link.
         """
         if not self.exists(key):
             raise KeyError(key)
-        return f"artifact://{self.name}/{key}"
+        return f"artifact://{self.name}/{_normalize_key(key)}"
 
     def verify(self, ref: ArtifactRef) -> bool:
         """Re-read the artifact and confirm its sha256 + size still match."""
@@ -137,19 +142,37 @@ class FilesystemArtifactStore(ArtifactStore):
 
     def _path(self, key: str) -> Path:
         key = _normalize_key(key)
-        # Guard against traversal: resolved path must stay under root.
+        # Guard against traversal using proper path containment, not string
+        # prefixing (which a sibling-prefix dir like <root>-evil would defeat).
         p = (self._root / key).resolve()
-        if not str(p).startswith(str(self._root)):
+        if not p.is_relative_to(self._root):
             raise ValueError(f"artifact key escapes store root: {key!r}")
+        # Reject symlink escapes: if any existing parent is a symlink pointing
+        # outside the root, refuse.
+        probe = p
+        while probe != self._root and probe != probe.parent:
+            if probe.is_symlink():
+                target = probe.resolve()
+                if not target.is_relative_to(self._root):
+                    raise ValueError(f"artifact key resolves through a symlink escaping root: {key!r}")
+            probe = probe.parent
         return p
 
     def put(self, key: str, data: bytes, *, content_type: str = "application/octet-stream") -> ArtifactRef:
         p = self._path(key)
         p.parent.mkdir(parents=True, exist_ok=True)
-        # Atomic write: temp then replace.
-        tmp = p.with_suffix(p.suffix + ".tmp")
-        tmp.write_bytes(data)
-        tmp.replace(p)
+        # Atomic durable write: unique temp file in the SAME dir, flush + fsync,
+        # then os.replace (atomic on POSIX). A fixed ".tmp" name would collide
+        # under concurrent writers; NamedTemporaryFile gives each writer a
+        # distinct temp path.
+        fd = tempfile.NamedTemporaryFile(delete=False, dir=p.parent, prefix=".tmp-", suffix=".part")
+        try:
+            fd.write(data)
+            fd.flush()
+            os.fsync(fd.fileno())
+        finally:
+            fd.close()
+        os.replace(fd.name, p)
         return ArtifactRef(
             store=self.name,
             key=_normalize_key(key),
@@ -168,7 +191,7 @@ class FilesystemArtifactStore(ArtifactStore):
         base = self._root
         out: list[str] = []
         for p in base.rglob("*"):
-            if p.is_file() and not p.name.endswith(".tmp"):
+            if p.is_file() and not p.name.startswith(".tmp-"):
                 rel = str(p.relative_to(base))
                 if not prefix or rel.startswith(_normalize_key(prefix)):
                     out.append(rel)
@@ -182,7 +205,13 @@ class FilesystemArtifactStore(ArtifactStore):
 
 
 def _normalize_key(key: str) -> str:
+    if not isinstance(key, str):
+        raise ValueError(f"artifact key must be a string, got {type(key)!r}")
     key = key.strip().lstrip("/")
+    if not key:
+        raise ValueError("artifact key must be non-empty")
+    if "\x00" in key:
+        raise ValueError("artifact key may not contain a null byte")
     if ".." in Path(key).parts:
         raise ValueError(f"artifact key may not contain '..': {key!r}")
     return key

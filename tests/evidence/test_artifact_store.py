@@ -57,16 +57,16 @@ def test_public_dict_has_no_filesystem_path(store):
     assert set(pub.keys()) == {"store", "key", "sha256", "size", "content_type"}
 
 
-def test_public_url_is_not_a_disk_path(store):
+def test_handle_is_not_a_disk_path(store):
     store.put("run/abc/x.json", b"{}")
-    url = store.public_url("run/abc/x.json")
-    assert url.startswith("artifact://")
-    assert not url.startswith("/")
+    handle = store.handle("run/abc/x.json")
+    assert handle.startswith("artifact://")
+    assert not handle.startswith("/")
 
 
-def test_public_url_missing_raises(store):
+def test_handle_missing_raises(store):
     with pytest.raises(KeyError):
-        store.public_url("does/not/exist")
+        store.handle("does/not/exist")
 
 
 def test_verify_detects_match(store):
@@ -111,3 +111,72 @@ def test_filesystem_clear(tmp_path):
     store.put("a/b.txt", b"hello")
     store.clear()
     assert store.list() == []
+
+
+# --- Phase 1.1 item 10: hardened containment + atomic writes ---
+def test_empty_key_rejected(store):
+    with pytest.raises(ValueError):
+        store.put("", b"x")
+    with pytest.raises(ValueError):
+        store.put("   ", b"x")
+
+
+def test_absolute_key_is_confined_not_escaped(store):
+    # A leading slash is stripped and confined under the store, never treated
+    # as an absolute filesystem path.
+    ref = store.put("/etc/passwd", b"x")
+    assert ref.key == "etc/passwd"
+    assert store.get("etc/passwd") == b"x"
+
+
+def test_sibling_prefix_path_rejected(tmp_path):
+    # <root> and <root>-evil share a string prefix; is_relative_to must reject
+    # the sibling even though str(path).startswith(str(root)) would pass.
+    root = tmp_path / "root"
+    sibling = tmp_path / "root-evil"
+    sibling.mkdir(parents=True)
+    (sibling / "secret.txt").write_bytes(b"top secret")
+    store = FilesystemArtifactStore(root)
+    with pytest.raises(ValueError):
+        store.get("../root-evil/secret.txt")
+
+
+def test_symlink_escape_rejected(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "loot.txt").write_bytes(b"loot")
+    # plant a symlink inside root pointing outside
+    (root / "link").symlink_to(outside)
+    store = FilesystemArtifactStore(root)
+    with pytest.raises(ValueError):
+        store.get("link/loot.txt")
+
+
+def test_concurrent_writes_do_not_corrupt(tmp_path):
+    import threading
+
+    store = FilesystemArtifactStore(tmp_path / "root")
+    payloads = [bytes([i]) * 4096 for i in range(1, 21)]
+    errors: list[Exception] = []
+
+    def writer(data: bytes) -> None:
+        try:
+            for _ in range(10):
+                store.put("hot/key.bin", data)
+        except Exception as e:  # pragma: no cover
+            errors.append(e)
+
+    threads = [threading.Thread(target=writer, args=(p,)) for p in payloads]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors
+    # Final content must be exactly one of the written payloads (no partial/torn
+    # write) and no temp files may remain.
+    final = store.get("hot/key.bin")
+    assert final in payloads
+    assert store.list() == ["hot/key.bin"]
