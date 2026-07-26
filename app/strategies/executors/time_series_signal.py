@@ -12,8 +12,13 @@ from __future__ import annotations
 import numpy as np
 
 from app.domain.strategy_spec import StrategyType
-from app.strategies.contracts import StrategyExecutionContext, TargetPlan, ValidationIssue
-from app.strategies.executors._base import signal_lookback_bars, tradable_mask
+from app.strategies.contracts import (
+    HistoryRequirements,
+    StrategyExecutionContext,
+    TargetPlan,
+    ValidationIssue,
+)
+from app.strategies.executors._base import tradable_mask
 from app.strategies.schedules import decision_mask
 from app.strategies.signals import simple_moving_average
 

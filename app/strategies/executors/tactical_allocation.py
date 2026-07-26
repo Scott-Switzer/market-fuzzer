@@ -24,7 +24,7 @@ from app.strategies.contracts import (
     TargetPlan,
     ValidationIssue,
 )
-from app.strategies.executors._base import signal_lookback_bars, tradable_mask
+from app.strategies.executors._base import tradable_mask
 from app.strategies.executors.cross_sectional_factor import _stable_desc_order
 from app.strategies.schedules import decision_mask
 from app.strategies.signals import simple_moving_average, total_return
