@@ -1,8 +1,8 @@
 """Repositories: the only sanctioned way to read/write domain objects to the DB.
 
 Keeps SQLAlchemy rows out of the rest of the app -- callers exchange domain
-objects (StrategySpec, Run, Job, ...). Enforces the durable-run and
-idempotency guarantees from reset brief section 11.
+objects (StrategySpec, Run, Job, ...). Enforces the durable-run and idempotency
+guarantees from reset brief section 11 and the Phase 1.1 fidelity/concurrency fixes.
 """
 
 from __future__ import annotations
@@ -10,11 +10,12 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.domain.run import FailureReason, Job, JobState, Run, RunStage
+from app.domain.run import FailureReason, Job, JobState, Run, RunStage, RunStatus
 from app.domain.strategy_spec import StrategySpec
-from app.domain.strategy_version import ApprovalState, StrategyVersion
+from app.domain.strategy_version import ApprovedStrategyVersion
 from app.evidence.artifact_store import ArtifactRef
 from app.persistence.models import (
     ArtifactIndexRow,
@@ -47,32 +48,35 @@ class StrategyRepository:
     def __init__(self, session: Session) -> None:
         self.s = session
 
-    def create(self, project_id: str, spec: StrategySpec) -> Strategy:
+    def create(self, project_id: str, strategy_id: str, name: str, original_thesis: str) -> Strategy:
         row = Strategy(
-            id=spec.strategy_id,
+            id=strategy_id,
             project_id=project_id,
-            name=spec.name,
-            original_thesis=spec.original_thesis,
+            name=name,
+            original_thesis=original_thesis,
         )
         self.s.add(row)
         self.s.flush()
         return row
 
-    def add_version(self, version: StrategyVersion) -> StrategyVersionRow:
+    def add_approved_version(self, approved: ApprovedStrategyVersion) -> StrategyVersionRow:
+        """Persist an immutable approved version. Stores canonical_json + hash
+        as the durable source of truth (no lossy re-serialization)."""
         row = StrategyVersionRow(
-            strategy_id=version.strategy_id,
-            version=version.version,
-            canonical_hash=version.canonical_hash,
-            spec_json=version.spec.model_dump(mode="json"),
-            state=version.state.value,
-            approved_by=version.approved_by,
-            approved_at=version.approved_at,
+            strategy_id=approved.strategy_id,
+            version=approved.version,
+            canonical_hash=approved.canonical_hash,
+            canonical_json=approved.canonical_json,
+            schema_version=approved.schema_version,
+            state="approved",
+            approved_by=approved.approved_by,
+            approved_at=approved.approved_at,
         )
         self.s.add(row)
         self.s.flush()
         return row
 
-    def get_version(self, strategy_id: str, version: int) -> StrategyVersion | None:
+    def get_approved_version(self, strategy_id: str, version: int) -> ApprovedStrategyVersion | None:
         row = self.s.scalar(
             select(StrategyVersionRow).where(
                 StrategyVersionRow.strategy_id == strategy_id,
@@ -81,14 +85,23 @@ class StrategyRepository:
         )
         if row is None:
             return None
-        return StrategyVersion(
+        return self._version_to_domain(row)
+
+    def get_spec(self, strategy_id: str, version: int) -> StrategySpec | None:
+        """Reconstruct the executable spec, re-verifying its hash (tamper-safe)."""
+        approved = self.get_approved_version(strategy_id, version)
+        return approved.to_spec() if approved else None
+
+    @staticmethod
+    def _version_to_domain(row: StrategyVersionRow) -> ApprovedStrategyVersion:
+        return ApprovedStrategyVersion(
             strategy_id=row.strategy_id,
             version=row.version,
+            schema_version=row.schema_version,
             canonical_hash=row.canonical_hash,
-            spec=StrategySpec.model_validate(row.spec_json),
-            state=ApprovalState(row.state),
-            approved_by=row.approved_by,
-            approved_at=row.approved_at,
+            canonical_json=row.canonical_json,
+            approved_by=row.approved_by or "",
+            approved_at=row.approved_at,  # type: ignore[arg-type]
         )
 
 
@@ -115,6 +128,24 @@ class RunRepository:
 
     def get(self, run_id: str) -> RunRow | None:
         return self.s.get(RunRow, run_id)
+
+    def get_domain(self, run_id: str) -> Run | None:
+        row = self.s.get(RunRow, run_id)
+        if row is None:
+            return None
+        return Run(
+            run_id=row.id,
+            project_id=row.project_id,
+            strategy_id=row.strategy_id,
+            strategy_version=row.strategy_version,
+            strategy_hash=row.strategy_hash,
+            data_mode=row.data_mode,
+            status=RunStatus(row.status),
+            stages_completed=[RunStage(s) for s in row.stages_completed],
+            created_at=row.created_at,
+            seeds=dict(row.seeds),
+            limitations=list(row.limitations),
+        )
 
     def mark_stage(self, run_id: str, stage: RunStage) -> None:
         row = self.s.get(RunRow, run_id)
@@ -145,12 +176,19 @@ class JobRepository:
         self.s = session
 
     def submit(self, job: Job, run_id: str | None = None) -> Job:
-        """Idempotent submit: if a job with the same idempotency_key exists,
-        return the existing one instead of inserting a duplicate (gate: duplicate
-        submission protection)."""
+        """Concurrency-safe idempotent submit.
+
+        The DB unique constraint on ``idempotency_key`` is the final authority.
+        We attempt the insert inside a SAVEPOINT; on ``IntegrityError`` (a
+        concurrent inserter won the race) we roll back only that savepoint and
+        return the existing row. Never creates two jobs; never surfaces a 500 on
+        a duplicate submission.
+        """
+        # Fast path: already present.
         existing = self.s.scalar(select(JobRow).where(JobRow.idempotency_key == job.idempotency_key))
         if existing is not None:
             return self._to_domain(existing)
+
         row = JobRow(
             id=job.job_id,
             run_id=run_id,
@@ -160,11 +198,23 @@ class JobRepository:
             attempts=job.attempts,
             max_attempts=job.max_attempts,
             progress=job.progress,
+            inputs_frozen=job.inputs_frozen,
             failure_json=job.failure.model_dump(mode="json") if job.failure else None,
             result_ref=job.result_ref,
+            created_at=job.created_at,
+            updated_at=job.updated_at,
         )
-        self.s.add(row)
-        self.s.flush()
+        try:
+            with self.s.begin_nested():  # SAVEPOINT
+                self.s.add(row)
+                self.s.flush()
+        except IntegrityError:
+            # Lost the race: another transaction inserted the same key. The
+            # savepoint is already rolled back; fetch and return the winner.
+            existing = self.s.scalar(select(JobRow).where(JobRow.idempotency_key == job.idempotency_key))
+            if existing is None:  # pragma: no cover - defensive
+                raise
+            return self._to_domain(existing)
         return self._to_domain(row)
 
     def save(self, job: Job) -> None:
@@ -174,8 +224,10 @@ class JobRepository:
         row.state = job.state.value
         row.attempts = job.attempts
         row.progress = job.progress
+        row.inputs_frozen = job.inputs_frozen
         row.failure_json = job.failure.model_dump(mode="json") if job.failure else None
         row.result_ref = job.result_ref
+        row.updated_at = job.updated_at
         self.s.flush()
 
     def get(self, job_id: str) -> Job | None:
@@ -184,6 +236,8 @@ class JobRepository:
 
     @staticmethod
     def _to_domain(row: JobRow) -> Job:
+        # Full fidelity: restore every field, including timestamps and
+        # inputs_frozen, so a persisted->reloaded job is semantically identical.
         return Job(
             job_id=row.id,
             idempotency_key=row.idempotency_key,
@@ -192,8 +246,11 @@ class JobRepository:
             attempts=row.attempts,
             max_attempts=row.max_attempts,
             progress=row.progress,
+            inputs_frozen=row.inputs_frozen,
             failure=FailureReason.model_validate(row.failure_json) if row.failure_json else None,
             result_ref=row.result_ref,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
         )
 
 

@@ -11,7 +11,7 @@ import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -27,7 +27,17 @@ def database_url() -> str:
 def make_engine(url: str | None = None, *, echo: bool = False) -> Engine:
     url = url or database_url()
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
-    return create_engine(url, echo=echo, future=True, connect_args=connect_args)
+    engine = create_engine(url, echo=echo, future=True, connect_args=connect_args)
+    if url.startswith("sqlite"):
+        # SQLite ignores foreign keys unless enabled per-connection. Turn it on
+        # so FK constraints behave like production Postgres in dev/tests.
+        @event.listens_for(engine, "connect")
+        def _fk_pragma(dbapi_conn, _record):  # type: ignore[no-untyped-def]
+            cur = dbapi_conn.cursor()
+            cur.execute("PRAGMA foreign_keys=ON")
+            cur.close()
+
+    return engine
 
 
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:
