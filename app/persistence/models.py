@@ -236,6 +236,140 @@ class DataSourceRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+# --------------------------------------------------------------------------
+# Phase 2.6 integrity-closure tables
+# --------------------------------------------------------------------------
+class IdempotencyRecordRow(Base):
+    """Durable request-idempotency record (Phase 2.6 section 3).
+
+    ``(scope, project_id, idempotency_key)`` is unique. A replay with the same
+    request digest returns the recorded resource + response; a replay with a
+    DIFFERENT digest is a conflict (HTTP 409). Concurrency-safe on Postgres via
+    the unique constraint + IntegrityError recovery.
+    """
+
+    __tablename__ = "idempotency_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "scope", "project_id", "idempotency_key", name="idempotency_scope_project_key"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(32), nullable=False)  # approve|backtest|campaign
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    resource_type: Mapped[str] = mapped_column(String(32), nullable=False)  # strategy_version|run|campaign
+    resource_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    response_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class CampaignRow(Base):
+    """Durable synthetic-stress campaign, keyed by an unambiguous campaign_id and
+    bound to the (project, strategy, version, hash) identity tuple."""
+
+    __tablename__ = "campaigns"
+    __table_args__ = (
+        Index("ix_campaigns_strategy_hash", "strategy_hash"),
+        Index("ix_campaigns_project_id", "project_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    strategy_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    strategy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    strategy_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    baseline_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    base_panel_digest: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    mechanisms: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    seeds: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    failure_predicates: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    confirmation_policy: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    requested_worlds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    evaluated_worlds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    predicate_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    evaluation_errors: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    errors_by_mechanism: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    failure_rate_by_mechanism: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    result_manifest_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ScenarioWorldRow(Base):
+    """A generated, reproducible stress world (scenario definition + digest)."""
+
+    __tablename__ = "scenario_worlds"
+    __table_args__ = (
+        UniqueConstraint("campaign_id", "world_key", name="campaign_world_key"),
+        Index("ix_scenario_worlds_campaign_id", "campaign_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    campaign_id: Mapped[str] = mapped_column(ForeignKey("campaigns.id"), nullable=False)
+    world_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    mechanism: Mapped[str] = mapped_column(String(64), nullable=False)
+    seed: Mapped[int] = mapped_column(Integer, nullable=False)
+    intensity: Mapped[float] = mapped_column(Float, nullable=False)
+    definition: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    content_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    diagnostics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class WorldEvaluationRow(Base):
+    """The outcome of evaluating the approved strategy on one scenario world."""
+
+    __tablename__ = "world_evaluations"
+    __table_args__ = (Index("ix_world_evaluations_campaign_id", "campaign_id"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    campaign_id: Mapped[str] = mapped_column(ForeignKey("campaigns.id"), nullable=False)
+    world_id: Mapped[str] = mapped_column(ForeignKey("scenario_worlds.id"), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(24), nullable=False)  # succeeded|failed_predicate|evaluation_error
+    predicate_results: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    metrics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    role: Mapped[str] = mapped_column(String(24), nullable=False, default="primary")  # primary|confirmation|minimization|adjacent
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class MinimizationTrialRow(Base):
+    """One trial in the minimization search (bisection or grid)."""
+
+    __tablename__ = "minimization_trials"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    campaign_id: Mapped[str] = mapped_column(ForeignKey("campaigns.id"), nullable=False)
+    failure_id: Mapped[str] = mapped_column(ForeignKey("world_evaluations.id"), nullable=False)
+    dimension: Mapped[str] = mapped_column(String(32), nullable=False)
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+    failed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    predicate_results: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    metrics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    iteration: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+
+
+class AdjacentPassRow(Base):
+    """A verified adjacent passing scenario (all failure predicates false)."""
+
+    __tablename__ = "adjacent_passes"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    campaign_id: Mapped[str] = mapped_column(ForeignKey("campaigns.id"), nullable=False)
+    failure_id: Mapped[str] = mapped_column(ForeignKey("world_evaluations.id"), nullable=False)
+    scenario_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    predicate_results: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    metrics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    artifact_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+
+
 __all__ = [
     "Base",
     "NAMING_CONVENTION",
@@ -250,4 +384,10 @@ __all__ = [
     "ArtifactIndexRow",
     "EvidenceVerificationRow",
     "DataSourceRow",
+    "IdempotencyRecordRow",
+    "CampaignRow",
+    "ScenarioWorldRow",
+    "WorldEvaluationRow",
+    "MinimizationTrialRow",
+    "AdjacentPassRow",
 ]
