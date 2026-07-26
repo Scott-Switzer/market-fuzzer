@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from app.compiler import apply_resolutions, compile_thesis
 from app.strategy_lab.compiler.planner import StrategyPlanner
 from app.strategy_lab.dsl import ClauseResolution, ClauseStatus, Strategy
 from app.strategy_lab.service_lab import ApprovalService
@@ -14,11 +15,46 @@ from app.strategy_lab.service_lab import ApprovalService
 router = APIRouter()
 
 
+def _compilation_payload(raw_text: str, resolutions: dict[str, Any] | None) -> dict[str, Any]:
+    """New typed compilation result (reset brief Phase 2 item 25/27).
+
+    Never silently maps to a different family: unsupported prose yields
+    strategy_type='unsupported' with execution blocked.
+    """
+    result = compile_thesis(raw_text)
+    if resolutions:
+        result = apply_resolutions(result, resolutions)
+    spec = result.strategy_spec_draft
+    return {
+        "original_thesis": result.original_thesis,
+        "strategy_type": spec.strategy_type.value,
+        "strategy_hash": spec.compute_hash(),
+        "spec_draft": json.loads(spec.full_json()),
+        "clauses": [c.__dict__ for c in result.clauses],
+        "unsupported_clauses": [c.__dict__ for c in result.unsupported_clauses],
+        "assumptions": result.assumptions,
+        "required_data": result.required_data,
+        "required_user_resolutions": result.required_user_resolutions,
+        "contradictions": result.contradictions,
+        "compiler_kind": result.compiler_kind,
+        "compiler_version": result.compiler_version,
+        "confidence_by_clause": result.confidence_by_clause,
+        "is_supported": result.is_supported,
+    }
+
+
 @router.post("/compile")
 def compile_strategy(body: dict[str, Any]) -> dict[str, Any]:
     raw_text = body.get("description", "")
-    result = StrategyPlanner.plan_from_text(raw_text)
-    return {"ok": True, **result}
+    resolutions = body.get("resolutions") or body.get("resolution_overrides")
+    # Legacy planner result (back-compat shape: spec.family + strategy_hash).
+    legacy = StrategyPlanner.plan_from_text(raw_text)
+    # New typed deterministic compilation result (no silent family swaps).
+    try:
+        compilation = _compilation_payload(raw_text, resolutions)
+    except Exception as exc:  # keep legacy path usable even if new compiler trips
+        compilation = {"error": str(exc), "is_supported": False}
+    return {"ok": True, **legacy, "compilation": compilation}
 
 
 @router.post("/approve")
