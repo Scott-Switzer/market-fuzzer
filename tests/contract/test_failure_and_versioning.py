@@ -6,7 +6,9 @@ import pytest
 
 from app.domain.failure import AdjacentPass, ConfirmedFailure, MinimizedBoundary, Severity
 from app.domain.strategy_spec import Clause, ClauseState, StrategySpec, StrategyType
-from app.domain.strategy_version import ApprovalState, StrategyVersion
+from app.domain.strategy_version import ApprovedStrategyVersion, DraftStrategy
+
+SUPPORTED = set(StrategyType) - {StrategyType.UNSUPPORTED}
 
 
 def _spec(**ov) -> StrategySpec:
@@ -73,31 +75,59 @@ def test_confirmed_failure_carries_predicate_and_seed_agreement():
 
 
 # --- strategy versioning / approval ---
-def test_version_from_spec_carries_hash():
+def test_draft_carries_hash_and_stable_identity():
     s = _spec()
-    v = StrategyVersion.from_spec(s)
-    assert v.canonical_hash == s.canonical_hash
-    assert v.state == ApprovalState.DRAFT
+    d = DraftStrategy(spec=s)
+    assert d.canonical_hash == s.compute_hash()
+    # identity is a stable UUID, not the content hash
+    assert d.strategy_id != d.canonical_hash
+    assert d.version == 1
 
 
-def test_lock_executable_spec_succeeds_and_preserves_hash():
+def test_next_version_preserves_identity():
     s = _spec()
-    v = StrategyVersion.from_spec(s).lock(approved_by="scott")
-    assert v.is_locked
-    assert v.approved_by == "scott"
-    assert v.canonical_hash == s.canonical_hash  # gate 19: hash unchanged by approval
+    d = DraftStrategy(spec=s)
+    d2 = d.next_version(_spec(frequency="weekly"))
+    assert d2.strategy_id == d.strategy_id  # same logical strategy
+    assert d2.version == 2
+    assert d2.canonical_hash != d.canonical_hash  # different content
 
 
-def test_cannot_lock_non_executable_spec():
+def test_approve_executable_spec_succeeds_and_preserves_hash():
+    s = _spec()
+    d = DraftStrategy(spec=s)
+    approved = d.approve(approved_by="scott", supported_types=SUPPORTED)
+    assert isinstance(approved, ApprovedStrategyVersion)
+    assert approved.approved_by == "scott"
+    assert approved.canonical_hash == s.compute_hash()  # hash unchanged by approval
+    assert approved.strategy_id == d.strategy_id
+    assert approved.verify()
+
+
+def test_cannot_approve_non_executable_spec():
     s = _spec(clauses=[Clause(id="c1", original_text="x", state=ClauseState.UNRESOLVED)])
-    v = StrategyVersion.from_spec(s)
+    d = DraftStrategy(spec=s)
     with pytest.raises(ValueError, match="non-executable"):
-        v.lock(approved_by="scott")
+        d.approve(approved_by="scott", supported_types=SUPPORTED)
 
 
-def test_lock_detects_hash_tamper():
+def test_approved_snapshot_reconstructs_and_detects_tamper():
     s = _spec()
-    v = StrategyVersion.from_spec(s)
-    tampered = v.model_copy(update={"canonical_hash": "0" * 64})
-    with pytest.raises(ValueError, match="does not match"):
-        tampered.lock(approved_by="scott")
+    approved = DraftStrategy(spec=s).approve(approved_by="scott", supported_types=SUPPORTED)
+    # round-trip
+    rebuilt = approved.to_spec()
+    assert rebuilt.compute_hash() == approved.canonical_hash
+    assert rebuilt.strategy_id == approved.strategy_id
+    # tamper the stored canonical JSON -> verify() False and to_spec() raises
+    tampered = approved.model_copy(update={"canonical_json": approved.canonical_json.replace("AAPL", "TSLA")})
+    assert not tampered.verify()
+    with pytest.raises(ValueError, match="mismatch"):
+        tampered.to_spec()
+
+
+def test_approved_version_is_frozen():
+    from pydantic import ValidationError
+
+    approved = DraftStrategy(spec=_spec()).approve(approved_by="scott", supported_types=SUPPORTED)
+    with pytest.raises(ValidationError):
+        approved.canonical_hash = "0" * 64  # type: ignore[misc]
