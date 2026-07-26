@@ -58,4 +58,29 @@ def tradable_mask(spec: StrategySpec, assets: tuple[str, ...]) -> np.ndarray:
     return out
 
 
-__all__ = ["context_from_panel", "cost_model_from_spec", "tradable_mask"]
+def signal_lookback_bars(spec: StrategySpec) -> int:
+    """Max warmup bar count implied by the spec's signal definitions."""
+    from app.domain.strategy_spec import SignalDefinition  # noqa: F401
+
+    max_warmup = 2
+    for sig in spec.signal_definitions:
+        if sig.kind == "sma":
+            max_warmup = max(max_warmup, int(sig.slow_window) + 1)
+        elif sig.kind == "momentum":
+            # 12-1 momentum: lookback + skip + 1 execution bar
+            max_warmup = max(max_warmup, int(sig.lookback) + int(sig.skip) + 1)
+        elif sig.kind == "realized_volatility":
+            max_warmup = max(max_warmup, int(sig.lookback) + 1)
+        elif sig.kind == "relative_momentum":
+            max_warmup = max(max_warmup, int(sig.lookback) + 1)
+        elif sig.kind == "trend_filter":
+            max_warmup = max(max_warmup, int(sig.window) + 1)
+    return max_warmup
+
+
+__all__ = [
+    "context_from_panel",
+    "cost_model_from_spec",
+    "tradable_mask",
+    "signal_lookback_bars",
+]

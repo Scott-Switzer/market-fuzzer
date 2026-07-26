@@ -13,7 +13,7 @@ import numpy as np
 
 from app.domain.strategy_spec import StrategyType
 from app.strategies.contracts import StrategyExecutionContext, TargetPlan, ValidationIssue
-from app.strategies.executors._base import tradable_mask
+from app.strategies.executors._base import signal_lookback_bars, tradable_mask
 from app.strategies.schedules import decision_mask
 from app.strategies.signals import simple_moving_average
 
@@ -51,6 +51,18 @@ class TimeSeriesSignalExecutor:
                 )
             )
         return issues
+
+    def minimum_history_requirements(self, spec) -> HistoryRequirements:  # noqa: ANN001
+        from app.strategies.contracts import HistoryRequirements
+
+        slow = self._sma_params(spec)[1]
+        return HistoryRequirements(
+            min_decision_bars=int(slow) + 1,
+            min_execution_bars=int(slow) + 2,
+            contiguous_valid_bars=int(slow) + 2,
+            signal_reason=f"slow SMA window of {slow} bars plus one execution bar",
+            execution_reason="need the warmup bar and the following open to fill",
+        )
 
     def build_targets(self, spec, context: StrategyExecutionContext) -> TargetPlan:  # noqa: ANN001
         close = context.close

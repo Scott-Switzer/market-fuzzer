@@ -2,8 +2,8 @@
 
 Every endpoint routes through the canonical application-service layer
 (compilation -> approval -> persistence -> executor -> accounting -> campaign ->
-evidence). No legacy planner, DSL strategy model, or legacy approval service is
-used on the authoritative path.
+evidence). Idempotency keys are reserved for approve/backtest/campaign; the
+audit record verifies resource relationships and artifact integrity.
 """
 
 from __future__ import annotations
@@ -32,15 +32,23 @@ from app.strategy_lab.canonical.contracts import (
     CompileRequest,
     CompileResponse,
     ProjectCreatedResponse,
+    ProjectCreateRequest,
     ResolveRequest,
     ResolveResponse,
 )
+from app.strategy_lab.canonical.durable import (
+    get_default_store,
+    verify_artifacts,
+)
 from app.strategy_lab.canonical.errors import (
+    BaselineMismatchError,
     BoundedExecutionLimitError,
     CanonicalError,
     DataUnavailableError,
     HashMismatchError,
+    IdempotencyConflictError,
     PanelTooShortError,
+    ResourceNotFoundError,
     UnregisteredExecutorError,
     UnresolvedClauseError,
 )
@@ -77,17 +85,15 @@ def _err(status: int, exc: CanonicalError) -> HTTPException:
 
 
 @router.post("/projects", response_model=ProjectCreatedResponse, status_code=201)
-def create_project(body: dict, session: DbSession) -> ProjectCreatedResponse:
+def create_project(body: ProjectCreateRequest, session: DbSession) -> ProjectCreatedResponse:
     from app.persistence.repositories import ProjectRepository
 
-    name = (body or {}).get("name", "Fenrix Workspace")
-    proj = ProjectRepository(session).create(name=name, owner="local")
+    proj = ProjectRepository(session).create(name=body.name, owner="local")
     return ProjectCreatedResponse(project_id=proj.id, name=proj.name, created_at=proj.created_at.isoformat())
 
 
 @router.post("/compile", response_model=CompileResponse)
 def compile_endpoint(body: CompileRequest) -> CompileResponse:
-    # The ONLY compiler on the authoritative path.
     return compile_text(body.description)
 
 
@@ -108,11 +114,15 @@ def approve_endpoint(body: ApproveRequest, session: DbSession) -> ApproveRespons
             project_id=body.project_id,
             spec=spec,
             spec_hash=spec.compute_hash(),
+            actor=body.actor,
+            idempotency_key=body.idempotency_key,
         )
     except (UnresolvedClauseError, UnregisteredExecutorError, HashMismatchError) as exc:
         raise _err(422, exc) from exc
+    except IdempotencyConflictError as exc:
+        raise _err(409, exc) from exc
     except CanonicalError as exc:
-        raise _err(400, exc) from exc
+        raise _err(422, exc) from exc
 
 
 @router.post("/backtests", response_model=BacktestResponse)
@@ -124,7 +134,7 @@ def backtest_endpoint(body: BacktestRequest, session: DbSession) -> BacktestResp
             strategy_version=body.strategy_version,
             expected_canonical_hash=body.expected_canonical_hash,
             data_source=body.data_source.model_dump(mode="python"),
-            project_id=body.strategy_id,  # project linkage retained via approval's project
+            project_id=body.strategy_id,
             initial_capital=body.initial_capital,
             idempotency_key=body.idempotency_key,
         )
@@ -132,8 +142,10 @@ def backtest_endpoint(body: BacktestRequest, session: DbSession) -> BacktestResp
         raise _err(422, exc) from exc
     except (DataUnavailableError, PanelTooShortError, BoundedExecutionLimitError) as exc:
         raise _err(422, exc) from exc
+    except IdempotencyConflictError as exc:
+        raise _err(409, exc) from exc
     except CanonicalError as exc:
-        raise _err(400, exc) from exc
+        raise _err(422, exc) from exc
 
 
 @router.post("/campaigns", response_model=CampaignResponse)
@@ -155,8 +167,154 @@ def campaign_endpoint(body: CampaignRequest, session: DbSession) -> CampaignResp
         )
     except HashMismatchError as exc:
         raise _err(422, exc) from exc
-    except CanonicalError as exc:
-        raise _err(400, exc) from exc
+    except IdempotencyConflictError as exc:
+        raise _err(409, exc) from exc
+    except (BaselineMismatchError, CanonicalError) as exc:
+        raise _err(422, exc) from exc
+
+@router.get("/runs/{run_id}", response_model=dict)
+def get_run(run_id: str, session: DbSession) -> dict:
+    from app.persistence.repositories import RunRepository
+
+    run = RunRepository(session).get(run_id)
+    if run is None:
+        raise HTTPException(404, "run not found")
+    return {
+        "run_id": run.id,
+        "project_id": run.project_id,
+        "strategy_id": run.strategy_id,
+        "strategy_version": run.strategy_version,
+        "canonical_hash": run.strategy_hash,
+        "data_mode": run.data_mode,
+        "status": run.status,
+        "limitations": run.limitations,
+    }
+
+
+@router.get("/runs/{run_id}/result", response_model=dict)
+def get_run_result(run_id: str, session: DbSession) -> dict:
+    return _load_run_result(session, run_id)
+
+
+def _load_run_result(session: Session, run_id: str) -> dict:
+    from app.persistence.repositories import RunRepository
+
+    run = RunRepository(session).get(run_id)
+    if run is None:
+        raise HTTPException(404, "run not found")
+    store = get_default_store()
+    try:
+        verified = verify_artifacts(session, store=store, run_id=run_id)
+    except Exception as exc:  # ArtifactIntegrityError or missing
+        raise HTTPException(500, f"artifact integrity error: {exc}") from exc
+    manifest = _load_json(store, f"runs/{run_id}/result-manifest.json")
+    metrics = _load_json(store, f"runs/{run_id}/metrics.json")
+    equity = _load_json(store, f"runs/{run_id}/equity-curve.json")
+    trades = _load_json(store, f"runs/{run_id}/trades.json")
+    prov = _load_json(store, f"runs/{run_id}/data-provenance.json")
+    return {
+        "run_id": run_id,
+        "project_id": run.project_id,
+        "strategy_id": run.strategy_id,
+        "strategy_version": run.strategy_version,
+        "canonical_hash": run.strategy_hash,
+        "data_content_digest": (manifest or {}).get("data_content_digest"),
+        "manifest": manifest,
+        "metrics": metrics,
+        "equity_curve": equity,
+        "trades": trades,
+        "data_provenance": prov,
+        "artifact_references": verified,
+    }
+
+
+def _load_json(store, key: str):
+    raw = store.get(key)
+    if raw is None:
+        return None
+    import json as _json
+
+    return _json.loads(raw)
+
+
+@router.get("/campaigns/{campaign_id}", response_model=dict)
+def get_campaign(campaign_id: str, session: DbSession) -> dict:
+    from sqlalchemy import select
+
+    from app.persistence.models import CampaignRow
+
+    camp = session.scalar(select(CampaignRow).where(CampaignRow.id == campaign_id))
+    if camp is None:
+        raise HTTPException(404, "campaign not found")
+    store = get_default_store()
+    manifest = _load_json(store, f"campaigns/{campaign_id}/manifest.json")
+    return {
+        "campaign_id": camp.id,
+        "run_id": camp.run_id,
+        "project_id": camp.project_id,
+        "strategy_id": camp.strategy_id,
+        "strategy_version": camp.strategy_version,
+        "canonical_hash": camp.strategy_hash,
+        "requested_worlds": camp.requested_worlds,
+        "evaluated_worlds": camp.evaluated_worlds,
+        "predicate_failures": camp.predicate_failures,
+        "evaluation_errors": camp.evaluation_errors,
+        "error_rate": camp.error_rate,
+        "errors_by_mechanism": camp.errors_by_mechanism,
+        "failure_rate_by_mechanism": camp.failure_rate_by_mechanism,
+        "manifest": manifest,
+    }
+
+
+@router.get("/failures/{failure_id}", response_model=dict)
+def get_failure(failure_id: str, session: DbSession) -> dict:
+    from sqlalchemy import select
+
+    from app.persistence.models import WorldEvaluationRow
+
+    ev = session.scalar(
+        select(WorldEvaluationRow).where(WorldEvaluationRow.id == failure_id)
+    )
+    if ev is None:
+        raise HTTPException(404, "failure not found")
+    return {
+        "failure_id": ev.id,
+        "campaign_id": ev.campaign_id,
+        "world_id": ev.world_id,
+        "outcome": ev.outcome,
+        "predicate_results": ev.predicate_results,
+        "metrics": ev.metrics,
+        "error_message": ev.error_message,
+    }
+
+
+@router.get("/failures/{failure_id}/replay", response_model=dict)
+def replay_failure(failure_id: str, session: DbSession) -> dict:
+    """Reconstruct a confirmed failure from stored scenario + result artifacts."""
+    from sqlalchemy import select
+
+    from app.persistence.models import ScenarioWorldRow, WorldEvaluationRow
+
+    ev = session.scalar(select(WorldEvaluationRow).where(WorldEvaluationRow.id == failure_id))
+    if ev is None:
+        raise HTTPException(404, "failure not found")
+    world = session.get(ScenarioWorldRow, ev.world_id)
+    if world is None:
+        raise HTTPException(404, "scenario world not found")
+    return {
+        "failure_id": ev.id,
+        "campaign_id": ev.campaign_id,
+        "world_id": world.id,
+        "mechanism": world.mechanism,
+        "seed": world.seed,
+        "intensity": world.intensity,
+        "definition": world.definition,
+        "scenario_content_digest": world.content_digest,
+        "diagnostics": world.diagnostics,
+        "outcome": ev.outcome,
+        "predicate_results": ev.predicate_results,
+        "metrics": ev.metrics,
+    }
 
 
 @router.get("/strategies/{strategy_id}/versions/{strategy_version}", response_model=dict)
@@ -186,18 +344,25 @@ def audit_endpoint(
     strategy_id: str,
     strategy_version: int,
     session: DbSession,
+    project_id: str | None = None,
     run_id: str | None = None,
     campaign_id: str | None = None,
     failure_id: str | None = None,
 ) -> AuditRecord:
-    return build_audit_record(
-        session,
-        strategy_id=strategy_id,
-        strategy_version=strategy_version,
-        run_id=run_id,
-        campaign_id=campaign_id,
-        failure_id=failure_id,
-    )
+    try:
+        return build_audit_record(
+            session,
+            strategy_id=strategy_id,
+            strategy_version=strategy_version,
+            project_id=project_id,
+            run_id=run_id,
+            campaign_id=campaign_id,
+            failure_id=failure_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except CanonicalError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 __all__ = ["router"]

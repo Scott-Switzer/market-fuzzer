@@ -29,6 +29,8 @@ def approve_spec(
     project_id: str,
     spec: StrategySpec,
     spec_hash: str,
+    actor: str = "user",
+    idempotency_key: str,
 ) -> ApproveResponse:
     """Validate, approve, persist, reload, and re-verify the approved version.
 
@@ -55,19 +57,33 @@ def approve_spec(
     if live_hash != spec_hash:
         raise HashMismatchError(f"hash drift at approval: live={live_hash} supplied={spec_hash}")
 
-    # Idempotency: if an approved version with this canonical hash already exists
-    # for this project, return it instead of minting a new strategy_id/version.
+    # Idempotency control (Phase 2.6 D3 / D11): the IDEMPOTENCY KEY -- not the
+    # canonical hash -- controls request replay. Reusing the same key with the
+    # same request returns the original resource; reusing it with a DIFFERENT
+    # request is a conflict (409). Distinct keys with identical content are
+    # allowed to create distinct logical strategies (identity != content).
+    from app.strategy_lab.canonical.durable import reserve_idempotency
+
     repo = StrategyRepository(session)
-    prior = session.scalar(
-        select(StrategyVersionRow)
-        .join(Strategy, Strategy.id == StrategyVersionRow.strategy_id)
-        .where(
-            StrategyVersionRow.canonical_hash == live_hash,
-            Strategy.project_id == project_id,
-        )
+    request_payload = {
+        "project_id": project_id,
+        "spec_hash": live_hash,
+        "actor": actor,
+    }
+    existing_ir = reserve_idempotency(
+        session,
+        scope="approve",
+        project_id=project_id,
+        idempotency_key=idempotency_key,
+        request_payload=request_payload,
+        resource_type="strategy_version",
+        resource_id="",  # filled below
+        response_json={},
     )
-    if prior is not None:
-        stored0 = repo.get_approved_version(prior.strategy_id, prior.version)
+    if existing_ir.resource_id:  # replay with same digest -> return stored resource
+        stored0 = repo.get_approved_version(
+            existing_ir.resource_id.split(":")[0], int(existing_ir.resource_id.split(":")[1])
+        )
         if stored0 is not None:
             return ApproveResponse(
                 api_version="v2",
@@ -82,7 +98,8 @@ def approve_spec(
 
     draft = DraftStrategy(spec=spec)
     # 9. Validated approval (model_validate internally; never model_copy(update=)).
-    approved = draft.approve("user", supported_types=supported)
+    # Records the REQUEST actor -- never a hardcoded value (Phase 2.6 D10).
+    approved = draft.approve(actor, supported_types=supported)
     if live_hash != approved.canonical_hash:
         raise HashMismatchError(
             f"hash drift during approval: live={live_hash} approved={approved.canonical_hash}"
@@ -107,6 +124,9 @@ def approve_spec(
     )
     if existing_row is None:
         repo.add_approved_version(approved)
+
+    # Update the idempotency record with the resolved resource id.
+    existing_ir.resource_id = f"{approved.strategy_id}:{approved.version}"
 
     # 13-15. Reload + reconstruct + verify hash continuity.
     stored = repo.get_approved_version(approved.strategy_id, approved.version)

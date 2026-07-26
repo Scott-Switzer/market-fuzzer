@@ -22,8 +22,13 @@ import numpy as np
 
 from app.domain.strategy_spec import StrategySpec, StrategyType
 from app.strategies.constraints import equal_weight_capped, split_gross_net
-from app.strategies.contracts import StrategyExecutionContext, TargetPlan, ValidationIssue
-from app.strategies.executors._base import tradable_mask
+from app.strategies.contracts import (
+    HistoryRequirements,
+    StrategyExecutionContext,
+    TargetPlan,
+    ValidationIssue,
+)
+from app.strategies.executors._base import signal_lookback_bars, tradable_mask
 from app.strategies.schedules import decision_mask
 from app.strategies.signals import average_rank, momentum_12_1, realized_volatility
 
@@ -68,6 +73,16 @@ class CrossSectionalFactorExecutor:
                 )
             )
         return issues
+
+    def minimum_history_requirements(self, spec: StrategySpec) -> HistoryRequirements:
+        warm = signal_lookback_bars(spec)
+        return HistoryRequirements(
+            min_decision_bars=warm,
+            min_execution_bars=warm + 1,
+            contiguous_valid_bars=warm + 1,
+            signal_reason="cross-sectional momentum/vol lookback + execution bar",
+            execution_reason="need the warmup bar and the following open to fill",
+        )
 
     def build_targets(self, spec: StrategySpec, context: StrategyExecutionContext) -> TargetPlan:
         close = context.close

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -70,10 +71,15 @@ class CampaignRequest(BaseModel):
         default_factory=lambda: ["drawdown", "vol_spike", "correlation_breakdown"]
     )
     seed_list: list[int] = Field(default_factory=lambda: [1, 2, 3, 4, 5])
-    world_budget: int = 12
+    world_budget: int = Field(default=12, ge=1, le=200)
     failure_predicates: list[str] = Field(default_factory=lambda: ["sharpe_below_0"])
     data_source: DataSourceRequest | None = None
-    idempotency_key: str
+    idempotency_key: str = Field(min_length=1, max_length=255)
+
+
+class ProjectCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=120)
 
 
 # ---------------------------------------------------------------------------
@@ -213,12 +219,40 @@ class CampaignResponse(BaseModel):
     strategy_version: int
     canonical_hash: str
     evaluated_worlds: int
+    requested_worlds: int = 0
+    predicate_failures: int = 0
+    evaluation_errors: int = 0
+    error_rate: float = 0.0
+    errors_by_mechanism: dict[str, int] = Field(default_factory=dict)
     confirmed_failures: list[FailureRecord]
     failure_rate_by_mechanism: dict[str, float]
     minimization: MinimizationRecord | None
     adjacent_pass: AdjacentPassRecord | None
     warnings: list[str]
     artifact_references: list[dict[str, Any]]
+
+
+class PredicateResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    metric: str
+    operator: str
+    threshold: Decimal
+    value: Decimal
+    passed: bool  # False == the failure predicate is satisfied (strategy failed)
+    failed: bool  # True == the failure predicate is satisfied (strategy failed)
+
+
+class ConfirmationPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    required_successes: int
+    total_trials: int
+    independent_seeds: list[int] = Field(default_factory=list)
+
+
+class ScenarioMechanism(str, Enum):  # noqa: UP042  (str-enum for clean serialization)
+    DRAWDOWN = "drawdown"
+    VOL_SPIKE = "vol_spike"
+    CORRELATION_BREAKDOWN = "correlation_breakdown"
 
 
 class ProjectCreatedResponse(BaseModel):
@@ -262,6 +296,9 @@ __all__ = [
     "MinimizationRecord",
     "AdjacentPassRecord",
     "CampaignResponse",
+    "PredicateResult",
+    "ConfirmationPolicy",
+    "ScenarioMechanism",
     "AuditRecord",
     "ProjectCreatedResponse",
 ]

@@ -54,6 +54,24 @@ class StrategyExecutionContext:
 
 
 @dataclass(frozen=True)
+class HistoryRequirements:
+    """Executor-declared minimum history for a given spec (Phase 2.6 section 7).
+
+    ``min_decision_bars`` and ``min_execution_bars`` are the total contiguous
+    valid bars required (so a momentum window of 252 + skip 21 + 1 execution bar
+    is expressed exactly, not as a fuzzy total). ``contiguous_valid_bars`` is the
+    per-symbol minimum of correctly ordered, finite history. ``signal_reason`` /
+    ``execution_reason`` are human-readable labels for structured 422 payloads.
+    """
+
+    min_decision_bars: int
+    min_execution_bars: int
+    contiguous_valid_bars: int
+    signal_reason: str = ""
+    execution_reason: str = ""
+
+
+@dataclass(frozen=True)
 class TargetPlan:
     """The output of an executor: desired portfolio weights over time.
 
@@ -91,6 +109,10 @@ class StrategyExecutor(Protocol):
         context: StrategyExecutionContext,
     ) -> TargetPlan:
         """Compute the T x N target-weight plan for this spec + data context."""
+        ...
+
+    def minimum_history_requirements(self, spec: StrategySpec) -> HistoryRequirements:
+        """Declare the minimum history this executor needs for ``spec``."""
         ...
 
 

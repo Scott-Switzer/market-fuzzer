@@ -18,8 +18,13 @@ from __future__ import annotations
 import numpy as np
 
 from app.domain.strategy_spec import StrategyType
-from app.strategies.contracts import StrategyExecutionContext, TargetPlan, ValidationIssue
-from app.strategies.executors._base import tradable_mask
+from app.strategies.contracts import (
+    HistoryRequirements,
+    StrategyExecutionContext,
+    TargetPlan,
+    ValidationIssue,
+)
+from app.strategies.executors._base import signal_lookback_bars, tradable_mask
 from app.strategies.executors.cross_sectional_factor import _stable_desc_order
 from app.strategies.schedules import decision_mask
 from app.strategies.signals import simple_moving_average, total_return
@@ -70,6 +75,17 @@ class TacticalAllocationExecutor:
                 )
             )
         return issues
+
+    def minimum_history_requirements(self, spec) -> HistoryRequirements:  # noqa: ANN001
+        lookback, trend, _top_k, _fb = self._params(spec)
+        warm = max(int(lookback), int(trend)) + 1
+        return HistoryRequirements(
+            min_decision_bars=warm,
+            min_execution_bars=warm + 1,
+            contiguous_valid_bars=warm + 1,
+            signal_reason=f"requires {lookback}-bar ranking and {trend}-bar trend history + 1 execution bar",
+            execution_reason="need the warmup bar and the following open to fill",
+        )
 
     def build_targets(self, spec, context: StrategyExecutionContext) -> TargetPlan:  # noqa: ANN001
         close = context.close

@@ -11,7 +11,12 @@ from __future__ import annotations
 import numpy as np
 
 from app.domain.strategy_spec import StrategyType
-from app.strategies.contracts import StrategyExecutionContext, TargetPlan, ValidationIssue
+from app.strategies.contracts import (
+    HistoryRequirements,
+    StrategyExecutionContext,
+    TargetPlan,
+    ValidationIssue,
+)
 from app.strategies.schedules import decision_mask
 
 
@@ -41,6 +46,15 @@ class StaticAllocationExecutor:
                     )
                 )
         return issues
+
+    def minimum_history_requirements(self, spec) -> HistoryRequirements:  # noqa: ANN001
+        return HistoryRequirements(
+            min_decision_bars=1,
+            min_execution_bars=2,  # decision bar + next valid open
+            contiguous_valid_bars=2,
+            signal_reason="static allocation has no lookback signal",
+            execution_reason="need a decision bar and the following open to fill",
+        )
 
     def build_targets(self, spec, context: StrategyExecutionContext) -> TargetPlan:  # noqa: ANN001
         T, N = context.close.shape
