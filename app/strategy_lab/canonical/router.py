@@ -134,7 +134,7 @@ def backtest_endpoint(body: BacktestRequest, session: DbSession) -> BacktestResp
             strategy_version=body.strategy_version,
             expected_canonical_hash=body.expected_canonical_hash,
             data_source=body.data_source.model_dump(mode="python"),
-            project_id=body.strategy_id,
+            project_id=None,
             initial_capital=body.initial_capital,
             idempotency_key=body.idempotency_key,
         )
@@ -159,8 +159,8 @@ def campaign_endpoint(body: CampaignRequest, session: DbSession) -> CampaignResp
             mechanism_families=body.mechanism_families,
             seed_list=body.seed_list,
             world_budget=body.world_budget,
-            failure_predicates=body.failure_predicates,
-            project_id=body.strategy_id,
+            failure_predicates=[p.model_dump(mode="json") for p in body.failure_predicates],
+            project_id=None,
             baseline_run_id=body.baseline_run_id,
             data_source=body.data_source.model_dump(mode="python") if body.data_source else None,
             idempotency_key=body.idempotency_key,
@@ -171,6 +171,7 @@ def campaign_endpoint(body: CampaignRequest, session: DbSession) -> CampaignResp
         raise _err(409, exc) from exc
     except (BaselineMismatchError, CanonicalError) as exc:
         raise _err(422, exc) from exc
+
 
 @router.get("/runs/{run_id}", response_model=dict)
 def get_run(run_id: str, session: DbSession) -> dict:
@@ -272,9 +273,7 @@ def get_failure(failure_id: str, session: DbSession) -> dict:
 
     from app.persistence.models import WorldEvaluationRow
 
-    ev = session.scalar(
-        select(WorldEvaluationRow).where(WorldEvaluationRow.id == failure_id)
-    )
+    ev = session.scalar(select(WorldEvaluationRow).where(WorldEvaluationRow.id == failure_id))
     if ev is None:
         raise HTTPException(404, "failure not found")
     return {

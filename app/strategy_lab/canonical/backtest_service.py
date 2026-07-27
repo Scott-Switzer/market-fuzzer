@@ -35,7 +35,13 @@ from app.strategy_lab.canonical.errors import HashMismatchError
 
 
 def load_backtest_result(session, run_id: str) -> BacktestResponse:
-    """Reconstruct the typed response from persisted artifacts (idempotent replay)."""
+    """Return the EXACT original response persisted at completion (replay).
+
+    Verifies artifact integrity, then loads ``runs/{id}/response.json`` — the
+    verbatim response stored when the run completed — so a replay is
+    semantically identical to the original (Phase 2.6.1 gate 6). A run without
+    a persisted response is a failed/incomplete run and is rejected.
+    """
     from app.persistence.repositories import RunRepository
 
     run = RunRepository(session).get(run_id)
@@ -45,47 +51,14 @@ def load_backtest_result(session, run_id: str) -> BacktestResponse:
         raise HTTPException(404, "run not found")
     store = get_default_store()
     verify_artifacts(session, store=store, run_id=run_id)
-    manifest = _read_json(store, f"runs/{run_id}/result-manifest.json") or {}
-    metrics = _read_json(store, f"runs/{run_id}/metrics.json") or {}
-    equity = _read_json(store, f"runs/{run_id}/equity-curve.json") or {}
-    trades = _read_json(store, f"runs/{run_id}/trades.json") or {}
-    prov = _read_json(store, f"runs/{run_id}/data-provenance.json") or {}
-    cost = _read_json(store, f"runs/{run_id}/cost-summary.json") or {}
-    exposures = _read_json(store, f"runs/{run_id}/exposures.json") or {}
-    data_prov = DataSourceProvenance.model_validate(prov) if prov else DataSourceProvenance(
-        source="unknown", source_name="unknown", requested_symbols=[], returned_symbols=[],
-        benchmark=None, start_date=None, end_date=None, retrieval_timestamp=None,
-        adjustment_policy="", calendar_policy="", missing_data_policy="",
-        coverage_by_symbol={}, warnings=[], content_digest=None,
-    )
-    eq_list = equity.get("equity", [0.0, 1.0])
-    return BacktestResponse(
-        api_version="v2",
-        run_id=run.id,
-        job_id=run.id,
-        strategy_id=run.strategy_id,
-        strategy_version=run.strategy_version,
-        canonical_hash=run.strategy_hash,
-        status="completed",
-        metrics=metrics,
-        benchmark_metrics=None,
-        equity_summary={
-            "initial_capital": equity.get("initial_capital", 0.0),
-            "final_equity": eq_list[-1],
-            "cumulative_return": (eq_list[-1] / eq_list[0] - 1) if eq_list[0] else 0.0,
-        },
-        trade_summary={"num_trades": len(trades or []), "sample": (trades or [])[:5]},
-        exposure_summary={
-            "final_gross": exposures.get("gross", [None])[-1],
-            "final_net": exposures.get("net", [None])[-1],
-        },
-        turnover=None,
-        cost_summary=cost,
-        warnings=[],
-        reasons_to_distrust=[],
-        data_provenance=data_prov,
-        artifact_references=manifest.get("artifacts", []),
-    )
+    stored = _read_json(store, f"runs/{run_id}/response.json")
+    if stored is None:
+        from app.strategy_lab.canonical.errors import ArtifactIntegrityError
+
+        raise ArtifactIntegrityError(
+            f"run {run_id} has no persisted response (status={run.status}); cannot replay"
+        )
+    return BacktestResponse.model_validate(stored)
 
 
 def _read_json(store, key):
@@ -125,11 +98,20 @@ def run_backtest(
     strategy_version: int,
     expected_canonical_hash: str,
     data_source: dict,
-    project_id: str,
+    project_id: str | None = None,
     initial_capital: Decimal = Decimal("1000000"),
     idempotency_key: str,
 ) -> BacktestResponse:
     from app.persistence.models import Strategy
+
+    # Resolve the ACTUAL owning project first (Phase 2.6.1 gate 5): idempotency
+    # is scoped to the project, never to the strategy id.
+    strat_row = session.get(Strategy, strategy_id)
+    if strat_row is None:
+        raise HashMismatchError(f"unknown strategy {strategy_id}")
+    owning_project = strat_row.project_id
+    if project_id is not None and project_id != owning_project:
+        raise HashMismatchError("strategy does not belong to the requested project")
 
     # Idempotency: reserve (scope, project, key). Same key + same request -> replay.
     from app.strategy_lab.canonical.durable import reserve_idempotency
@@ -142,10 +124,23 @@ def run_backtest(
         "initial_capital": str(initial_capital),
     }
     ir = reserve_idempotency(
-        session, scope="backtest", project_id=project_id, idempotency_key=idempotency_key,
-        request_payload=request_payload, resource_type="run", resource_id="", response_json={},
+        session,
+        scope="backtest",
+        project_id=owning_project,
+        idempotency_key=idempotency_key,
+        request_payload=request_payload,
+        resource_type="run",
+        resource_id="",
+        response_json={},
     )
     if ir.resource_id:
+        # Replay MUST be semantically identical to the original response
+        # (Phase 2.6.1 gate 6): return the stored response verbatim after
+        # re-verifying artifact integrity.
+        store = get_default_store()
+        verify_artifacts(session, store=store, run_id=ir.resource_id)
+        if ir.response_json:
+            return BacktestResponse.model_validate(ir.response_json)
         return load_backtest_result(session, ir.resource_id)
 
     repo = StrategyRepository(session)
@@ -154,8 +149,6 @@ def run_backtest(
         raise HashMismatchError(f"no approved version {strategy_id} v{strategy_version}")
     if not approved.verify():
         raise HashMismatchError("stored approved version failed verification")
-    strat_row = session.get(Strategy, strategy_id)
-    owning_project = strat_row.project_id if strat_row is not None else project_id
 
     spec = approved.to_spec()
     stored_hash = approved.canonical_hash
@@ -213,9 +206,16 @@ def run_backtest(
     from app.strategy_lab.canonical.durable import set_idempotency_resource
 
     set_idempotency_resource(
-        session, scope="backtest", project_id=project_id, idempotency_key=idempotency_key,
-        resource_type="run", resource_id=run.id,
+        session,
+        scope="backtest",
+        project_id=owning_project,
+        idempotency_key=idempotency_key,
+        resource_type="run",
+        resource_id=run.id,
     )
+    # Durability checkpoint (Phase 2.6.1 gate 2): the reservation + pending
+    # run/job MUST survive an execution crash, so commit BEFORE executing.
+    session.commit()
 
     store = get_default_store()
     artifact_index: list[dict[str, Any]] = []
@@ -230,7 +230,9 @@ def run_backtest(
 
         eq = np.asarray(result.equity_curve, dtype=float)
         turnover_last = float(np.asarray(result.turnover)[-1]) if result.turnover is not None else None
-        gross_last = float(np.asarray(result.gross_exposure)[-1]) if result.gross_exposure is not None else None
+        gross_last = (
+            float(np.asarray(result.gross_exposure)[-1]) if result.gross_exposure is not None else None
+        )
         net_last = float(np.asarray(result.net_exposure)[-1]) if result.net_exposure is not None else None
         n_trades = len(result.trades)
 
@@ -243,28 +245,86 @@ def run_backtest(
             }
 
         # --- persist complete artifacts (atomic before success) ---
-        write_artifact(session, store=store, run_id=run.id, key=f"runs/{run.id}/request.json",
-                       payload=data_source, artifact_index=artifact_index)
-        write_artifact(session, store=store, run_id=run.id, key=f"runs/{run.id}/approved-strategy.json",
-                       payload=spec.full_json(), artifact_index=artifact_index)
-        write_artifact(session, store=store, run_id=run.id, key=f"runs/{run.id}/data-provenance.json",
-                       payload=prov.model_dump(mode="json"), artifact_index=artifact_index)
-        write_artifact(session, store=store, run_id=run.id, key=f"runs/{run.id}/metrics.json",
-                       payload=result.metrics, artifact_index=artifact_index)
-        write_artifact(session, store=store, run_id=run.id, key=f"runs/{run.id}/equity-curve.json",
-                       payload={"dates": result.dates, "equity": eq.tolist(), "initial_capital": float(initial_capital)},
-                       artifact_index=artifact_index)
-        write_artifact(session, store=store, run_id=run.id, key=f"runs/{run.id}/trades.json",
-                       payload=result.trades, artifact_index=artifact_index)
-        write_artifact(session, store=store, run_id=run.id, key=f"runs/{run.id}/exposures.json",
-                       payload={
-                           "dates": result.dates,
-                           "gross": np.asarray(result.gross_exposure).tolist(),
-                           "net": np.asarray(result.net_exposure).tolist(),
-                       },
-                       artifact_index=artifact_index)
-        write_artifact(session, store=store, run_id=run.id, key=f"runs/{run.id}/cost-summary.json",
-                       payload=result.cost_summary, artifact_index=artifact_index)
+        write_artifact(
+            session,
+            store=store,
+            run_id=run.id,
+            key=f"runs/{run.id}/request.json",
+            payload=data_source,
+            artifact_index=artifact_index,
+        )
+        # Exact input panel (Phase 2.6.1 gate 7): campaigns replay against THIS
+        # persisted panel, not a re-acquired one.
+        from app.strategy_lab.canonical.data_service import panel_to_dict
+
+        write_artifact(
+            session,
+            store=store,
+            run_id=run.id,
+            key=f"runs/{run.id}/input-panel.json",
+            payload=panel_to_dict(panel),
+            artifact_index=artifact_index,
+        )
+        write_artifact(
+            session,
+            store=store,
+            run_id=run.id,
+            key=f"runs/{run.id}/approved-strategy.json",
+            payload=spec.full_json(),
+            artifact_index=artifact_index,
+        )
+        write_artifact(
+            session,
+            store=store,
+            run_id=run.id,
+            key=f"runs/{run.id}/data-provenance.json",
+            payload=prov.model_dump(mode="json"),
+            artifact_index=artifact_index,
+        )
+        write_artifact(
+            session,
+            store=store,
+            run_id=run.id,
+            key=f"runs/{run.id}/metrics.json",
+            payload=result.metrics,
+            artifact_index=artifact_index,
+        )
+        write_artifact(
+            session,
+            store=store,
+            run_id=run.id,
+            key=f"runs/{run.id}/equity-curve.json",
+            payload={"dates": result.dates, "equity": eq.tolist(), "initial_capital": float(initial_capital)},
+            artifact_index=artifact_index,
+        )
+        write_artifact(
+            session,
+            store=store,
+            run_id=run.id,
+            key=f"runs/{run.id}/trades.json",
+            payload=result.trades,
+            artifact_index=artifact_index,
+        )
+        write_artifact(
+            session,
+            store=store,
+            run_id=run.id,
+            key=f"runs/{run.id}/exposures.json",
+            payload={
+                "dates": result.dates,
+                "gross": np.asarray(result.gross_exposure).tolist(),
+                "net": np.asarray(result.net_exposure).tolist(),
+            },
+            artifact_index=artifact_index,
+        )
+        write_artifact(
+            session,
+            store=store,
+            run_id=run.id,
+            key=f"runs/{run.id}/cost-summary.json",
+            payload=result.cost_summary,
+            artifact_index=artifact_index,
+        )
 
         manifest = {
             "schema_version": "result-manifest/v1",
@@ -283,8 +343,14 @@ def run_backtest(
             ],
             "artifacts": artifact_index,
         }
-        write_artifact(session, store=store, run_id=run.id, key=f"runs/{run.id}/result-manifest.json",
-                       payload=manifest, artifact_index=artifact_index)
+        write_artifact(
+            session,
+            store=store,
+            run_id=run.id,
+            key=f"runs/{run.id}/result-manifest.json",
+            payload=manifest,
+            artifact_index=artifact_index,
+        )
 
         _mark_run_stage(session, RunRepository, run.id, RunStage.HISTORICAL_BACKTEST)
         _mark_run_stage(session, RunRepository, run.id, RunStage.CALCULATE_METRICS)
@@ -294,7 +360,7 @@ def run_backtest(
         job.result_ref = run.id
         session.flush()
 
-        return BacktestResponse(
+        response = BacktestResponse(
             api_version="v2",
             run_id=run.id,
             job_id=job.id,
@@ -318,21 +384,52 @@ def run_backtest(
             data_provenance=DataSourceProvenance.model_validate(prov.model_dump(mode="json")),
             artifact_references=artifact_index,
         )
-    except Exception as exc:  # compensating transaction: persist FAILED run/job
-        run.status = RunStatus.FAILED.value
-        job.state = JobState.FAILED.value
-        job.failure = {
-            "code": "backtest_execution_error",
-            "message": str(exc),
-            "retryable": False,
-        }
-        job.progress = 1.0
+        # Persist the EXACT response for identical replay (gate 6): both on the
+        # idempotency record (fast path) and as a durable artifact (restart-safe).
+        ir.response_json = response.model_dump(mode="json")
+        write_artifact(
+            session,
+            store=store,
+            run_id=run.id,
+            key=f"runs/{run.id}/response.json",
+            payload=ir.response_json,
+            artifact_index=[],  # not part of the response's own reference list
+        )
         session.flush()
+        return response
+    except Exception as exc:
+        # Persist the FAILED lifecycle in a SEPARATE transaction so the
+        # request-scoped rollback cannot erase it (Phase 2.6.1 gate 3).
+        session.rollback()
+        _persist_failed_lifecycle(session, run.id, job.id, exc)
         raise
+
+
+def _persist_failed_lifecycle(session, run_id: str, job_id: str, exc: Exception) -> None:
+    """Persist FAILED run/job in a SEPARATE transaction (survives the request
+    rollback). The pending rows were committed before execution began."""
+    from app.persistence.models import JobRow, RunRow
+
+    try:
+        run = session.get(RunRow, run_id)
+        job = session.get(JobRow, job_id)
+        if run is not None:
+            run.status = RunStatus.FAILED.value
+        if job is not None:
+            job.state = JobState.FAILED.value
+            job.failure_json = {
+                "code": "backtest_execution_error",
+                "message": str(exc),
+                "retryable": False,
+            }
+            job.progress = 1.0
+        session.commit()
+    except Exception:  # pragma: no cover - best-effort failure persistence
+        session.rollback()
 
 
 def _mark_run_stage(session, RunRepo, run_id: str, stage: RunStage) -> None:
     RunRepo(session).mark_stage(run_id, stage)
 
 
-__all__ = ["run_backtest"]
+__all__ = ["run_backtest", "load_backtest_result"]

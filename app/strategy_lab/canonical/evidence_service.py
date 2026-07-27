@@ -36,14 +36,23 @@ def build_audit_record(
     if not approved.verify():
         raise HashMismatchError("stored approved version failed verification")
 
-    # Compiler version is the REAL one from the installed package metadata,
-    # never hard-coded (Phase 2.6 section 9).
-    import importlib.metadata as _md
+    # Validate a supplied project ALWAYS (independent of run), fail-closed
+    # (Phase 2.6.1 gate 12): the approved strategy must belong to the project.
+    if project_id is not None:
+        from app.persistence.models import Strategy
 
-    try:
-        compiler_label = _md.version("synthetic-market-world")
-    except _md.PackageNotFoundError:
-        compiler_label = "unknown"
+        strat = session.get(Strategy, strategy_id)
+        if strat is None:
+            raise ResourceNotFoundError(f"strategy {strategy_id} not found")
+        if strat.project_id != project_id:
+            raise HashMismatchError("strategy does not belong to the requested project")
+
+    # Compiler version is the ACTUAL compiler version used during compilation
+    # (recorded in app.compiler.COMPILER_VERSION), NOT the installed package
+    # distribution version (Phase 2.6.1 gate 12).
+    from app.compiler import COMPILER_VERSION
+
+    compiler_label = COMPILER_VERSION
 
     # --- verify parent/child relationships (fail-closed) ---
     run_row = None
@@ -55,14 +64,24 @@ def build_audit_record(
             raise HashMismatchError("run does not belong to this approved strategy version")
         if project_id is not None and run_row.project_id != project_id:
             raise HashMismatchError("run does not belong to the requested project")
+        # Compare the run's recorded canonical hash with the approved hash.
+        if run_row.strategy_hash != approved.canonical_hash:
+            raise HashMismatchError("run canonical hash does not match the approved strategy hash")
 
     campaign_row = None
     if campaign_id is not None:
         campaign_row = session.get(CampaignRow, campaign_id)
         if campaign_row is None:
             raise ResourceNotFoundError(f"campaign {campaign_id} not found")
-        if campaign_row.strategy_id != approved.strategy_id or campaign_row.strategy_version != approved.version:
+        if (
+            campaign_row.strategy_id != approved.strategy_id
+            or campaign_row.strategy_version != approved.version
+        ):
             raise HashMismatchError("campaign does not belong to this approved strategy version")
+        if campaign_row.strategy_hash != approved.canonical_hash:
+            raise HashMismatchError("campaign canonical hash does not match the approved strategy hash")
+        if project_id is not None and campaign_row.project_id != project_id:
+            raise HashMismatchError("campaign does not belong to the requested project")
         if run_row is not None and campaign_row.run_id != run_row.id:
             raise HashMismatchError("campaign does not reference the requested run")
 
@@ -80,25 +99,42 @@ def build_audit_record(
     # --- actual data content digest + artifact hashes ---
     data_digest = None
     artifact_hashes: list[str] = []
+    audit_run_id = None
     if run_row is not None:
+        audit_run_id = run_row.id
+    elif campaign_row is not None:
+        audit_run_id = campaign_row.run_id
+    if audit_run_id is not None:
         store = get_default_store()
         try:
-            verified = verify_artifacts(session, store=store, run_id=run_row.id)
+            verified = verify_artifacts(session, store=store, run_id=audit_run_id)
         except ArtifactIntegrityError as exc:
             raise HashMismatchError(f"artifact integrity error: {exc}") from exc
         artifact_hashes = [a["sha256"] for a in verified]
-        manifest = store.get(f"runs/{run_row.id}/result-manifest.json")
+        manifest = store.get(f"runs/{audit_run_id}/result-manifest.json")
         if manifest is not None:
             import json as _json
 
             data_digest = _json.loads(manifest).get("data_content_digest")
+        elif campaign_row is not None:
+            data_digest = campaign_row.base_panel_digest
 
-    limitations = [
-        "Synthetic campaign results are bar-level scenario replays, not order-book event streams.",
-        "Historical panel may be deterministic fixture; label accordingly.",
-    ]
-    if approved.canonical_json is not None:
-        pass  # digest of actual content handled by provenance at run time
+    # Limitations reflect the ACTUAL data mode of the audited resource, not a
+    # generic constant (Phase 2.6.1 gate 12).
+    limitations: list[str] = []
+    if campaign_row is not None:
+        limitations.append(
+            "Synthetic campaign results are bar-level scenario replays, not order-book event streams."
+        )
+    if run_row is not None:
+        if run_row.data_mode in ("demo_fixture", "deterministic_fixture"):
+            limitations.append("Historical panel is a deterministic fixture; not real market data.")
+        elif run_row.data_mode == "yfinance":
+            limitations.append("Historical panel is yfinance data (research/educational; adjusted).")
+        else:
+            limitations.append(f"Historical panel data mode: {run_row.data_mode}.")
+    if not limitations:
+        limitations.append("Approved-strategy audit only; no run or campaign artifacts attached.")
 
     return AuditRecord(
         api_version="v2",

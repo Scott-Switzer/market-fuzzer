@@ -54,6 +54,7 @@ from app.strategy_lab.canonical.errors import (
 )
 from app.strategy_lab.canonical.predicates import (
     FailurePredicate,
+    describe_predicate,
     evaluate_predicates,
     parse_predicates,
     predicates_failed,
@@ -62,6 +63,7 @@ from app.strategy_lab.canonical.scenarios import (
     ScenarioDefinition,
     assert_panel_invariants,
     generate_scenario,
+    stable_seed,
 )
 from app.strategy_lab.submission.panels import MarketDataPanel
 
@@ -121,12 +123,22 @@ def run_campaign(
     mechanism_families: list[str],
     seed_list: list[int],
     world_budget: int,
-    failure_predicates: list[str],
-    project_id: str,
+    failure_predicates: list[dict[str, Any]],
+    project_id: str | None = None,
     baseline_run_id: str | None = None,
     data_source: dict | None = None,
     idempotency_key: str,
 ) -> CampaignResponse:
+    from app.persistence.models import Strategy
+
+    # Resolve the ACTUAL owning project first (Phase 2.6.1 gate 5).
+    strat_row = session.get(Strategy, strategy_id)
+    if strat_row is None:
+        raise HashMismatchError(f"unknown strategy {strategy_id}")
+    owning_project = strat_row.project_id
+    if project_id is not None and project_id != owning_project:
+        raise HashMismatchError("strategy does not belong to the requested project")
+
     # Idempotency: reserve (scope, project, key). Same key + same request -> replay.
     from app.strategy_lab.canonical.durable import reserve_idempotency
 
@@ -141,10 +153,19 @@ def run_campaign(
         "baseline_run_id": baseline_run_id,
     }
     ir = reserve_idempotency(
-        session, scope="campaign", project_id=project_id, idempotency_key=idempotency_key,
-        request_payload=request_payload, resource_type="campaign", resource_id="", response_json={},
+        session,
+        scope="campaign",
+        project_id=owning_project,
+        idempotency_key=idempotency_key,
+        request_payload=request_payload,
+        resource_type="campaign",
+        resource_id="",
+        response_json={},
     )
     if ir.resource_id:
+        # Identical replay (Phase 2.6.1 gate 6): return the stored response verbatim.
+        if ir.response_json:
+            return CampaignResponse.model_validate(ir.response_json)
         return load_campaign_result(session, ir.resource_id)
 
     repo = StrategyRepository(session)
@@ -156,18 +177,17 @@ def run_campaign(
     if approved.canonical_hash != expected_canonical_hash:
         raise HashMismatchError("request hash != stored approved hash")
 
-    from app.persistence.models import Strategy
-
-    strat_row = session.get(Strategy, strategy_id)
-    owning_project = strat_row.project_id if strat_row is not None else project_id
-
     spec = approved.to_spec()
     predicates = parse_predicates(failure_predicates)
     from app.strategy_lab.canonical.scenarios import validate_mechanisms
 
     validate_mechanisms(mechanism_families)
 
-    ds = data_source or {"source": "demo_fixture", "universe": list(spec.universe), "benchmark": spec.benchmark}
+    ds = data_source or {
+        "source": "demo_fixture",
+        "universe": list(spec.universe),
+        "benchmark": spec.benchmark,
+    }
     base_panel, _prov = acquire_panel(
         source=ds.get("source", "demo_fixture"),
         universe=ds.get("universe", list(spec.universe)),
@@ -182,6 +202,8 @@ def run_campaign(
     base_digest = _prov.content_digest
 
     # Baseline linkage: validate exists + same project/version/hash (Phase 2.6 D14).
+    # When present, replay against the baseline's EXACT persisted input panel
+    # (Phase 2.6.1 gate 7), not a freshly re-acquired one.
     baseline_run = None
     if baseline_run_id is not None:
         baseline_run = RunRepository(session).get(baseline_run_id)
@@ -191,10 +213,24 @@ def run_campaign(
             raise BaselineMismatchError("baseline run belongs to a different strategy version")
         if baseline_run.strategy_hash != expected_canonical_hash:
             raise BaselineMismatchError("baseline run hash does not match the requested strategy")
+        from app.strategy_lab.canonical.data_service import panel_from_dict
 
+        panel_payload = _read_json(get_default_store(), f"runs/{baseline_run_id}/input-panel.json")
+        if panel_payload is None:
+            raise BaselineMismatchError(
+                f"baseline run {baseline_run_id} has no persisted input panel; cannot replay"
+            )
+        base_panel = panel_from_dict(panel_payload)
+        enforce_bounds(base_panel)
+        check_required_history(spec, base_panel)
+
+    # Confirmation policy: total_trials MUST equal the number of confirmation
+    # trials actually executed per confirmed primary (one per seed in seed_list);
+    # required_successes is a strict majority of those trials (Phase 2.6.1 gate 11).
+    n_trials = len(seed_list)
     confirmation_policy = ConfirmationPolicy(
-        required_successes=2,
-        total_trials=3,
+        required_successes=(n_trials // 2) + 1 if n_trials else 0,
+        total_trials=n_trials,
         independent_seeds=list(seed_list),
     )
 
@@ -233,17 +269,71 @@ def run_campaign(
     from app.strategy_lab.canonical.durable import set_idempotency_resource
 
     set_idempotency_resource(
-        session, scope="campaign", project_id=project_id, idempotency_key=idempotency_key,
-        resource_type="campaign", resource_id=campaign.id,
+        session,
+        scope="campaign",
+        project_id=owning_project,
+        idempotency_key=idempotency_key,
+        resource_type="campaign",
+        resource_id=campaign.id,
     )
 
-    # Mark running and commit (durable even though synchronous).
+    # Mark running and commit BEFORE execution so the reservation + pending
+    # campaign/run/job survive an execution crash (Phase 2.6.1 gate 2).
     _mark_run_stage(session, RunRepository, run.id, RunStage.STRESS_CAMPAIGN)
     job.state = JobState.RUNNING.value
     job.progress = 0.1
     session.flush()
+    session.commit()
 
     evaluator_intensities = [0.10, 0.20, 0.35, 0.50, 0.65]
+
+    try:
+        return _execute_campaign_body(
+            session,
+            ir=ir,
+            run=run,
+            job=job,
+            campaign=campaign,
+            approved=approved,
+            base_panel=base_panel,
+            predicates=predicates,
+            expected_canonical_hash=expected_canonical_hash,
+            strategy_id=strategy_id,
+            strategy_version=strategy_version,
+            mechanism_families=mechanism_families,
+            seed_list=seed_list,
+            world_budget=world_budget,
+            failure_predicates=failure_predicates,
+            confirmation_policy=confirmation_policy,
+            evaluator_intensities=evaluator_intensities,
+        )
+    except Exception as exc:
+        # Persist FAILED lifecycle in a SEPARATE transaction (gate 3).
+        session.rollback()
+        _persist_failed_lifecycle(session, run.id, job.id, exc)
+        raise
+
+
+def _execute_campaign_body(
+    session,
+    *,
+    ir,
+    run,
+    job,
+    campaign,
+    approved,
+    base_panel,
+    predicates,
+    expected_canonical_hash,
+    strategy_id,
+    strategy_version,
+    mechanism_families,
+    seed_list,
+    world_budget,
+    failure_predicates,
+    confirmation_policy,
+    evaluator_intensities,
+):
     confirmed: list[FailureRecord] = []
     rate_by_mechanism: dict[str, float] = {}
     errors_by_mechanism: dict[str, int] = {}
@@ -265,7 +355,7 @@ def run_campaign(
                 world_key = f"{mechanism}:seed{seed}:i{int(intensity * 100)}"
                 definition = ScenarioDefinition(
                     mechanism=mechanism,
-                    seed=seed,
+                    seed=stable_seed(mechanism, seed, int(intensity * 1000)),
                     intensity=Decimal(str(intensity)),
                     start_index=max(0, base_panel.T // 2),
                     duration=max(1, base_panel.T // 4),
@@ -286,7 +376,9 @@ def run_campaign(
                 session.add(world_row)
                 session.flush()
 
-                ev = _evaluate_world(approved, base_panel, definition, predicates, expected_canonical_hash, role="primary")
+                ev = _evaluate_world(
+                    approved, base_panel, definition, predicates, expected_canonical_hash, role="primary"
+                )
                 world_eval = WorldEvaluationRow(
                     id=str(uuid.uuid4()),
                     campaign_id=campaign.id,
@@ -315,12 +407,14 @@ def run_campaign(
                 for cseed in confirmation_policy.independent_seeds:
                     cdef = ScenarioDefinition(
                         mechanism=mechanism,
-                        seed=cseed * 7919 + seed,
+                        seed=stable_seed(mechanism, seed, cseed, int(intensity * 1000), "confirm"),
                         intensity=Decimal(str(intensity)),
                         start_index=definition.start_index,
                         duration=definition.duration,
                     )
-                    cev = _evaluate_world(approved, base_panel, cdef, predicates, expected_canonical_hash, role="confirmation")
+                    cev = _evaluate_world(
+                        approved, base_panel, cdef, predicates, expected_canonical_hash, role="confirmation"
+                    )
                     cworld = generate_scenario(base_panel, cdef)
                     cworld_row = ScenarioWorldRow(
                         id=cworld.scenario_id,
@@ -363,7 +457,7 @@ def run_campaign(
                             strategy_id=strategy_id,
                             strategy_version=strategy_version,
                             canonical_hash=expected_canonical_hash,
-                            predicate="|".join(failure_predicates),
+                            predicate="|".join(describe_predicate(p) for p in predicates),
                             metrics=ev["metrics"],
                         )
                     )
@@ -376,20 +470,51 @@ def run_campaign(
     if confirmed:
         best = min(confirmed, key=lambda f: float(f.parameters["intensity"]))
         min_val = float(best.parameters["intensity"])
+        # Load the EXACT original scenario definition for the confirmed failure;
+        # minimization varies ONLY intensity, keeping mechanism/seed/start/
+        # duration/params identical (Phase 2.6.1 gate 9).
+        best_world = session.get(ScenarioWorldRow, best.world_id)
+        base_def = ScenarioDefinition(
+            mechanism=best_world.mechanism,
+            # Use the EXACT seed recorded in the evaluated definition (the
+            # derived world seed), not the raw request seed column.
+            seed=int(best_world.definition["seed"]),
+            intensity=Decimal(str(min_val)),
+            start_index=int(best_world.definition["start_index"]),
+            duration=int(best_world.definition["duration"]),
+            parameters={k: Decimal(str(v)) for k, v in best_world.definition.get("parameters", {}).items()},
+        )
         passing_val = _minimize(
-            session, campaign, best, approved, base_panel, predicates, expected_canonical_hash, min_val
+            session,
+            campaign,
+            best,
+            approved,
+            base_panel,
+            predicates,
+            expected_canonical_hash,
+            min_val,
+            base_def,
         )
         monotone = _is_monotone(session, campaign.id, best.failure_id)
         minimization = MinimizationRecord(
             dimension="intensity",
-            minimized_value=min_val,
+            minimized_value=passing_val if passing_val is not None else min_val,
             passing_value=passing_val,
             monotone=monotone,
             stored_scenario_ref=best.world_id,
         )
         if passing_val is not None:
             adj = _build_adjacent_pass(
-                session, campaign, best.failure_id, best.mechanism, approved, base_panel, predicates, expected_canonical_hash, passing_val
+                session,
+                campaign,
+                best.failure_id,
+                best.mechanism,
+                approved,
+                base_panel,
+                predicates,
+                expected_canonical_hash,
+                passing_val,
+                base_def,
             )
             if adj is not None:
                 adjacent_pass = adj
@@ -424,13 +549,15 @@ def run_campaign(
         "adjacent_pass": adjacent_pass.model_dump() if adjacent_pass else None,
         "failures": [f.model_dump() for f in confirmed],
     }
-    from app.strategy_lab.canonical.durable import get_default_store
-
     store = get_default_store()
     artifact_index: list[dict[str, Any]] = []
     write_artifact(
-        session, store=store, run_id=run.id, key=f"campaigns/{campaign.id}/manifest.json",
-        payload=manifest, artifact_index=artifact_index,
+        session,
+        store=store,
+        run_id=run.id,
+        key=f"campaigns/{campaign.id}/manifest.json",
+        payload=manifest,
+        artifact_index=artifact_index,
     )
     campaign.result_manifest_key = f"campaigns/{campaign.id}/manifest.json"
 
@@ -442,7 +569,7 @@ def run_campaign(
     job.result_ref = run.id
     session.flush()
 
-    return CampaignResponse(
+    response = CampaignResponse(
         api_version="v2",
         campaign_id=campaign.id,
         strategy_id=strategy_id,
@@ -461,16 +588,35 @@ def run_campaign(
         warnings=[],
         artifact_references=artifact_index,
     )
+    # Persist the EXACT response for identical replay (Phase 2.6.1 gate 6).
+    ir.response_json = response.model_dump(mode="json")
+    session.flush()
+    return response
 
 
 def _minimize(
-    session, campaign, best, approved, base_panel, predicates, expected_hash, min_val
+    session, campaign, best, approved, base_panel, predicates, expected_hash, min_val, base_def
 ) -> float | None:
     """Bisection between a verified failing bound (min_val) and 0 (verified
-    passing). Returns the largest passing value, or None if none found."""
+    passing). Varies ONLY intensity; mechanism/seed/start/duration/params are
+    taken from ``base_def`` (Phase 2.6.1 gate 9). Returns the largest passing
+    value found, or None if none found. Also records the smallest failing value
+    tested on ``best.parameters`` for accurate minimization reporting."""
     upper_fail = min_val  # known failing
+    smallest_fail = min_val
     # confirm 0.0 passes
-    probe = _probe_one(session, campaign.id, best.failure_id, best.mechanism, approved, base_panel, predicates, expected_hash, 0.0)
+    probe = _probe_one(
+        session,
+        campaign.id,
+        best.failure_id,
+        best.mechanism,
+        approved,
+        base_panel,
+        predicates,
+        expected_hash,
+        0.0,
+        base_def,
+    )
     if probe is None:
         # 0.0 errored; cannot establish a passing bound via bisection
         return None
@@ -484,35 +630,62 @@ def _minimize(
         mid = (lo + hi) / 2.0
         if mid <= 0.0:
             break
-        ok = _probe_one(session, campaign.id, best.failure_id, best.mechanism, approved, base_panel, predicates, expected_hash, mid)
+        ok = _probe_one(
+            session,
+            campaign.id,
+            best.failure_id,
+            best.mechanism,
+            approved,
+            base_panel,
+            predicates,
+            expected_hash,
+            mid,
+            base_def,
+        )
         if ok is None:
             break  # evaluation error -> stop descending
         if ok:
             best_pass = mid
             lo = mid
         else:
+            smallest_fail = min(smallest_fail, mid)
             hi = mid
-    # persist boundary trials
+    best.parameters["smallest_tested_failing_intensity"] = smallest_fail
     return best_pass if best_pass > 0.0 else None
 
 
-def _probe_one(session, campaign_id, failure_id, mechanism, approved, base_panel, predicates, expected_hash, intensity) -> bool | None:
-    """Return True if passing, False if failing, None on evaluation error. Persists a trial."""
+def _probe_one(
+    session,
+    campaign_id,
+    failure_id,
+    mechanism,
+    approved,
+    base_panel,
+    predicates,
+    expected_hash,
+    intensity,
+    base_def,
+) -> bool | None:
+    """Return True if passing, False if failing, None on evaluation error. Persists a trial.
+
+    The scenario is IDENTICAL to ``base_def`` except for the minimized dimension
+    (intensity) (Phase 2.6.1 gate 9)."""
     from app.strategy_lab.canonical.scenarios import ScenarioDefinition
 
     defn = ScenarioDefinition(
-        mechanism=mechanism,
-        seed=abs(hash(failure_id)) % 100000,
+        mechanism=base_def.mechanism,
+        seed=base_def.seed,
         intensity=Decimal(str(intensity)),
-        start_index=0,
-        duration=max(1, base_panel.T // 4),
+        start_index=base_def.start_index,
+        duration=base_def.duration,
+        parameters=dict(base_def.parameters),
     )
     ev = _evaluate_world(approved, base_panel, defn, predicates, expected_hash, role="minimization")
     scenario = generate_scenario(base_panel, defn)
     world_row = ScenarioWorldRow(
         id=scenario.scenario_id,
         campaign_id=campaign_id,
-        world_key=f"{failure_id}:min{int(intensity*1000)}:{scenario.scenario_id[:8]}",
+        world_key=f"{failure_id}:min{int(intensity * 1000)}:{scenario.scenario_id[:8]}",
         mechanism=mechanism,
         seed=defn.seed,
         intensity=intensity,
@@ -577,16 +750,27 @@ def _is_monotone(session, campaign_id: str, failure_id: str) -> bool:
 
 
 def _build_adjacent_pass(
-    session, campaign, failure_id, mechanism, approved, base_panel, predicates, expected_hash, passing_val
+    session,
+    campaign,
+    failure_id,
+    mechanism,
+    approved,
+    base_panel,
+    predicates,
+    expected_hash,
+    passing_val,
+    base_def,
 ) -> AdjacentPassRecord | None:
     """Evaluate the adjacent (passing) case and only emit a record if EVERY
-    failure predicate is proven to pass."""
+    failure predicate is proven to pass. The scenario is IDENTICAL to the
+    confirmed failure except for the minimized intensity (gate 9)."""
     defn = ScenarioDefinition(
-        mechanism=mechanism,
-        seed=abs(hash(failure_id)) % 100000 + 13,
+        mechanism=base_def.mechanism,
+        seed=base_def.seed,
         intensity=Decimal(str(passing_val)),
-        start_index=0,
-        duration=max(1, base_panel.T // 4),
+        start_index=base_def.start_index,
+        duration=base_def.duration,
+        parameters=dict(base_def.parameters),
     )
     ev = _evaluate_world(approved, base_panel, defn, predicates, expected_hash, role="adjacent")
     if ev["outcome"] == "evaluation_error":
@@ -640,10 +824,15 @@ def _build_adjacent_pass(
 
 
 def load_campaign_result(session, campaign_id: str) -> CampaignResponse:
-    """Reconstruct the typed campaign response from persisted records (replay)."""
-    from sqlalchemy import select
+    """Reconstruct the typed campaign response from persisted records (replay).
 
-    from app.persistence.models import CampaignRow, WorldEvaluationRow
+    Prefers the persisted manifest's faithful ``failures`` list (each a full
+    ``FailureRecord`` with the ACTUAL mechanism/seed/intensity/metrics recorded
+    during evaluation) over re-deriving placeholders (Phase 2.6.1 gate 6/7).
+    Verifies the manifest artifact hash before trusting it (gate 12).
+    """
+    from app.persistence.models import CampaignRow
+    from app.strategy_lab.canonical.durable import verify_artifacts
 
     camp = session.get(CampaignRow, campaign_id)
     if camp is None:
@@ -651,35 +840,10 @@ def load_campaign_result(session, campaign_id: str) -> CampaignResponse:
 
         raise HTTPException(404, "campaign not found")
     store = get_default_store()
+    # Verify artifact integrity for the underlying run before trusting the manifest.
+    verify_artifacts(session, store=store, run_id=camp.run_id)
     manifest = _read_json(store, f"campaigns/{campaign_id}/manifest.json") or {}
-    # Reconstruct confirmed failures from primary world_evaluations.
-    primaries = (
-        session.execute(
-            select(WorldEvaluationRow).where(
-                WorldEvaluationRow.campaign_id == campaign_id,
-                WorldEvaluationRow.role == "primary",
-                WorldEvaluationRow.outcome == "failed_predicate",
-            )
-        )
-        .scalars()
-        .all()
-    )
-    confirmed = [
-        FailureRecord(
-            strategy_id=camp.strategy_id,
-            strategy_version=camp.strategy_version,
-            canonical_hash=camp.strategy_hash,
-            failure_id=p.id,
-            campaign_id=campaign_id,
-            world_id=p.world_id,
-            mechanism=p.mechanism if hasattr(p, "mechanism") else manifest.get("mechanisms", [None])[0],
-            seed=0,
-            parameters={"intensity": 0.0},
-            predicate="|".join(manifest.get("failure_predicates", [])),
-            metrics=p.metrics,
-        )
-        for p in primaries
-    ]
+    confirmed = [FailureRecord(**f) for f in manifest.get("failures", [])]
     min_raw = manifest.get("minimization")
     adj_raw = manifest.get("adjacent_pass")
     return CampaignResponse(
@@ -716,4 +880,27 @@ def _mark_run_stage(session, RunRepo, run_id: str, stage: RunStage) -> None:
     RunRepo(session).mark_stage(run_id, stage)
 
 
-__all__ = ["run_campaign"]
+def _persist_failed_lifecycle(session, run_id: str, job_id: str, exc: Exception) -> None:
+    """Persist FAILED campaign run/job in a SEPARATE transaction (survives the
+    request rollback; the pending rows were committed before execution)."""
+    from app.persistence.models import JobRow, RunRow
+
+    try:
+        run = session.get(RunRow, run_id)
+        job = session.get(JobRow, job_id)
+        if run is not None:
+            run.status = RunStatus.FAILED.value
+        if job is not None:
+            job.state = JobState.FAILED.value
+            job.failure_json = {
+                "code": "campaign_execution_error",
+                "message": str(exc),
+                "retryable": False,
+            }
+            job.progress = 1.0
+        session.commit()
+    except Exception:  # pragma: no cover - best-effort failure persistence
+        session.rollback()
+
+
+__all__ = ["run_campaign", "load_campaign_result"]

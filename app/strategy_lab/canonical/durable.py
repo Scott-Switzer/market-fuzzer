@@ -44,23 +44,30 @@ def reserve_idempotency(
     resource_id: str,
     response_json: dict,
 ) -> IdempotencyRecordRow:
-    """Reserve (or return) an idempotency record.
+    """Reserve (or return) an idempotency record. Concurrency-safe.
 
-    * key absent -> insert this record, return it.
+    * key absent -> insert this record (inside a SAVEPOINT), return it.
     * key present with the SAME digest -> return the existing record
       (caller should short-circuit and return the stored resource/response).
     * key present with a DIFFERENT digest -> raise IdempotencyConflictError (409).
+    * concurrent INSERT race -> the unique constraint fires; the losing
+      transaction rolls back ONLY the savepoint, re-selects the winner's row,
+      and applies the same digest rules (PostgreSQL-safe).
     """
     digest = canonical_digest(request_payload)
     from sqlalchemy import select
+    from sqlalchemy.exc import IntegrityError
 
-    existing = session.scalar(
-        select(IdempotencyRecordRow).where(
-            IdempotencyRecordRow.scope == scope,
-            IdempotencyRecordRow.project_id == project_id,
-            IdempotencyRecordRow.idempotency_key == idempotency_key,
+    def _select() -> IdempotencyRecordRow | None:
+        return session.scalar(
+            select(IdempotencyRecordRow).where(
+                IdempotencyRecordRow.scope == scope,
+                IdempotencyRecordRow.project_id == project_id,
+                IdempotencyRecordRow.idempotency_key == idempotency_key,
+            )
         )
-    )
+
+    existing = _select()
     if existing is not None:
         if existing.request_digest == digest:
             return existing
@@ -77,7 +84,21 @@ def reserve_idempotency(
         resource_id=resource_id,
         response_json=response_json,
     )
-    session.add(rec)
+    try:
+        with session.begin_nested():
+            session.add(rec)
+            session.flush()
+    except IntegrityError:
+        # A concurrent request inserted the same (scope, project, key) first.
+        # The savepoint rolled back only our insert; recover the winner's row.
+        winner = _select()
+        if winner is None:  # pragma: no cover - constraint fired, row must exist
+            raise
+        if winner.request_digest == digest:
+            return winner
+        raise IdempotencyConflictError(
+            f"idempotency key {idempotency_key!r} reused with a different {scope} request"
+        ) from None
     return rec
 
 
@@ -144,9 +165,7 @@ def create_pending_run(
     return run
 
 
-def create_queued_job(
-    session: Session, *, run_id: str, idempotency_key: str, stage: str
-) -> JobRow:
+def create_queued_job(session: Session, *, run_id: str, idempotency_key: str, stage: str) -> JobRow:
     job = JobRow(
         id=_new_id(),
         run_id=run_id,
@@ -171,9 +190,9 @@ def write_artifact(
     artifact_index: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Persist one JSON artifact and append its index entry to ``artifact_index``."""
-    data_bytes = json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), default=_json_default
-    ).encode("utf-8")
+    data_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=_json_default).encode(
+        "utf-8"
+    )
     sha = hashlib.sha256(data_bytes).hexdigest()
     store.put(key, data_bytes)
     entry = {
@@ -211,17 +230,17 @@ def get_default_store():
     return FilesystemArtifactStore(root)
 
 
-def verify_artifacts(
-    session: Session, *, store, run_id: str
-) -> list[dict[str, Any]]:
-    """Verify every indexed artifact for a run; raise ArtifactIntegrityError on miss/mismatch."""
+def verify_artifacts(session: Session, *, store, run_id: str) -> list[dict[str, Any]]:
+    """Verify every indexed artifact for a run; raise ArtifactIntegrityError on
+    miss/mismatch. A COMPLETED run with zero indexed artifacts is itself an
+    integrity failure (Phase 2.6.1 gate 4/12) and is rejected."""
     from app.strategy_lab.canonical.errors import ArtifactIntegrityError
 
-    rows = (
-        session.query(ArtifactIndexRow)
-        .filter(ArtifactIndexRow.run_id == run_id)
-        .all()
-    )
+    rows = session.query(ArtifactIndexRow).filter(ArtifactIndexRow.run_id == run_id).all()
+    if not rows:
+        run = session.get(RunRow, run_id)
+        if run is not None and run.status == "completed":
+            raise ArtifactIntegrityError(f"run {run_id} is marked completed but has zero indexed artifacts")
     verified: list[dict[str, Any]] = []
     for row in rows:
         raw = store.get(row.artifact_key)

@@ -12,7 +12,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.domain.strategy_spec import StrategySpec
 
@@ -33,10 +33,10 @@ class ResolveRequest(BaseModel):
 
 class ApproveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    project_id: str
+    project_id: str = Field(min_length=1, max_length=64)
     spec_draft: StrategySpec
-    actor: str = "user"
-    idempotency_key: str
+    actor: str = Field(default="user", min_length=1, max_length=120)
+    idempotency_key: str = Field(min_length=1, max_length=255)
 
 
 class DataSourceRequest(BaseModel):
@@ -51,30 +51,66 @@ class DataSourceRequest(BaseModel):
     csv_b64: str | None = None
 
 
+class PredicateRequest(BaseModel):
+    """Structured failure predicate (no free-form strings)."""
+
+    model_config = ConfigDict(extra="forbid")
+    metric: str = Field(pattern="^(sharpe|cumulative_return|max_drawdown|turnover)$")
+    operator: str = Field(pattern="^(lt|lte|gt|gte)$")
+    threshold: Decimal
+
+    @field_validator("threshold")
+    @classmethod
+    def _finite(cls, v: Decimal) -> Decimal:
+        if not v.is_finite():
+            raise ValueError("threshold must be finite")
+        return v
+
+
 class BacktestRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    strategy_id: str
-    strategy_version: int
-    expected_canonical_hash: str
+    strategy_id: str = Field(min_length=1, max_length=64)
+    strategy_version: int = Field(ge=1)
+    expected_canonical_hash: str = Field(pattern="^[0-9a-f]{64}$")
     data_source: DataSourceRequest
-    initial_capital: Decimal = Decimal("1000000")
-    idempotency_key: str
+    initial_capital: Decimal = Field(default=Decimal("1000000"), gt=0)
+    idempotency_key: str = Field(min_length=1, max_length=255)
 
 
 class CampaignRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    strategy_id: str
-    strategy_version: int
-    expected_canonical_hash: str
+    strategy_id: str = Field(min_length=1, max_length=64)
+    strategy_version: int = Field(ge=1)
+    expected_canonical_hash: str = Field(pattern="^[0-9a-f]{64}$")
     baseline_run_id: str | None = None
     mechanism_families: list[str] = Field(
-        default_factory=lambda: ["drawdown", "vol_spike", "correlation_breakdown"]
+        default_factory=lambda: ["drawdown", "vol_spike", "correlation_breakdown"],
+        min_length=1,
     )
-    seed_list: list[int] = Field(default_factory=lambda: [1, 2, 3, 4, 5])
+    seed_list: list[int] = Field(default_factory=lambda: [1, 2, 3, 4, 5], min_length=1)
     world_budget: int = Field(default=12, ge=1, le=200)
-    failure_predicates: list[str] = Field(default_factory=lambda: ["sharpe_below_0"])
+    failure_predicates: list[PredicateRequest] = Field(
+        default_factory=lambda: [PredicateRequest(metric="sharpe", operator="lt", threshold=Decimal("0"))],
+        min_length=1,
+    )
     data_source: DataSourceRequest | None = None
     idempotency_key: str = Field(min_length=1, max_length=255)
+
+    @field_validator("mechanism_families")
+    @classmethod
+    def _unique_mechanisms(cls, v: list[str]) -> list[str]:
+        if len(set(v)) != len(v):
+            raise ValueError("mechanism_families must be unique")
+        if any(not m for m in v):
+            raise ValueError("mechanism_families must be nonempty strings")
+        return v
+
+    @field_validator("seed_list")
+    @classmethod
+    def _nonempty_seeds(cls, v: list[int]) -> list[int]:
+        if len(set(v)) != len(v):
+            raise ValueError("seed_list must be unique")
+        return v
 
 
 class ProjectCreateRequest(BaseModel):

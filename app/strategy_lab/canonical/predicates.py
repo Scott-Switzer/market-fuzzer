@@ -38,49 +38,52 @@ class FailurePredicate:
     threshold: Decimal
 
 
-def parse_predicate(raw: str) -> FailurePredicate:
-    """Parse a legacy free-form predicate string (e.g. ``sharpe_below_0``) into a
-    typed ``FailurePredicate``. Raises ``ValueError`` for unknown predicates."""
+def predicate_from_struct(raw: Any) -> FailurePredicate:
+    """Build a typed ``FailurePredicate`` from a STRUCTURED request object
+    (dict or pydantic model with metric/operator/threshold). Free-form strings
+    are rejected: the API contract is structured predicates only."""
+    if isinstance(raw, str):
+        raise ValueError(
+            f"free-form predicate strings are not accepted: {raw!r}; use {{metric, operator, threshold}}"
+        )
+    if hasattr(raw, "model_dump"):
+        raw = raw.model_dump()
+    if not isinstance(raw, dict):
+        raise ValueError(f"unparseable predicate: {raw!r}")
     try:
-        metric, op, thr = raw.rsplit("_", 2)
-    except ValueError as exc:
-        raise ValueError(f"unparseable predicate: {raw!r}") from exc
-    if metric == "sharpe":
-        m = MetricName.SHARPE
-    elif metric in ("negative", "return"):
-        # legacy aliases: negative_return, cumulative_return
-        m = MetricName.CUMULATIVE_RETURN
-    elif metric == "max":
-        m = MetricName.MAX_DRAWDOWN
-    elif metric == "cumulative":
-        m = MetricName.CUMULATIVE_RETURN
-    else:
-        raise ValueError(f"unknown predicate metric: {metric!r} in {raw!r}")
-    if op != "below":
-        raise ValueError(f"unsupported predicate operator: {op!r} in {raw!r}")
+        m = MetricName(raw["metric"])
+    except (KeyError, ValueError) as exc:
+        raise ValueError(f"unknown predicate metric: {raw.get('metric')!r}") from exc
     try:
-        thr_d = Decimal(thr)
-    except InvalidOperation as exc:
-        raise ValueError(f"invalid predicate threshold: {thr!r}") from exc
+        op = ComparisonOperator(raw["operator"])
+    except (KeyError, ValueError) as exc:
+        raise ValueError(f"unknown predicate operator: {raw.get('operator')!r}") from exc
+    try:
+        thr_d = Decimal(str(raw["threshold"]))
+    except (KeyError, InvalidOperation) as exc:
+        raise ValueError(f"invalid predicate threshold: {raw.get('threshold')!r}") from exc
     if not thr_d.is_finite():
-        raise ValueError(f"non-finite predicate threshold: {thr!r}")
-    return FailurePredicate(metric=m, operator=ComparisonOperator.LT, threshold=thr_d)
+        raise ValueError(f"non-finite predicate threshold: {raw['threshold']!r}")
+    return FailurePredicate(metric=m, operator=op, threshold=thr_d)
 
 
-def parse_predicates(raw_predicates: list[str]) -> list[FailurePredicate]:
-    """Parse + validate a request's predicate list. Rejects empties and
-    contradictory duplicates (same metric+operator with different thresholds)."""
+def describe_predicate(p: FailurePredicate) -> str:
+    return f"{p.metric.value}_{p.operator.value}_{p.threshold}"
+
+
+def parse_predicates(raw_predicates: list[Any]) -> list[FailurePredicate]:
+    """Parse + validate a request's predicate list (STRUCTURED only). Rejects
+    empties and contradictory duplicates (same metric+operator with different
+    thresholds)."""
     if not raw_predicates:
         raise ValueError("empty predicate list is not allowed")
     out: list[FailurePredicate] = []
     seen: dict[tuple[str, str], Decimal] = {}
     for raw in raw_predicates:
-        p = parse_predicate(raw)
+        p = predicate_from_struct(raw)
         key = (p.metric.value, p.operator.value)
         if key in seen and seen[key] != p.threshold:
-            raise ValueError(
-                f"contradictory duplicate predicate for {key}: {seen[key]} vs {p.threshold}"
-            )
+            raise ValueError(f"contradictory duplicate predicate for {key}: {seen[key]} vs {p.threshold}")
         seen[key] = p.threshold
         out.append(p)
     return out
@@ -121,9 +124,7 @@ def evaluate_predicate(pred: FailurePredicate, metrics: dict[str, Any]) -> Predi
     )
 
 
-def evaluate_predicates(
-    predicates: list[FailurePredicate], metrics: dict[str, Any]
-) -> list[PredicateResult]:
+def evaluate_predicates(predicates: list[FailurePredicate], metrics: dict[str, Any]) -> list[PredicateResult]:
     return [evaluate_predicate(p, metrics) for p in predicates]
 
 
@@ -136,7 +137,8 @@ __all__ = [
     "MetricName",
     "ComparisonOperator",
     "FailurePredicate",
-    "parse_predicate",
+    "predicate_from_struct",
+    "describe_predicate",
     "parse_predicates",
     "evaluate_predicate",
     "evaluate_predicates",

@@ -47,11 +47,7 @@ def _digest_panel(panel: MarketDataPanel, source: str) -> str:
     h.update(np.ascontiguousarray(panel.volume).tobytes())
     if panel.benchmark_close is not None:
         h.update(np.ascontiguousarray(panel.benchmark_close).tobytes())
-    h.update(
-        json.dumps(
-            {k: v.__dict__ for k, v in panel.metadata.items()}, sort_keys=True
-        ).encode()
-    )
+    h.update(json.dumps({k: v.__dict__ for k, v in panel.metadata.items()}, sort_keys=True).encode())
     h.update(panel.provenance.source.encode())
     h.update(panel.provenance.label.encode())
     return h.hexdigest()
@@ -317,12 +313,55 @@ def check_required_history(spec: StrategySpec, panel: MarketDataPanel) -> None:
         )
 
 
+def panel_to_dict(panel: MarketDataPanel) -> dict:
+    """Serialize a panel for durable storage (exact reconstruction)."""
+    return {
+        "dates": [d.isoformat() for d in panel.dates],
+        "assets": list(panel.assets),
+        "open": panel.open.tolist(),
+        "high": panel.high.tolist(),
+        "low": panel.low.tolist(),
+        "close": panel.close.tolist(),
+        "volume": panel.volume.tolist(),
+        "benchmark_close": panel.benchmark_close.tolist() if panel.benchmark_close is not None else None,
+        "metadata": {k: vars(v) for k, v in panel.metadata.items()},
+        "provenance": {
+            "source": panel.provenance.source,
+            "tier": panel.provenance.tier,
+            "retrieval_timestamp": panel.provenance.retrieval_timestamp,
+            "source_hash": panel.provenance.source_hash,
+            "transformations": list(panel.provenance.transformations),
+            "warnings": list(panel.provenance.warnings),
+            "label": panel.provenance.label,
+        },
+    }
+
+
+def panel_from_dict(payload: dict) -> MarketDataPanel:
+    """Reconstruct the EXACT persisted panel (Phase 2.6.1 gate 7)."""
+    bench = payload.get("benchmark_close")
+    return MarketDataPanel(
+        dates=tuple(date.fromisoformat(d) for d in payload["dates"]),
+        assets=tuple(payload["assets"]),
+        open=np.asarray(payload["open"], dtype=float),
+        high=np.asarray(payload["high"], dtype=float),
+        low=np.asarray(payload["low"], dtype=float),
+        close=np.asarray(payload["close"], dtype=float),
+        volume=np.asarray(payload["volume"], dtype=float),
+        benchmark_close=np.asarray(bench, dtype=float) if bench is not None else None,
+        metadata={k: AssetMetadata(**v) for k, v in payload.get("metadata", {}).items()},
+        provenance=DataProvenance(**payload["provenance"]),
+    )
+
+
 __all__ = [
     "acquire_panel",
     "enforce_bounds",
     "check_required_history",
     "build_demo_panel",
     "build_yfinance_panel",
+    "panel_to_dict",
+    "panel_from_dict",
     "MAX_ASSETS",
     "MAX_BARS",
     "MAX_CELLS",

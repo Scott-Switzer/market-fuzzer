@@ -1,15 +1,20 @@
-"""Typed synthetic-stress scenario generation (Phase 2.6 section 8).
+"""Typed synthetic-stress scenario generation (Phase 2.6.1 semantic closure).
 
 Every mechanism produces a ``GeneratedScenario`` whose panel satisfies the
 MarketDataPanel OHLCV invariants and preserves symbol identity. Mechanisms:
 
 * drawdown            -> deterministic negative-return path over [start, start+duration)
-* volatility_spike    -> additive return innovations (on returns, not levels)
-* correlation_breakdown -> return-matrix transformation that preserves symbol
-                           identity and emulates a target correlation structure
+* vol_spike           -> additive return innovations INSIDE the declared window only
+* correlation_breakdown -> return-matrix rotation applied INSIDE the declared
+                           window only, preserving symbol identity
 
 All randomness is seeded from ``ScenarioDefinition.seed`` for reproducibility.
 Unknown mechanisms raise ``InvalidScenarioMechanismError`` (422, never 500).
+
+Interval contract (Phase 2.6.1 gate 10): bars strictly BEFORE ``start_index``
+are numerically identical to the base panel's close for every mechanism. Bars
+after the window may differ only through the compounding of in-window return
+changes (levels chain), never through fresh perturbation.
 """
 
 from __future__ import annotations
@@ -33,6 +38,16 @@ class ScenarioMechanism:
     ALL = (DRAWDOWN, VOL_SPIKE, CORRELATION_BREAKDOWN)
 
 
+def stable_seed(*parts: Any) -> int:
+    """Derive a reproducible 32-bit seed from arbitrary parts via SHA-256.
+
+    NEVER use Python's builtin ``hash`` for seeds: it is randomized per process
+    (PYTHONHASHSEED), so restarts would generate different scenarios.
+    """
+    h = hashlib.sha256("|".join(str(p) for p in parts).encode("utf-8"))
+    return int.from_bytes(h.digest()[:4], "big")
+
+
 @dataclass(frozen=True)
 class ScenarioDefinition:
     mechanism: str
@@ -41,7 +56,7 @@ class ScenarioDefinition:
     start_index: int
     duration: int
     parameters: dict[str, Decimal] = field(default_factory=dict)
-    generator_version: str = "scenario-gen/1.0"
+    generator_version: str = "scenario-gen/1.1"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -66,11 +81,13 @@ class GeneratedScenario:
 
 # Supported scenario mechanisms (Phase 2.6 section 8). Unknown mechanisms must
 # be rejected with a structured error, never silently skipped.
-KNOWN_MECHANISMS: frozenset[str] = frozenset({
-    "drawdown",
-    "vol_spike",
-    "correlation_breakdown",
-})
+KNOWN_MECHANISMS: frozenset[str] = frozenset(
+    {
+        "drawdown",
+        "vol_spike",
+        "correlation_breakdown",
+    }
+)
 
 
 def validate_mechanisms(mechanisms: list[str]) -> None:
@@ -80,10 +97,13 @@ def validate_mechanisms(mechanisms: list[str]) -> None:
 
 
 def _panel_digest(panel: MarketDataPanel, definition: ScenarioDefinition) -> str:
+    """Digest binds the FULL semantic definition (mechanism, seed, intensity,
+    start_index, duration, parameters, generator_version) plus every panel
+    dimension (Phase 2.6.1 gate: no semantic field excluded)."""
     h = hashlib.sha256()
-    h.update(definition.mechanism.encode())
-    h.update(str(definition.seed).encode())
-    h.update(str(float(definition.intensity)).encode())
+    import json as _json
+
+    h.update(_json.dumps(definition.to_dict(), sort_keys=True, separators=(",", ":")).encode())
     h.update(",".join(panel.assets).encode())
     h.update(np.ascontiguousarray(panel.open).tobytes())
     h.update(np.ascontiguousarray(panel.high).tobytes())
@@ -130,7 +150,12 @@ def generate_scenario(base: MarketDataPanel, definition: ScenarioDefinition) -> 
     intensity = float(definition.intensity)
 
     close = base.close.copy()
-    diagnostics: dict[str, Any] = {"mechanism": mech, "intensity": intensity}
+    diagnostics: dict[str, Any] = {
+        "mechanism": mech,
+        "intensity": intensity,
+        "start_index": start,
+        "duration": duration,
+    }
 
     if mech == ScenarioMechanism.DRAWDOWN:
         # Deterministic negative-return path over the declared interval.
@@ -140,54 +165,59 @@ def generate_scenario(base: MarketDataPanel, definition: ScenarioDefinition) -> 
         close[start:end] = close[start:end] * factor[:, None]
         close[end:] = close[end:] * factor[-1]
         close = np.maximum(close, 1e-6)
-        diagnostics["start_index"] = start
-        diagnostics["duration"] = duration
         diagnostics["cumulative_shock"] = float(shock)
         diagnostics["per_bar_return_shock"] = float(per_bar)
         diagnostics["recovery_policy"] = "permanent level shift (no recovery)"
 
     elif mech == ScenarioMechanism.VOL_SPIKE:
-        # Operate on returns, not raw close levels.
-        rets = _returns(base)
-        extra = rng.normal(0.0, intensity, size=(T - 1, N))
-        extra[start - 1 : end - 1] += rng.normal(0.0, intensity, size=(duration, N))
+        # Perturb returns INSIDE [start, end) only; bars before start are
+        # untouched, bars after end differ only via level chaining.
+        rets = _returns(base)  # shape (T-1, N); rets[t-1] is the return INTO bar t
+        extra = np.zeros((T - 1, N))
+        w0 = max(0, start - 1)
+        w1 = max(w0, end - 1)
+        if w1 > w0:
+            extra[w0:w1] = rng.normal(0.0, intensity, size=(w1 - w0, N))
         new_close = np.empty((T, N))
         new_close[0] = base.close[0]
         growth = (1.0 + rets) * (1.0 + extra)
         new_close[1:] = base.close[0] * np.cumprod(growth, axis=0)
         new_close = np.maximum(new_close, 1e-6)
+        # Bars strictly before `start` must equal the base exactly.
+        new_close[:start] = base.close[:start]
         close = new_close
-        pre_vol = float(np.std(rets))
-        post_vol = float(np.std(rets[start - 1 : end - 1] + extra[start - 1 : end - 1]))
+        pre_vol = float(np.std(rets[w0:w1])) if w1 > w0 else 0.0
+        post_vol = float(np.std(rets[w0:w1] + extra[w0:w1])) if w1 > w0 else 0.0
         diagnostics["pre_volatility"] = pre_vol
         diagnostics["post_volatility"] = post_vol
 
     elif mech == ScenarioMechanism.CORRELATION_BREAKDOWN:
-        # Preserve symbol identity; transform the return matrix to emulate a
-        # target correlation structure. A deterministic rotation of the return
-        # columns (not a column permutation) changes cross-asset correlation
-        # while keeping each column tied to its own asset.
+        # Rotate return pairs INSIDE the declared window only; symbol identity
+        # preserved (a rotation of each pair's return vectors, not a column
+        # permutation). Bars before `start` are untouched.
         rets = _returns(base)
         theta = intensity * np.pi  # rotation angle derived from intensity
         c, s = np.cos(theta), np.sin(theta)
         rot = np.array([[c, -s], [s, c]])
-        flat = rets.reshape(-1, N)
-        # rotate in N//2 pairs; leftover single column untouched
-        out = flat.copy()
+        out = rets.copy()
+        w0 = max(0, start - 1)
+        w1 = max(w0, end - 1)
         for k in range(0, N - (N % 2), 2):
-            block = flat[:, k : k + 2] @ rot.T
-            out[:, k : k + 2] = block
+            block = rets[w0:w1, k : k + 2] @ rot.T
+            out[w0:w1, k : k + 2] = block
         new_close = np.empty((T, N))
         new_close[0] = base.close[0]
         new_close[1:] = base.close[0] * np.cumprod(1.0 + out, axis=0)
         new_close = np.maximum(new_close, 1e-6)
+        new_close[:start] = base.close[:start]
         close = new_close
-        base_corr = np.corrcoef(rets.T)
-        gen_corr = np.corrcoef(out.T)
-        diagnostics["baseline_correlation_mean"] = float(np.mean(np.abs(base_corr - np.eye(N))))
+        if w1 > w0 and N >= 2:
+            base_corr = np.corrcoef(rets[w0:w1].T)
+            gen_corr = np.corrcoef(out[w0:w1].T)
+            diagnostics["baseline_correlation_mean"] = float(np.mean(np.abs(base_corr - np.eye(N))))
+            diagnostics["realized_correlation_mean"] = float(np.mean(np.abs(gen_corr - np.eye(N))))
         diagnostics["target_correlation"] = float(np.cos(theta))
-        diagnostics["realized_correlation_mean"] = float(np.mean(np.abs(gen_corr - np.eye(N))))
-        diagnostics["transformation_method"] = "deterministic_return_rotation"
+        diagnostics["transformation_method"] = "deterministic_return_rotation_windowed"
 
     open_, high, low = _rebuild_ohlc(close)
     panel = MarketDataPanel(
@@ -213,27 +243,51 @@ def generate_scenario(base: MarketDataPanel, definition: ScenarioDefinition) -> 
 
 
 def assert_panel_invariants(panel: MarketDataPanel) -> None:
-    """Raise ValueError unless every bar/asset satisfies the OHLCV invariants."""
-    T, N = panel.T, panel.N
+    """Raise ValueError unless every bar/asset satisfies the OHLCV invariants:
+
+    * finite OHLC, positive open/close
+    * low <= min(open, close)
+    * high >= max(open, close)
+    * volume finite and non-negative
+    """
     open_ = panel.open
     high = panel.high
     low = panel.low
     close = panel.close
-    for t in range(T):
-        for j in range(N):
-            o, h, lo, c = open_[t, j], high[t, j], low[t, j], close[t, j]
-            if not (np.isfinite(o) and np.isfinite(h) and np.isfinite(lo) and np.isfinite(c)):
-                raise ValueError(f"non-finite OHLC at ({t},{j})")
-            if o <= 0 or c <= 0:
-                raise ValueError(f"non-positive open/close at ({t},{j})")
-            if not (lo <= min(o, c) <= h and h >= lo):
-                raise ValueError(f"OHLC invariant violated at ({t},{j}): o={o} h={h} lo={lo} c={c}")
+    volume = panel.volume
+    if not (
+        np.all(np.isfinite(open_))
+        and np.all(np.isfinite(high))
+        and np.all(np.isfinite(low))
+        and np.all(np.isfinite(close))
+    ):
+        raise ValueError("non-finite OHLC value in panel")
+    if np.any(open_ <= 0) or np.any(close <= 0):
+        raise ValueError("non-positive open/close in panel")
+    lo_bound = np.minimum(open_, close)
+    hi_bound = np.maximum(open_, close)
+    if np.any(low > lo_bound + 1e-12):
+        t, j = np.unravel_index(int(np.argmax(low - lo_bound)), low.shape)
+        raise ValueError(f"low > min(open, close) at ({t},{j})")
+    if np.any(high < hi_bound - 1e-12):
+        t, j = np.unravel_index(int(np.argmax(hi_bound - high)), high.shape)
+        raise ValueError(f"high < max(open, close) at ({t},{j})")
+    if np.any(high < low):
+        raise ValueError("high < low in panel")
+    if volume is not None:
+        if not np.all(np.isfinite(volume)):
+            raise ValueError("non-finite volume in panel")
+        if np.any(volume < 0):
+            raise ValueError("negative volume in panel")
 
 
 __all__ = [
     "ScenarioMechanism",
     "ScenarioDefinition",
     "GeneratedScenario",
+    "KNOWN_MECHANISMS",
+    "validate_mechanisms",
     "generate_scenario",
     "assert_panel_invariants",
+    "stable_seed",
 ]
