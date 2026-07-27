@@ -126,7 +126,7 @@ ul.ledger li{background:#f8fafc;border:1px solid var(--line);border-radius:10px;
       </div>
       <div class="form-row">
         <label>World budget<input id="cmp-budget" value="12"></label>
-        <label>Predicates (comma-separated)<input id="cmp-predicates" value="sharpe_below_0,negative_return"></label>
+        <label>Predicates (metric op threshold; comma-separated)<input id="cmp-predicates" value="sharpe lt 0, cumulative_return lt 0"></label>
       </div>
       <button class="primary" id="campaign-btn" type="button">Run campaign</button>
     </form>
@@ -264,14 +264,26 @@ async function backtest(){
   const universe = $('bt-universe').value.split(',').map(s=>s.trim().toUpperCase());
   const ds = { source:$('bt-source').value, universe, benchmark:($('bt-benchmark').value||'').toUpperCase()||null };
   try{
+    // Idempotency key binds the FULL request (hash + data source + capital), not
+    // just the canonical hash: changing the universe/benchmark/budget yields a
+    // NEW request instead of an idempotency conflict (Phase 2.6.1 gate 13).
+    const capital = parseFloat($('bt-capital').value||'1000000');
+    const key = 'bt-'+await reqHash([state.approved.canonical_hash, ds, capital]);
     const r = await api('/api/strategy-lab/v2/backtests',{method:'POST',body:JSON.stringify({
       strategy_id:state.approved.strategy_id, strategy_version:state.approved.strategy_version,
       expected_canonical_hash:state.approved.canonical_hash, data_source:ds,
-      initial_capital:parseFloat($('bt-capital').value||'1000000'),
-      idempotency_key:'bt-'+state.approved.canonical_hash
+      initial_capital:capital,
+      idempotency_key:key
     })});
-    state.run = r; renderBacktest(r); $('backtest-status').textContent=''; renderAudit();
+    state.run = r; state.runId = r.run_id; renderBacktest(r); $('backtest-status').textContent=''; renderAudit();
   }catch(e){ $('backtest-status').textContent='Backtest failed: '+e.message; $('backtest-status').className='status error'; }
+}
+
+// Stable SHA-256 request digest (browser SubtleCrypto) for idempotency keys.
+async function reqHash(parts){
+  const canon = JSON.stringify(parts);
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canon));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('').slice(0,32);
 }
 
 function renderBacktest(r){
@@ -293,14 +305,26 @@ function renderBacktest(r){
 async function campaign(){
   if(!state.approved){ $('campaign-status').textContent='Approve a strategy first.'; $('campaign-status').className='status error'; return; }
   $('campaign-status').textContent='Running campaign…';
+  // Structured predicates: "metric op threshold" tokens (Phase 2.6.1 gate 13).
+  const preds = $('cmp-predicates').value.split(',').map(s=>s.trim()).filter(Boolean).map(tok=>{
+    const [metric,operator,threshold] = tok.split(/\s+/);
+    return {metric, operator, threshold};
+  });
+  const mechs = $('cmp-mechanisms').value.split(',').map(s=>s.trim()).filter(Boolean);
+  const seeds = $('cmp-seeds').value.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
+  const budget = parseInt($('cmp-budget').value||'12');
+  const baseline = state.runId || null;
   const body={
     strategy_id:state.approved.strategy_id, strategy_version:state.approved.strategy_version,
     expected_canonical_hash:state.approved.canonical_hash,
-    mechanism_families:$('cmp-mechanisms').value.split(',').map(s=>s.trim()),
-    seed_list:$('cmp-seeds').value.split(',').map(s=>parseInt(s.trim())),
-    world_budget:parseInt($('cmp-budget').value||'12'),
-    failure_predicates:$('cmp-predicates').value.split(',').map(s=>s.trim()),
-    idempotency_key:'cmp-'+state.approved.canonical_hash
+    baseline_run_id: baseline,
+    mechanism_families:mechs,
+    seed_list:seeds,
+    world_budget:budget,
+    failure_predicates:preds,
+    // Bind the FULL campaign request so changing mechanisms/seeds/budget/
+    // predicates/baseline is a new request, not a conflict (gate 13).
+    idempotency_key:'cmp-'+await reqHash([state.approved.canonical_hash, mechs, seeds, budget, preds, baseline])
   };
   try{
     const r = await api('/api/strategy-lab/v2/campaigns',{method:'POST',body:JSON.stringify(body)});
@@ -325,28 +349,55 @@ function renderCampaign(r){
   $('campaign-result').innerHTML=html;
   if(r.confirmed_failures.length && r.minimization){
     show('replay-block');
+    const fid = r.confirmed_failures[0].failure_id;
     let rep=`<div class="label">Minimized failure</div><ul class="ledger">
       <li>Mechanism: ${r.confirmed_failures[0].mechanism} @ intensity ${r.minimization.minimized_value}</li>
       <li>Passing boundary: ${r.minimization.passing_value??'none found'}</li>
       <li>Adjacent pass: ${r.adjacent_pass? 'evaluated, metrics available':'not available'}</li>
-    </ul>`;
-    if(r.adjacent_pass){ rep += `<div class="notify">Adjacent passing case metrics: ${Object.entries(r.adjacent_pass.metrics).slice(0,4).map(([k,v])=>k+'='+(typeof v==='number'?v.toFixed(3):v)).join(', ')}</div>`; }
+    </ul><div class="notify">Loading persisted replay…</div>`;
     $('replay-content').innerHTML=rep;
+    // Call the PERSISTED failure-replay endpoint (Phase 2.6.1 gate 13): the UI
+    // renders server-verified scenario + metrics, not a local reconstruction.
+    api('/api/strategy-lab/v2/failures/'+fid+'/replay').then(rp=>{
+      let extra=`<div class="label">Persisted replay (server-verified)</div><ul class="ledger">
+        <li>World: <span class="code">${rp.world_id}</span></li>
+        <li>Mechanism: ${rp.mechanism} · seed ${rp.seed} · intensity ${rp.intensity}</li>
+        <li>Scenario digest: <span class="code">${(rp.scenario_content_digest||'').slice(0,16)}</span></li>
+        <li>Outcome: ${rp.outcome}</li>
+      </ul>`;
+      if(rp.metrics){ extra += `<div class="notify">Replay metrics: ${Object.entries(rp.metrics).slice(0,4).map(([k,v])=>k+'='+(typeof v==='number'?v.toFixed(3):v)).join(', ')}</div>`; }
+      $('replay-content').innerHTML = rep.replace('<div class="notify">Loading persisted replay…</div>','') + extra;
+    }).catch(e=>{ $('replay-content').innerHTML = rep.replace('Loading persisted replay…','Replay unavailable: '+e.message); });
   } else { hide('replay-block'); }
 }
 
 function renderAudit(){
   if(!state.approved){ return; }
   const a=state.approved;
-  $('audit-content').innerHTML = `<ul class="ledger">
-    <li>Project: ${state.projectId}</li>
-    <li>Strategy ID: ${a.strategy_id}</li>
-    <li>Version: ${a.strategy_version}</li>
-    <li>Canonical hash: <span class="code">${a.canonical_hash}</span></li>
-    <li>Run: ${state.run? state.run.run_id : 'not yet run'}</li>
-    <li>Campaign: ${state.campaign? state.campaign.campaign_id : 'not yet run'}</li>
-    <li>Compiler: deterministic/1.0 · Schema: ${a.schema_version}</li>
-  </ul>`;
+  // Query the server audit endpoint for VERIFIED cross-resource evidence
+  // (Phase 2.6.1 gate 13): artifact hashes, real compiler version, data digest.
+  const q = new URLSearchParams({strategy_id:a.strategy_id, strategy_version:a.strategy_version});
+  q.set('project_id', state.projectId);
+  if(state.run) q.set('run_id', state.run.run_id);
+  if(state.campaign) q.set('campaign_id', state.campaign.campaign_id);
+  $('audit-content').innerHTML = '<div class="notify">Loading verified audit record…</div>';
+  api('/api/strategy-lab/v2/audit?'+q.toString()).then(ar=>{
+    $('audit-content').innerHTML = `<ul class="ledger">
+      <li>Project: ${ar.project_id||state.projectId}</li>
+      <li>Strategy ID: ${ar.strategy_id}</li>
+      <li>Version: ${ar.strategy_version}</li>
+      <li>Canonical hash: <span class="code">${ar.canonical_hash}</span></li>
+      <li>Run: ${ar.run_id||'not yet run'}</li>
+      <li>Campaign: ${ar.campaign_id||'not yet run'}</li>
+      <li>Data source digest: <span class="code">${(ar.data_source_digest||'—')}</span></li>
+      <li>Verified artifact hashes: ${ar.artifact_hashes.length} <span class="code">${ar.artifact_hashes.slice(0,2).map(h=>h.slice(0,12)).join(', ')}${ar.artifact_hashes.length>2?'…':''}</span></li>
+      <li>Compiler: ${ar.compiler_version} · Schema: ${ar.schema_version}</li>
+      <li>Limitations: ${ar.limitations.join(' · ')}</li>
+    </ul>`;
+  }).catch(e=>{
+    $('audit-content').innerHTML = `<div class="status error">Audit failed: ${e.message}</div>
+    <ul class="ledger"><li>Strategy ID: ${a.strategy_id}</li><li>Canonical hash: <span class="code">${a.canonical_hash}</span></li></ul>`;
+  });
 }
 </script>
 </body>
