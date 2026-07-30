@@ -19,3 +19,8 @@ artifacts/*
 tmp/
 tmp_check.py
 .supercode-launch.sh
+
+# Local SQLite dev/test databases (Postgres is authoritative; SQLite is dev-only)
+*.db
+_alembic_test.db
+fenrix.db
