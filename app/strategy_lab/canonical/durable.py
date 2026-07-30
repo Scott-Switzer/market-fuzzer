@@ -43,16 +43,20 @@ def reserve_idempotency(
     resource_type: str,
     resource_id: str,
     response_json: dict,
-) -> IdempotencyRecordRow:
+) -> tuple[IdempotencyRecordRow, bool]:
     """Reserve (or return) an idempotency record. Concurrency-safe.
 
-    * key absent -> insert this record (inside a SAVEPOINT), return it.
-    * key present with the SAME digest -> return the existing record
-      (caller should short-circuit and return the stored resource/response).
+    Returns ``(record, created)`` where ``created`` is True only for the
+    transaction that inserted the row. Callers MUST execute side effects only
+    when ``created`` is True; otherwise they must replay from the stored
+    resource/response (or report in-flight / prior-failure).
+
+    * key absent -> insert this record (inside a SAVEPOINT), return (rec, True).
+    * key present with the SAME digest -> return (existing, False).
     * key present with a DIFFERENT digest -> raise IdempotencyConflictError (409).
     * concurrent INSERT race -> the unique constraint fires; the losing
       transaction rolls back ONLY the savepoint, re-selects the winner's row,
-      and applies the same digest rules (PostgreSQL-safe).
+      and applies the same digest rules (PostgreSQL-safe). Returns (winner, False).
     """
     digest = canonical_digest(request_payload)
     from sqlalchemy import select
@@ -70,7 +74,7 @@ def reserve_idempotency(
     existing = _select()
     if existing is not None:
         if existing.request_digest == digest:
-            return existing
+            return existing, False
         raise IdempotencyConflictError(
             f"idempotency key {idempotency_key!r} reused with a different {scope} request"
         )
@@ -95,11 +99,11 @@ def reserve_idempotency(
         if winner is None:  # pragma: no cover - constraint fired, row must exist
             raise
         if winner.request_digest == digest:
-            return winner
+            return winner, False
         raise IdempotencyConflictError(
             f"idempotency key {idempotency_key!r} reused with a different {scope} request"
         ) from None
-    return rec
+    return rec, True
 
 
 def get_idempotency(
@@ -165,11 +169,31 @@ def create_pending_run(
     return run
 
 
-def create_queued_job(session: Session, *, run_id: str, idempotency_key: str, stage: str) -> JobRow:
+def job_idempotency_key(*, scope: str, project_id: str, idempotency_key: str) -> str:
+    """Namespace job keys so the global jobs.idempotency_key unique constraint
+    cannot collide across scopes or projects for the same client key."""
+    return f"{scope}:{project_id}:{idempotency_key}"
+
+
+def create_queued_job(
+    session: Session,
+    *,
+    run_id: str,
+    idempotency_key: str,
+    stage: str,
+    scope: str | None = None,
+    project_id: str | None = None,
+) -> JobRow:
+    # Prefer scoped keys; fall back only for legacy call sites/tests.
+    key = (
+        job_idempotency_key(scope=scope, project_id=project_id, idempotency_key=idempotency_key)
+        if scope and project_id
+        else idempotency_key
+    )
     job = JobRow(
         id=_new_id(),
         run_id=run_id,
-        idempotency_key=idempotency_key,
+        idempotency_key=key,
         stage=stage,
         state="queued",
         progress=0.0,
@@ -313,6 +337,7 @@ __all__ = [
     "set_idempotency_resource",
     "create_pending_run",
     "create_queued_job",
+    "job_idempotency_key",
     "write_artifact",
     "read_artifact",
     "verify_artifacts",

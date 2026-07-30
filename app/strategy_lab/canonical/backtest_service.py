@@ -123,7 +123,7 @@ def run_backtest(
         "data_source": data_source,
         "initial_capital": str(initial_capital),
     }
-    ir = reserve_idempotency(
+    ir, created = reserve_idempotency(
         session,
         scope="backtest",
         project_id=owning_project,
@@ -133,15 +133,8 @@ def run_backtest(
         resource_id="",
         response_json={},
     )
-    if ir.resource_id:
-        # Replay MUST be semantically identical to the original response
-        # (Phase 2.6.1 gate 6): return the stored response verbatim after
-        # re-verifying artifact integrity.
-        store = get_default_store()
-        verify_artifacts(session, store=store, run_id=ir.resource_id)
-        if ir.response_json:
-            return BacktestResponse.model_validate(ir.response_json)
-        return load_backtest_result(session, ir.resource_id)
+    if not created:
+        return _replay_or_reject_backtest(session, ir, idempotency_key)
 
     repo = StrategyRepository(session)
     approved = repo.get_approved_version(strategy_id, strategy_version)
@@ -197,7 +190,12 @@ def run_backtest(
         ],
     )
     job = create_queued_job(
-        session, run_id=run.id, idempotency_key=idempotency_key, stage=RunStage.HISTORICAL_BACKTEST.value
+        session,
+        run_id=run.id,
+        idempotency_key=idempotency_key,
+        stage=RunStage.HISTORICAL_BACKTEST.value,
+        scope="backtest",
+        project_id=owning_project,
     )
     _mark_run_stage(session, RunRepository, run.id, RunStage.HISTORICAL_BACKTEST)
     job.state = JobState.RUNNING.value
@@ -426,6 +424,34 @@ def _persist_failed_lifecycle(session, run_id: str, job_id: str, exc: Exception)
         session.commit()
     except Exception:  # pragma: no cover - best-effort failure persistence
         session.rollback()
+
+
+def _replay_or_reject_backtest(session, ir, idempotency_key: str) -> BacktestResponse:
+    """Handle a non-creating reservation: complete replay, failed prior, or in-flight."""
+    from app.persistence.models import RunRow
+    from app.strategy_lab.canonical.errors import IdempotencyInFlightError, PriorAttemptFailedError
+
+    if ir.response_json:
+        if ir.resource_id:
+            store = get_default_store()
+            verify_artifacts(session, store=store, run_id=ir.resource_id)
+        return BacktestResponse.model_validate(ir.response_json)
+    if ir.resource_id:
+        run = session.get(RunRow, ir.resource_id)
+        if run is not None and run.status == RunStatus.FAILED.value:
+            raise PriorAttemptFailedError(
+                f"idempotency key {idempotency_key!r} previously failed; use a new key to retry"
+            )
+        if run is not None and run.status == RunStatus.COMPLETED.value:
+            store = get_default_store()
+            verify_artifacts(session, store=store, run_id=ir.resource_id)
+            return load_backtest_result(session, ir.resource_id)
+        raise IdempotencyInFlightError(
+            f"idempotency key {idempotency_key!r} is already reserved for an in-flight backtest"
+        )
+    raise IdempotencyInFlightError(
+        f"idempotency key {idempotency_key!r} is already reserved for an in-flight backtest"
+    )
 
 
 def _mark_run_stage(session, RunRepo, run_id: str, stage: RunStage) -> None:

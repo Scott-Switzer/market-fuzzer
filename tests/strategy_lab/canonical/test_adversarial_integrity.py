@@ -120,10 +120,12 @@ def test_concurrent_reservations_single_winner(db):
     results: list[tuple[str, bool]] = []
     errors: list[Exception] = []
 
+    created_flags: list[bool] = []
+
     def worker():
         s = make_session_factory(make_engine(db["url"]))()
         try:
-            ir = reserve_idempotency(
+            ir, created = reserve_idempotency(
                 s,
                 scope="backtest",
                 project_id="proj-conc",
@@ -135,6 +137,7 @@ def test_concurrent_reservations_single_winner(db):
             )
             s.commit()
             results.append((ir.id, bool(ir.resource_id)))
+            created_flags.append(created)
         except Exception as exc:  # pragma: no cover - failure path under test
             errors.append(exc)
         finally:
@@ -150,6 +153,7 @@ def test_concurrent_reservations_single_winner(db):
     assert len(results) == 6
     ids = {rid for rid, _ in results}
     assert len(ids) == 1, f"all threads must converge on ONE reservation row, got {ids}"
+    assert created_flags.count(True) == 1, f"exactly one creator expected, got {created_flags}"
 
 
 def test_same_key_different_payload_conflicts(db):
@@ -180,6 +184,57 @@ def test_same_key_different_payload_conflicts(db):
             resource_id="",
             response_json={},
         )
+    s.close()
+
+
+def test_failed_backtest_same_key_is_409_not_reexecute(client, monkeypatch):
+    """A prior FAILED attempt must not silently re-execute under the same key."""
+    import app.strategy_lab.canonical.backtest_service as bts
+
+    pid, a = _approved(client)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated executor crash")
+
+    monkeypatch.setattr(bts, "run_strategy", boom)
+    with pytest.raises(RuntimeError, match="simulated executor crash"):
+        client.post("/api/strategy-lab/v2/backtests", json=_bt_body(a, "bt-fail-retry"))
+
+    # Same key, same payload: must 409 PriorAttemptFailed, not re-run.
+    monkeypatch.setattr(bts, "run_strategy", lambda *a, **k: (_ for _ in ()).throw(AssertionError("reexec")))
+    r = client.post("/api/strategy-lab/v2/backtests", json=_bt_body(a, "bt-fail-retry"))
+    assert r.status_code == 409, r.text
+    assert "previously failed" in r.text.lower() or "new key" in r.text.lower()
+
+
+def test_job_idempotency_key_is_scoped_by_project_and_scope(client, db):
+    """jobs.idempotency_key is globally unique; client keys must be namespaced."""
+    pid1, a1 = _approved(client, pid=None)
+    # Second project + second approve with a distinct client key path.
+    pid2 = _project(client, name="ADV2")
+    c = _compile(client, "Allocate 70% to SPY and 30% to AGG and rebalance monthly.")
+    r = _approve(client, pid2, c["spec_draft"], c["canonical_hash"], key="appr-p2")
+    assert r.status_code == 200, r.text
+    a2 = r.json()
+
+    # Same client-supplied idempotency key string across projects/scopes must not collide.
+    r1 = client.post("/api/strategy-lab/v2/backtests", json=_bt_body(a1, "shared-client-key"))
+    assert r1.status_code == 200, r1.text
+    r2 = client.post("/api/strategy-lab/v2/backtests", json=_bt_body(a2, "shared-client-key"))
+    assert r2.status_code == 200, r2.text
+    assert r1.json()["run_id"] != r2.json()["run_id"]
+
+    from sqlalchemy import select
+
+    from app.persistence.database import make_engine, make_session_factory
+    from app.persistence.models import JobRow
+    from app.strategy_lab.canonical.durable import job_idempotency_key
+
+    s = make_session_factory(make_engine(db["url"]))()
+    jobs = s.scalars(select(JobRow)).all()
+    keys = {j.idempotency_key for j in jobs}
+    assert job_idempotency_key(scope="backtest", project_id=pid1, idempotency_key="shared-client-key") in keys
+    assert job_idempotency_key(scope="backtest", project_id=pid2, idempotency_key="shared-client-key") in keys
     s.close()
 
 

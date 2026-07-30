@@ -47,7 +47,9 @@ from app.strategy_lab.canonical.errors import (
     DataUnavailableError,
     HashMismatchError,
     IdempotencyConflictError,
+    IdempotencyInFlightError,
     PanelTooShortError,
+    PriorAttemptFailedError,
     ResourceNotFoundError,
     UnregisteredExecutorError,
     UnresolvedClauseError,
@@ -119,7 +121,7 @@ def approve_endpoint(body: ApproveRequest, session: DbSession) -> ApproveRespons
         )
     except (UnresolvedClauseError, UnregisteredExecutorError, HashMismatchError) as exc:
         raise _err(422, exc) from exc
-    except IdempotencyConflictError as exc:
+    except (IdempotencyConflictError, IdempotencyInFlightError, PriorAttemptFailedError) as exc:
         raise _err(409, exc) from exc
     except CanonicalError as exc:
         raise _err(422, exc) from exc
@@ -142,7 +144,7 @@ def backtest_endpoint(body: BacktestRequest, session: DbSession) -> BacktestResp
         raise _err(422, exc) from exc
     except (DataUnavailableError, PanelTooShortError, BoundedExecutionLimitError) as exc:
         raise _err(422, exc) from exc
-    except IdempotencyConflictError as exc:
+    except (IdempotencyConflictError, IdempotencyInFlightError, PriorAttemptFailedError) as exc:
         raise _err(409, exc) from exc
     except CanonicalError as exc:
         raise _err(422, exc) from exc
@@ -167,7 +169,7 @@ def campaign_endpoint(body: CampaignRequest, session: DbSession) -> CampaignResp
         )
     except HashMismatchError as exc:
         raise _err(422, exc) from exc
-    except IdempotencyConflictError as exc:
+    except (IdempotencyConflictError, IdempotencyInFlightError, PriorAttemptFailedError) as exc:
         raise _err(409, exc) from exc
     except (BaselineMismatchError, CanonicalError) as exc:
         raise _err(422, exc) from exc

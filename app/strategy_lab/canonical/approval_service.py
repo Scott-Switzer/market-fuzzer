@@ -70,7 +70,7 @@ def approve_spec(
         "spec_hash": live_hash,
         "actor": actor,
     }
-    existing_ir = reserve_idempotency(
+    existing_ir, created = reserve_idempotency(
         session,
         scope="approve",
         project_id=project_id,
@@ -80,21 +80,28 @@ def approve_spec(
         resource_id="",  # filled below
         response_json={},
     )
-    if existing_ir.resource_id:  # replay with same digest -> return stored resource
-        stored0 = repo.get_approved_version(
-            existing_ir.resource_id.split(":")[0], int(existing_ir.resource_id.split(":")[1])
-        )
-        if stored0 is not None:
-            return ApproveResponse(
-                api_version="v2",
-                project_id=project_id,
-                strategy_id=stored0.strategy_id,
-                strategy_version=stored0.version,
-                canonical_hash=stored0.canonical_hash,
-                approved_by=stored0.approved_by,
-                approved_at=stored0.approved_at,
-                schema_version=stored0.schema_version,
+    if not created:
+        # Concurrent or prior reservation: only the creator may execute.
+        if existing_ir.resource_id:
+            stored0 = repo.get_approved_version(
+                existing_ir.resource_id.split(":")[0], int(existing_ir.resource_id.split(":")[1])
             )
+            if stored0 is not None:
+                return ApproveResponse(
+                    api_version="v2",
+                    project_id=project_id,
+                    strategy_id=stored0.strategy_id,
+                    strategy_version=stored0.version,
+                    canonical_hash=stored0.canonical_hash,
+                    approved_by=stored0.approved_by,
+                    approved_at=stored0.approved_at,
+                    schema_version=stored0.schema_version,
+                )
+        from app.strategy_lab.canonical.errors import IdempotencyInFlightError
+
+        raise IdempotencyInFlightError(
+            f"idempotency key {idempotency_key!r} is already reserved for an in-flight approve"
+        )
 
     draft = DraftStrategy(spec=spec)
     # 9. Validated approval (model_validate internally; never model_copy(update=)).

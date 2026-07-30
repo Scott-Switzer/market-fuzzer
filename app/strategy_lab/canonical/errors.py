@@ -45,6 +45,21 @@ class IdempotencyConflictError(CanonicalError):
     """
 
 
+class IdempotencyInFlightError(CanonicalError):
+    """Same idempotency key is reserved but the prior attempt has not finished.
+
+    Maps to HTTP 409 Conflict. Callers should retry with backoff or wait for the
+    original request to complete (or fail and record a durable response).
+    """
+
+
+class PriorAttemptFailedError(CanonicalError):
+    """Same idempotency key previously executed and the durable result is FAILED.
+
+    Maps to HTTP 409 Conflict. Clients must use a new idempotency key to retry.
+    """
+
+
 class InvalidScenarioMechanismError(CanonicalError):
     """An unknown or invalid synthetic-stress mechanism was requested."""
 
@@ -74,6 +89,8 @@ __all__ = [
     "PanelTooShortError",
     "BoundedExecutionLimitError",
     "IdempotencyConflictError",
+    "IdempotencyInFlightError",
+    "PriorAttemptFailedError",
     "InvalidScenarioMechanismError",
     "BaselineMismatchError",
     "BenchmarkConflictError",

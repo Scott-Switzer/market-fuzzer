@@ -152,7 +152,7 @@ def run_campaign(
         "failure_predicates": failure_predicates,
         "baseline_run_id": baseline_run_id,
     }
-    ir = reserve_idempotency(
+    ir, created = reserve_idempotency(
         session,
         scope="campaign",
         project_id=owning_project,
@@ -162,11 +162,8 @@ def run_campaign(
         resource_id="",
         response_json={},
     )
-    if ir.resource_id:
-        # Identical replay (Phase 2.6.1 gate 6): return the stored response verbatim.
-        if ir.response_json:
-            return CampaignResponse.model_validate(ir.response_json)
-        return load_campaign_result(session, ir.resource_id)
+    if not created:
+        return _replay_or_reject_campaign(session, ir, idempotency_key)
 
     repo = StrategyRepository(session)
     approved = repo.get_approved_version(strategy_id, strategy_version)
@@ -248,7 +245,12 @@ def run_campaign(
         ],
     )
     job = create_queued_job(
-        session, run_id=run.id, idempotency_key=idempotency_key, stage=RunStage.STRESS_CAMPAIGN.value
+        session,
+        run_id=run.id,
+        idempotency_key=idempotency_key,
+        stage=RunStage.STRESS_CAMPAIGN.value,
+        scope="campaign",
+        project_id=owning_project,
     )
     campaign = CampaignRow(
         id=str(uuid.uuid4()),
@@ -901,6 +903,31 @@ def _persist_failed_lifecycle(session, run_id: str, job_id: str, exc: Exception)
         session.commit()
     except Exception:  # pragma: no cover - best-effort failure persistence
         session.rollback()
+
+
+def _replay_or_reject_campaign(session, ir, idempotency_key: str) -> CampaignResponse:
+    """Handle a non-creating reservation: complete replay, failed prior, or in-flight."""
+    from app.persistence.models import CampaignRow, RunRow
+    from app.strategy_lab.canonical.errors import IdempotencyInFlightError, PriorAttemptFailedError
+
+    if ir.response_json:
+        return CampaignResponse.model_validate(ir.response_json)
+    if ir.resource_id:
+        camp = session.get(CampaignRow, ir.resource_id)
+        if camp is not None:
+            run = session.get(RunRow, camp.run_id)
+            if run is not None and run.status == RunStatus.FAILED.value:
+                raise PriorAttemptFailedError(
+                    f"idempotency key {idempotency_key!r} previously failed; use a new key to retry"
+                )
+            if run is not None and run.status == RunStatus.COMPLETED.value:
+                return load_campaign_result(session, ir.resource_id)
+        raise IdempotencyInFlightError(
+            f"idempotency key {idempotency_key!r} is already reserved for an in-flight campaign"
+        )
+    raise IdempotencyInFlightError(
+        f"idempotency key {idempotency_key!r} is already reserved for an in-flight campaign"
+    )
 
 
 __all__ = ["run_campaign", "load_campaign_result"]
