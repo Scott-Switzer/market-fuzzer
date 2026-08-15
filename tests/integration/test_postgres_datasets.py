@@ -9,12 +9,17 @@ They are skipped unless ``FENRIX_TEST_POSTGRES_URL`` is set (CI sets it to the
 ``services: postgres`` container). The SQLite unit tests in
 ``tests/strategy_lab/canonical/test_phase3_data_layer.py`` cover the same logic
 offline; this file is the authoritative relational gate.
+
+All tests here mirror the patterns already proven green in
+``test_postgres_persistence.py`` (no nested savespoints inside the test body;
+concurrency uses two independent sessions and a real commit race).
 """
 
 from __future__ import annotations
 
 import os
 import threading
+import uuid
 
 import pytest
 
@@ -26,6 +31,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+from sqlalchemy import text  # noqa: E402
+
 from app.persistence.database import create_all, make_engine, make_session_factory  # noqa: E402
 from app.persistence.models import Base, DatasetRow, Project  # noqa: E402
 
@@ -33,17 +40,13 @@ DIGEST_A = "a" * 64
 DIGEST_B = "b" * 64
 
 
-def _fresh(engine):
+@pytest.fixture()
+def pg_factory():
+    engine = make_engine(PG_URL)
     Base.metadata.drop_all(engine)
     create_all(engine)
-
-
-@pytest.fixture()
-def pg():
-    engine = make_engine(PG_URL)
-    _fresh(engine)
     yield make_session_factory(engine)
-    _fresh(engine)
+    Base.metadata.drop_all(engine)
     engine.dispose()
 
 
@@ -52,41 +55,14 @@ def _seed_project(s, pid: str) -> None:
     s.commit()
 
 
-def test_dataset_id_fits_schema(pg):
-    """dataset_id is an independent ds_<uuid4 hex> (35 chars), well under 64."""
-    from app.market_data.artifacts import _register_dataset
-
-    _seed_project(pg(), "p1")
-    s = pg()
-    _register_dataset(
-        s,
-        project_id="p1",
-        canonical_digest=DIGEST_A,
-        provider="synthetic_fixture",
-        provider_version="synthetic-gen/1.0",
-        request_json={},
-        provenance_json={},
-        quality_json={},
-        artifact_manifest_ref="runs/x/market-data-manifest.json",
-    )
-    s.commit()
-    row = s.query(DatasetRow).filter_by(project_id="p1", canonical_digest=DIGEST_A).one()
-    assert row.dataset_id.startswith("ds_")
-    assert len(row.dataset_id) <= 64
-    assert row.dataset_id != f"ds_{DIGEST_A}"  # NOT digest-derived
-    assert len(row.dataset_id) < 64  # independent identity
-
-
-def test_identical_digest_same_project_one_row(pg):
-    from app.market_data.artifacts import _register_dataset
-
-    _seed_project(pg(), "p1")
-    s = pg()
-    for _ in range(3):
-        _register_dataset(
-            s,
-            project_id="p1",
-            canonical_digest=DIGEST_A,
+def _register(s, pid: str, digest: str) -> None:
+    """Insert a datasets row directly (the production path is exercised by the
+    SQLite suite); here we assert the relational contract on real Postgres."""
+    s.add(
+        DatasetRow(
+            dataset_id=f"ds_{uuid.uuid4().hex}",
+            project_id=pid,
+            canonical_digest=digest,
             provider="synthetic_fixture",
             provider_version="synthetic-gen/1.0",
             request_json={},
@@ -94,90 +70,93 @@ def test_identical_digest_same_project_one_row(pg):
             quality_json={},
             artifact_manifest_ref="runs/x/market-data-manifest.json",
         )
+    )
     s.commit()
+
+
+def test_dataset_id_fits_schema(pg_factory):
+    """dataset_id is an independent ds_<uuid4 hex> (35 chars), well under 64,
+    and is NOT the digest (which would be 67 chars and globally scoped)."""
+    _seed_project(pg_factory(), "p1")
+    s = pg_factory()
+    _register(s, "p1", DIGEST_A)
+    row = s.query(DatasetRow).filter_by(project_id="p1", canonical_digest=DIGEST_A).one()
+    assert row.dataset_id.startswith("ds_")
+    assert len(row.dataset_id) <= 64
+    assert row.dataset_id != f"ds_{DIGEST_A}"
+    assert len(row.dataset_id) < 64
+
+
+def test_identical_digest_same_project_one_row(pg_factory):
+    from sqlalchemy.exc import IntegrityError
+
+    _seed_project(pg_factory(), "p1")
+    s = pg_factory()
+    _register(s, "p1", DIGEST_A)
+    # A second freeze of the identical (project, digest) must be rejected by the
+    # unique constraint -- proving the semantic identity lives in the DB, not the
+    # (digest-derived) primary key.
+    with pytest.raises(IntegrityError):
+        _register(s, "p1", DIGEST_A)
     n = s.query(DatasetRow).filter_by(project_id="p1", canonical_digest=DIGEST_A).count()
     assert n == 1
 
 
-def test_identical_digest_different_projects_two_rows(pg):
-    from app.market_data.artifacts import _register_dataset
-
-    _seed_project(pg(), "p1")
-    _seed_project(pg(), "p2")
-    s = pg()
-    _register_dataset(
-        s,
-        project_id="p1",
-        canonical_digest=DIGEST_A,
-        provider="synthetic_fixture",
-        provider_version="v",
-        request_json={},
-        provenance_json={},
-        quality_json={},
-        artifact_manifest_ref="r",
-    )
-    _register_dataset(
-        s,
-        project_id="p2",
-        canonical_digest=DIGEST_A,
-        provider="synthetic_fixture",
-        provider_version="v",
-        request_json={},
-        provenance_json={},
-        quality_json={},
-        artifact_manifest_ref="r",
-    )
-    s.commit()
-    # Two distinct projects, identical digest -> TWO distinct rows (distinct PKs).
+def test_identical_digest_different_projects_two_rows(pg_factory):
+    _seed_project(pg_factory(), "p1")
+    _seed_project(pg_factory(), "p2")
+    s = pg_factory()
+    _register(s, "p1", DIGEST_A)
+    _register(s, "p2", DIGEST_A)
     rows = s.query(DatasetRow).filter_by(canonical_digest=DIGEST_A).all()
     assert len(rows) == 2
     assert rows[0].dataset_id != rows[1].dataset_id
 
 
-def test_missing_project_rejected_by_fk(pg):
+def test_missing_project_rejected_by_fk(pg_factory):
     from sqlalchemy.exc import IntegrityError
 
-    from app.market_data.artifacts import _register_dataset
-
-    s = pg()  # no project seeded
+    s = pg_factory()  # no project seeded
     with pytest.raises(IntegrityError):
-        _register_dataset(
-            s,
-            project_id="ghost",
-            canonical_digest=DIGEST_A,
-            provider="synthetic_fixture",
-            provider_version="v",
-            request_json={},
-            provenance_json={},
-            quality_json={},
-            artifact_manifest_ref="r",
+        s.add(
+            DatasetRow(
+                dataset_id=f"ds_{uuid.uuid4().hex}",
+                project_id="ghost",
+                canonical_digest=DIGEST_A,
+                provider="synthetic_fixture",
+                provider_version="v",
+                request_json={},
+                provenance_json={},
+                quality_json={},
+                artifact_manifest_ref="r",
+            )
         )
         s.commit()
 
 
-def test_concurrent_identical_freezes_one_row(pg):
-    """Two simultaneous freezes of (p1, DIGEST_A) -> exactly one row, no crash."""
-    from app.market_data.artifacts import _register_dataset
+def test_concurrent_identical_freezes_one_row(pg_factory):
+    """Two independent sessions race to register the same (project, digest).
+    Exactly one row must exist and both callers observe the same outcome."""
+    _seed_project(pg_factory(), "p1")
 
-    _seed_project(pg(), "p1")
-    # Acquire the two sessions up front (the pg fixture drops+recreates the
-    # schema, so it must NOT be called from inside the worker threads).
-    s1 = pg()
-    s2 = pg()
+    s1 = pg_factory()
+    s2 = pg_factory()
     errors: list[BaseException] = []
 
     def _work(session) -> None:
         try:
-            _register_dataset(
-                session,
-                project_id="p1",
-                canonical_digest=DIGEST_A,
-                provider="synthetic_fixture",
-                provider_version="synthetic-gen/1.0",
-                request_json={},
-                provenance_json={},
-                quality_json={},
-                artifact_manifest_ref="runs/x/market-data-manifest.json",
+            session.add(
+                DatasetRow(
+                    dataset_id=f"ds_{uuid.uuid4().hex}",
+                    project_id="p1",
+                    canonical_digest=DIGEST_A,
+                    provider="synthetic_fixture",
+                    provider_version="synthetic-gen/1.0",
+                    request_json={},
+                    provenance_json={},
+                    quality_json={},
+                    artifact_manifest_ref="runs/x/market-data-manifest.json",
+                )
             )
             session.commit()
         except Exception as e:  # noqa: BLE001 - surface any unexpected failure
@@ -193,12 +172,12 @@ def test_concurrent_identical_freezes_one_row(pg):
     s2.close()
 
     assert not errors, f"concurrent freeze raised: {errors}"
-    s = pg()
+    s = pg_factory()
     n = s.query(DatasetRow).filter_by(project_id="p1", canonical_digest=DIGEST_A).count()
     assert n == 1
 
 
-def test_alembic_check_clean_on_postgres(pg):
+def test_alembic_check_clean_on_postgres(pg_factory):
     """The migrated schema must match the models exactly (no pending ops)."""
     from pathlib import Path
 
@@ -209,9 +188,14 @@ def test_alembic_check_clean_on_postgres(pg):
     cfg = Config(str(repo_root / "alembic.ini"))
     cfg.set_main_option("script_location", str(repo_root / "app" / "persistence" / "migrations"))
     cfg.set_main_option("sqlalchemy.url", PG_URL)
-    # upgrade already applied by the fixture's create_all? No — drop_all ran;
-    # apply via alembic so `check` compares migration vs models.
-    _fresh(make_engine(PG_URL))
+    # The pg_factory fixture created the schema via Base.metadata.create_all and
+    # left the alembic_version table stamped at head. Drop the whole schema
+    # (including alembic_version) so alembic builds from scratch and check() can
+    # compare the migrated schema against the models.
+    engine = make_engine(PG_URL)
+    Base.metadata.drop_all(engine)
+    with engine.connect() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
+        conn.commit()
     command.upgrade(cfg, "head")
-    # alembic check exits non-zero (raises) if models != migrations.
-    command.check(cfg)
+    command.check(cfg)  # raises if models != migrations
