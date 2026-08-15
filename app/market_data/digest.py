@@ -23,6 +23,11 @@ def compute_dataset_digest(panel: Any) -> str:
 
     Does NOT depend on: Python object identity, dict insertion order,
     machine-specific paths, cache location, or irrelevant display labels.
+
+    Instrument-order invariant: columns are canonicalized by sorted
+    ``stable_id`` before hashing, so reordering the instruments (and their
+    associated OHLCV/mask columns) leaves the digest unchanged. Two panels that
+    differ only by instrument permutation hash identically.
     """
     h = hashlib.sha256()
 
@@ -33,24 +38,30 @@ def compute_dataset_digest(panel: Any) -> str:
     for d in panel.dates:
         h.update(d.isoformat().encode())
 
-    # Instrument stable IDs + ordering (stable, not ticker text)
-    for inst in panel.instruments:
-        h.update(inst.stable_id.encode())
+    # Canonical instrument permutation: sort by stable_id so the digest is
+    # independent of the panel's column order.
+    insts = list(panel.instruments)
+    order = sorted(range(len(insts)), key=lambda i: insts[i].stable_id)
 
-    # OHLCV (round to 8 decimal places for float determinism)
+    # Instrument stable IDs in canonical order
+    for i in order:
+        h.update(insts[i].stable_id.encode())
+
+    # OHLCV (round to 8 decimal places for float determinism), columns permuted
+    # to the canonical order so a column reorder preserves the digest.
     for name in ("open", "high", "low", "close", "volume"):
         arr = getattr(panel, name)
-        h.update(np.ascontiguousarray(np.round(arr, 8)).tobytes())
+        h.update(np.ascontiguousarray(np.round(arr[:, order], 8)).tobytes())
 
     # Benchmark
     if panel.benchmark_close is not None:
         h.update(np.ascontiguousarray(np.round(panel.benchmark_close, 8)).tobytes())
         h.update(panel.benchmark_instrument.stable_id.encode())
 
-    # Masks
-    h.update(np.ascontiguousarray(panel.eligibility_mask).tobytes())
-    h.update(np.ascontiguousarray(panel.observed_mask).tobytes())
-    h.update(np.ascontiguousarray(panel.imputation_mask).tobytes())
+    # Masks (columns permuted to canonical order)
+    h.update(np.ascontiguousarray(panel.eligibility_mask[:, order]).tobytes())
+    h.update(np.ascontiguousarray(panel.observed_mask[:, order]).tobytes())
+    h.update(np.ascontiguousarray(panel.imputation_mask[:, order]).tobytes())
 
     # Policies
     h.update(panel.adjustment_policy.value.encode())

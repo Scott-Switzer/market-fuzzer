@@ -63,12 +63,15 @@ def _register_dataset(
                 )
             )
     except IntegrityError:
-        # Another concurrent freeze won the (project_id, canonical_digest) slot.
-        session.rollback()
+        # The duplicate INSERT rolled back the SAVEPOINT automatically (the
+        # enclosing transaction is preserved). Another concurrent freeze won the
+        # (project_id, canonical_digest) slot -- resolve to its row. We do NOT
+        # call session.rollback() here: that would roll back the OUTER
+        # transaction and erase unrelated work the caller already staged.
         existing = (
             session.query(DatasetRow)
             .filter_by(project_id=project_id, canonical_digest=canonical_digest)
-            .first()
+            .one_or_none()
         )
         if existing is None:
             # Not a duplicate-row race: a real FK violation (project_id missing).

@@ -24,7 +24,7 @@ jobs:
       - run: make verify
       # Extend the type gate to the reset foundation + Phase 2 execution/compiler
       # packages (in addition to make verify's app/strategy_lab scope).
-      - run: python -m mypy app/domain app/persistence app/evidence app/strategies app/compiler
+      - run: python -m mypy app/domain app/persistence app/evidence app/strategies app/compiler app/market_data
       - run: make verify-submission
       # Hard-enforce the independent audit: with AUDIT_FINAL=1 the @defect
       # xfail guards are disabled, so every applicable final-audit assertion

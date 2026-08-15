@@ -141,37 +141,31 @@ def test_missing_project_rejected_by_fk(pg_factory):
 
 
 def test_concurrent_identical_freezes_one_row(pg_factory):
-    """Two independent sessions race to register the same (project, digest).
-    Exactly one row must exist and both callers observe the same outcome."""
+    """Two threads drive the PRODUCTION ``_register_dataset`` helper through
+    independent sessions/transactions. Exactly one dataset row must exist, both
+    callers return normally (the loser's duplicate race is converted to
+    idempotent success, not an error), and no HTTP 500."""
+    from app.market_data.artifacts import _register_dataset
+
     _seed_project(pg_factory, "p1")
     s1 = pg_factory()
     s2 = pg_factory()
     errors: list[BaseException] = []
 
     def _work(session) -> None:
-        from sqlalchemy.exc import IntegrityError
-
         try:
-            with session_scope_from(session) as s:
-                s.add(
-                    DatasetRow(
-                        dataset_id=f"ds_{uuid.uuid4().hex}",
-                        project_id="p1",
-                        canonical_digest=DIGEST_A,
-                        provider="synthetic_fixture",
-                        provider_version="synthetic-gen/1.0",
-                        request_json={},
-                        provenance_json={},
-                        quality_json={},
-                        artifact_manifest_ref="runs/x/market-data-manifest.json",
-                    )
-                )
-                s.commit()
-        except IntegrityError:
-            # Expected race outcome: the other thread won the
-            # (project_id, canonical_digest) unique slot. This is the success
-            # path -- exactly one row must exist, not an error.
-            pass
+            _register_dataset(
+                session,
+                project_id="p1",
+                canonical_digest=DIGEST_A,
+                provider="synthetic_fixture",
+                provider_version="synthetic-gen/1.0",
+                request_json={},
+                provenance_json={},
+                quality_json={},
+                artifact_manifest_ref="runs/x/market-data-manifest.json",
+            )
+            session.commit()
         except Exception as e:  # noqa: BLE001 - surface any UNEXPECTED failure
             errors.append(e)
 
@@ -186,27 +180,63 @@ def test_concurrent_identical_freezes_one_row(pg_factory):
 
     assert not errors, f"concurrent freeze raised: {errors}"
     with session_scope(pg_factory) as s:
-        n = s.query(DatasetRow).filter_by(project_id="p1", canonical_digest=DIGEST_A).count()
+        rows = s.query(DatasetRow).filter_by(project_id="p1", canonical_digest=DIGEST_A).all()
+    assert len(rows) == 1  # exactly one dataset row for the (project, digest) pair
+
+
+def test_duplicate_race_preserves_outer_transaction(pg_factory):
+    """The savepoint must isolate the duplicate-key race so unrelated work the
+    caller already staged in the enclosing transaction survives.
+
+    Seed a pending (uncommitted) Project row + a distinct dataset in the SAME
+    session, then trigger a duplicate (project, digest) insert via the production
+    helper. After the race resolves, the originally-staged project must still be
+    present and committable -- proving ``_register_dataset`` did NOT roll back
+    the outer transaction.
+    """
+    from app.market_data.artifacts import _register_dataset
+
+    # Build a session with an outer (enclosing) transaction already begun.
+    s = pg_factory()
+    try:
+        # Staged-but-uncommitted unrelated work in the outer transaction.
+        s.add(Project(id="p1", name="p1", owner="tester"))
+        # A first, successful registration of (p1, DIGEST_A).
+        _register_dataset(
+            s,
+            project_id="p1",
+            canonical_digest=DIGEST_A,
+            provider="synthetic_fixture",
+            provider_version="synthetic-gen/1.0",
+            request_json={},
+            provenance_json={},
+            quality_json={},
+            artifact_manifest_ref="runs/x/market-data-manifest.json",
+        )
+        # Second registration of the SAME (p1, DIGEST_A): must hit the unique
+        # constraint, roll back only the savepoint, and leave p1 staged.
+        _register_dataset(
+            s,
+            project_id="p1",
+            canonical_digest=DIGEST_A,
+            provider="synthetic_fixture",
+            provider_version="synthetic-gen/1.0",
+            request_json={},
+            provenance_json={},
+            quality_json={},
+            artifact_manifest_ref="runs/x/market-data-manifest.json",
+        )
+        s.commit()
+    finally:
+        s.close()
+
+    # The outer transaction survived: the staged project persisted, and exactly
+    # one dataset row exists (the duplicate was idempotently collapsed).
+    with session_scope(pg_factory) as sess:
+        proj = sess.get(Project, "p1")
+        n = sess.query(DatasetRow).filter_by(project_id="p1", canonical_digest=DIGEST_A).count()
+    assert proj is not None, "outer transaction was rolled back by the duplicate race"
     assert n == 1
-
-
-def session_scope_from(session):
-    """Wrap an already-created session in the same commit/close discipline as
-    ``session_scope`` (the existing tests open sessions directly for races)."""
-    from contextlib import contextmanager
-
-    @contextmanager
-    def _wrap():
-        try:
-            yield session
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
-
-    return _wrap()
 
 
 def test_alembic_check_clean_on_postgres(pg_factory):

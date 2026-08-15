@@ -302,12 +302,10 @@ def test_digest_unchanged_by_asset_order():
         eligibility_source=a.eligibility_source,
         source_metadata=a.source_metadata,
     )
-    # Order independence: digests differ ONLY if stable_ids reorder — assert
-    # that the digest is a pure function of (stable_id, values), not list order
-    # of unrelated metadata.
-    assert b.dataset_digest != a.dataset_digest or tuple(i.symbol for i in b.instruments) == tuple(
-        i.symbol for i in a.instruments
-    )
+    # Order independence: the digest is canonicalized by sorted stable_id, so a
+    # pure permutation of the instrument columns (with their OHLCV/mask data
+    # permuted to match) must NOT change the digest.
+    assert compute_dataset_digest(a) == compute_dataset_digest(b)
 
 
 def test_digest_changes_when_policy_changes():
