@@ -287,6 +287,99 @@ def verify_artifacts(session: Session, *, store, run_id: str) -> list[dict[str, 
     return verified
 
 
+def cancel_job(session: Session, *, run_id: str) -> bool:
+    """Durably cancel a run's in-flight job. Returns True if a job was cancelled.
+
+    Uses the domain ``Job`` state machine so only a non-terminal job can be
+    cancelled (RUNNING/QUEUED -> CANCELLED). A COMPLETED/FAILED/already-CANCELLED
+    job is left untouched and returns False (idempotent, restart-safe).
+    """
+    from app.domain.run import Job, JobState, RunStage, RunStatus
+
+    job = session.query(JobRow).filter(JobRow.run_id == run_id).first()
+    if job is None:
+        return False
+    domain = Job(
+        job_id=job.id,
+        idempotency_key=job.idempotency_key,
+        stage=RunStage(job.stage),
+        state=JobState(job.state),
+        attempts=job.attempts,
+        max_attempts=job.max_attempts,
+        progress=job.progress,
+        inputs_frozen=job.inputs_frozen,
+        result_ref=job.result_ref,
+    )
+    if domain.state in (JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED):
+        return False
+    domain.mark_cancelled()
+    job.state = domain.state.value
+    job.progress = domain.progress
+    run = session.get(RunRow, run_id)
+    if run is not None:
+        run.status = RunStatus.FAILED.value  # cancelled run is not completable
+    session.flush()
+    session.commit()
+    return True
+
+
+def reclaim_stale_jobs(session: Session, *, stale_after_seconds: int = 3600) -> int:
+    """Recovery-sweeper step: resolve jobs left RUNNING past ``stale_after_seconds``
+    (e.g. after a worker/API crash). Re-queues for retry while attempts remain,
+    otherwise marks FAILED in its own compensating transaction.
+
+    Returns the number of jobs resolved. Idempotent and safe to run on every
+    restart.
+    """
+    from datetime import timedelta
+
+    from app.domain.run import Job, JobState, RunStage, RunStatus
+
+    cutoff = now() - timedelta(seconds=stale_after_seconds)
+    stale = (
+        session.query(JobRow)
+        .filter(JobRow.state == JobState.RUNNING.value)
+        .filter(JobRow.updated_at < cutoff)
+        .all()
+    )
+    resolved = 0
+    for job in stale:
+        domain = Job(
+            job_id=job.id,
+            idempotency_key=job.idempotency_key,
+            stage=RunStage(job.stage),
+            state=JobState(job.state),
+            attempts=job.attempts,
+            max_attempts=job.max_attempts,
+            progress=job.progress,
+            inputs_frozen=job.inputs_frozen,
+            result_ref=job.result_ref,
+        )
+        if domain.attempts < domain.max_attempts:
+            # This attempt was lost to a crash: record the failure, then re-queue
+            # for the next attempt (FAILED -> QUEUED is the legal retry path).
+            domain.transition(JobState.FAILED)
+            domain.transition(JobState.QUEUED)
+            job.state = domain.state.value
+            job.attempts = job.attempts + 1
+            job.progress = 0.0
+            run = session.get(RunRow, job.run_id)
+            if run is not None:
+                run.status = RunStatus.RUNNING.value
+        else:
+            domain.transition(JobState.FAILED)  # exhausted retries
+            job.state = domain.state.value
+            job.progress = 1.0
+            job.failure_json = {"code": "stale_job_reclaimed", "retryable": False}
+            run = session.get(RunRow, job.run_id)
+            if run is not None:
+                run.status = RunStatus.FAILED.value
+        session.flush()
+        resolved += 1
+    session.commit()
+    return resolved
+
+
 def now() -> datetime:
     return datetime.now(UTC)
 

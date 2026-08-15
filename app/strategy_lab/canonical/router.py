@@ -37,6 +37,7 @@ from app.strategy_lab.canonical.contracts import (
     ResolveResponse,
 )
 from app.strategy_lab.canonical.durable import (
+    cancel_job,
     get_default_store,
     verify_artifacts,
 )
@@ -267,6 +268,30 @@ def get_campaign(campaign_id: str, session: DbSession) -> dict:
         "failure_rate_by_mechanism": camp.failure_rate_by_mechanism,
         "manifest": manifest,
     }
+
+
+@router.post("/backtests/{run_id}/cancel", response_model=dict)
+def cancel_backtest(run_id: str, session: DbSession) -> dict:
+    """Durably cancel an in-flight backtest. Idempotent: a terminal run returns
+    ``cancelled=false``. Restart-safe (operates on the persisted job)."""
+    cancelled = cancel_job(session, run_id=run_id)
+    session.commit()
+    return {"run_id": run_id, "cancelled": cancelled}
+
+
+@router.post("/campaigns/{campaign_id}/cancel", response_model=dict)
+def cancel_campaign(campaign_id: str, session: DbSession) -> dict:
+    """Durably cancel an in-flight campaign (resolves its run's job)."""
+    from sqlalchemy import select
+
+    from app.persistence.models import CampaignRow
+
+    camp = session.scalar(select(CampaignRow).where(CampaignRow.id == campaign_id))
+    if camp is None:
+        raise HTTPException(404, "campaign not found")
+    cancelled = cancel_job(session, run_id=camp.run_id)
+    session.commit()
+    return {"campaign_id": campaign_id, "run_id": camp.run_id, "cancelled": cancelled}
 
 
 @router.get("/failures/{failure_id}", response_model=dict)

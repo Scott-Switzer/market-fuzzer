@@ -1,20 +1,27 @@
 """Durable execution recovery (Phase 4).
 
-Proves a long-running operation survives an API/worker restart -- the actual
-"durable execution" property (the in-process Job state machine is covered
-separately by ``test_run_lifecycle.py``).
+Proves a long-running operation survives a fresh application instance -- the
+actual "durable execution" property (the in-process Job state machine is
+covered separately by ``test_run_lifecycle.py``).
 
 Two complementary proofs:
 
 * End-to-end through the real API: a completed backtest, replayed from a FRESH
-  app/session (``reopen`` -- same DB file, new process) returns the SAME run id
-  and verbatim response. No re-execution.
+  application/engine/session instance (``reopen`` -- a fresh application
+  instance against the same persisted database, NOT an OS-process restart)
+  returns the SAME run id and verbatim response. No re-execution.
 * At the idempotency + run/job substrate: a reserved-but-incomplete run raises
   IdempotencyInFlightError on replay (the recovery sweeper owns completion, a
   second worker must NOT double-execute), and a FAILED run/job persisted in its
-  compensating transaction is reported as a prior failure after restart.
+  compensating transaction is reported as a prior failure after a fresh
+  application instance.
 
 All on SQLite via the shared conftest fixtures (deterministic, no server).
+
+NOTE: ``reopen`` builds a new SQLAlchemy engine/session factory and
+FastAPI/TestClient inside the SAME Python process. It proves valuable
+persistence semantics against the same DB, but does NOT claim OS-process
+isolation -- do not read it as a process/worker restart.
 """
 
 from __future__ import annotations
@@ -66,9 +73,10 @@ def _backtest(client, a, universe):
     )
 
 
-def test_completed_backtest_replays_verbatim_after_restart(client, reopen):
-    """A finished run, replayed from a fresh app (restart), returns the SAME run
-    and verbatim response -- durable execution, no re-execution."""
+def test_completed_backtest_replays_verbatim_after_fresh_app_instance(client, reopen):
+    """A finished run, replayed from a fresh application instance (new
+    engine/session/TestClient against the same persisted DB), returns the SAME
+    run and verbatim response -- durable execution, no re-execution."""
     thesis = "Allocate 60% to SPY and 40% to AGG and rebalance monthly."
     c = _compile(client, thesis)
     pid = _project(client)
@@ -78,7 +86,8 @@ def test_completed_backtest_replays_verbatim_after_restart(client, reopen):
     first = bt.json()
     run_id = first["run_id"]
 
-    # Simulate an application/worker restart against the same DB.
+    # Simulate a fresh application instance against the same DB (new engine/
+    # session/TestClient -- not an OS-process restart).
     client2 = reopen()
     bt2 = _backtest(client2, a, ["SPY", "AGG"])
     assert bt2.status_code == 200, bt2.text
@@ -145,7 +154,7 @@ def test_in_flight_reservation_coalesces_across_sessions(db):
     s1.commit()
     s1.close()
 
-    # Fresh session (restart).
+    # Fresh session (fresh application instance).
     s2 = db["factory"]()
     ir2, created2 = reserve_idempotency(
         s2,
@@ -168,9 +177,11 @@ def test_in_flight_reservation_coalesces_across_sessions(db):
     s2.close()
 
 
-def test_failed_run_reported_as_prior_failure_after_restart(db):
+def test_failed_run_reported_as_prior_failure_after_fresh_instance(db):
     """A FAILED run/job persisted in the compensating transaction is reported as
-    a prior failure (not a silent re-run) when replayed after a restart."""
+    a prior failure (not a silent re-run) when replayed after a fresh
+    application instance."""
+    from app.persistence.models import JobRow, RunRow
     from app.strategy_lab.canonical.backtest_service import _persist_failed_lifecycle
     from app.strategy_lab.canonical.durable import (
         create_pending_run,
@@ -194,7 +205,7 @@ def test_failed_run_reported_as_prior_failure_after_restart(db):
     run = create_pending_run(
         s1, project_id="p1", strategy_id="s1", strategy_version=1, strategy_hash="h", data_mode="synthetic"
     )
-    create_queued_job(
+    job = create_queued_job(
         s1,
         run_id=run.id,
         idempotency_key="k-fail",
@@ -213,10 +224,10 @@ def test_failed_run_reported_as_prior_failure_after_restart(db):
     s1.commit()
     # Execution crashes: request txn rolls back, failure persisted in its own txn.
     s1.rollback()
-    _persist_failed_lifecycle(s1, run.id, run.id, RuntimeError("boom"))
+    _persist_failed_lifecycle(s1, run.id, job.id, RuntimeError("boom"))
     s1.close()
 
-    # Restart.
+    # Fresh application instance.
     s2 = db["factory"]()
     ir2, created2 = reserve_idempotency(
         s2,
@@ -229,6 +240,18 @@ def test_failed_run_reported_as_prior_failure_after_restart(db):
         response_json={},
     )
     assert created2 is False
+
+    # Durable state persisted across the fresh instance before testing replay.
+    persisted_run = s2.get(RunRow, run.id)
+    persisted_job = s2.get(JobRow, job.id)
+
+    assert persisted_run is not None
+    assert persisted_run.status == "failed"
+
+    assert persisted_job is not None
+    assert persisted_job.state == "failed"
+    assert persisted_job.failure_json
+
     with pytest.raises(PriorAttemptFailedError):
         _replay_or_reject_backtest(s2, ir2, "k-fail")
     s2.close()
