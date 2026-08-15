@@ -211,9 +211,10 @@ def session_scope_from(session):
 
 def test_alembic_check_clean_on_postgres(pg_factory):
     """The migrated schema must match the models exactly (no pending ops)."""
+    from pathlib import Path
+
     from alembic import command
     from alembic.config import Config
-    from pathlib import Path
 
     repo_root = Path(__file__).resolve().parents[2]
     cfg = Config(str(repo_root / "alembic.ini"))
