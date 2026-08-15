@@ -474,21 +474,13 @@ def _execute_campaign_body(
                     pred_results = [PredicateResult(**pr) for pr in ev["predicate_results"]]
                     failed_pairs = [(p, r) for p, r in zip(predicates, pred_results, strict=True) if r.failed]
                     violated = [describe_predicate(p) for p, _ in failed_pairs]
-                    # Breach severity: how badly the failed thresholds were crossed
-                    # (0 = just crossed, 1 = deep breach), max across failed predicates.
-                    breach_severity = 0.0
-                    for _p, r in failed_pairs:
-                        try:
-                            thr = abs(float(r.threshold)) or 1.0
-                            breach = min(1.0, abs(float(r.value) - float(r.threshold)) / thr)
-                        except (TypeError, ValueError):
-                            breach = 0.0
-                        breach_severity = max(breach_severity, breach)
+                    # NOTE: raw per-predicate breach (observed value vs threshold) is
+                    # retained in the evaluation record, but a generic cross-metric
+                    # normalization is deliberately NOT folded into categorical severity.
                     severity = compute_failure_severity(
                         failed_predicate_names=violated,
                         confirmation_successes=confirmed_here,
                         confirmation_trials=confirmation_trials,
-                        breach_severity=breach_severity,
                     )
                     conf_rate = (confirmed_here / confirmation_trials) if confirmation_trials else 0.0
                     rate_lcb95 = confirmation_rate_lcb95(confirmed_here, confirmation_trials)
@@ -505,7 +497,7 @@ def _execute_campaign_body(
                             canonical_hash=expected_canonical_hash,
                             predicate="|".join(violated),
                             metrics=ev["metrics"],
-                            severity=severity.value,
+                            severity=severity,
                             stress_intensity=float(intensity),
                             confirmation_trials=confirmation_trials,
                             confirmation_successes=confirmed_here,

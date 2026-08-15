@@ -18,12 +18,11 @@ from app.domain.failure import (
 
 
 def test_severity_low_for_small_breach_weak_confirmation():
-    # Non-critical predicate, weak breach, weak confirmation -> LOW.
+    # Non-critical predicate, weak confirmation -> LOW.
     sev = compute_failure_severity(
         failed_predicate_names=["sharpe_lt_0"],
         confirmation_successes=1,
         confirmation_trials=3,
-        breach_severity=0.1,
     )
     assert sev == Severity.LOW
 
@@ -34,20 +33,18 @@ def test_severity_critical_for_critical_predicate_strong_confirmation():
         failed_predicate_names=["max_drawdown_gt_0.4"],
         confirmation_successes=3,
         confirmation_trials=3,
-        breach_severity=0.9,
     )
     assert sev == Severity.CRITICAL
 
 
-def test_severity_high_for_large_breach_noncritical():
-    # Large breach on a non-critical predicate -> HIGH (not driven by stress size).
+def test_severity_medium_for_noncritical_moderate_confirmation():
+    # Non-critical predicate, moderately confirmed -> MEDIUM (not driven by stress size).
     sev = compute_failure_severity(
         failed_predicate_names=["sharpe_lt_0"],
         confirmation_successes=2,
         confirmation_trials=3,
-        breach_severity=0.9,
     )
-    assert sev == Severity.HIGH
+    assert sev == Severity.MEDIUM
 
 
 def test_configured_but_passing_critical_predicate_does_not_raise_severity():
@@ -57,7 +54,6 @@ def test_configured_but_passing_critical_predicate_does_not_raise_severity():
         failed_predicate_names=["sharpe_lt_0"],  # drawdown NOT in the failed list
         confirmation_successes=2,
         confirmation_trials=3,
-        breach_severity=0.3,
     )
     # Not critical (the passing drawdown predicate is absent from the failed set).
     assert sev != Severity.CRITICAL
@@ -71,13 +67,11 @@ def test_severity_not_driven_by_stress_intensity():
         failed_predicate_names=["sharpe_lt_0"],
         confirmation_successes=2,
         confirmation_trials=3,
-        breach_severity=0.4,
     )
     large = compute_failure_severity(
         failed_predicate_names=["sharpe_lt_0"],
         confirmation_successes=2,
         confirmation_trials=3,
-        breach_severity=0.4,
     )
     assert small == large
 
