@@ -20,6 +20,7 @@ changes (levels chain), never through fresh perturbation.
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -98,6 +99,78 @@ def validate_mechanisms(mechanisms: list[str]) -> None:
     unknown = [m for m in mechanisms if m not in KNOWN_MECHANISMS]
     if unknown:
         raise InvalidScenarioMechanismError(f"unknown scenario mechanism(s): {', '.join(unknown)}")
+
+
+def _panel_content_digest(panel: MarketDataPanel) -> str:
+    """Digest of the GENERATED market world's actual content (OHLCV + dates).
+
+    Critically, this is derived ONLY from the realized panel tensors and the
+    calendar -- NEVER from the scenario ``seed``. Some mechanisms
+    (``drawdown``, ``correlation_breakdown``) ignore the per-world RNG seed
+    entirely, so two scenario definitions that differ only in ``seed`` can
+    produce byte-identical panels. A world identity that folded in the seed
+    would wrongly report those as distinct evidence. The effective world
+    identity must recognize them as the SAME evidence (see
+    ``effective_world_hash``).
+    """
+    h = hashlib.sha256()
+    h.update(",".join(panel.assets).encode())
+    h.update(np.ascontiguousarray(panel.open).tobytes())
+    h.update(np.ascontiguousarray(panel.high).tobytes())
+    h.update(np.ascontiguousarray(panel.low).tobytes())
+    h.update(np.ascontiguousarray(panel.close).tobytes())
+    h.update(np.ascontiguousarray(panel.volume).tobytes())
+    if panel.benchmark_close is not None:
+        h.update(np.ascontiguousarray(panel.benchmark_close).tobytes())
+    h.update(",".join(d.isoformat() for d in panel.dates).encode())
+    return h.hexdigest()
+
+
+def effective_world_hash(
+    base_digest: str,
+    definition: ScenarioDefinition,
+    panel: MarketDataPanel,
+) -> str:
+    """Canonical EFFECTIVE-WORLD identity for a generated scenario world.
+
+    Deterministically ties the world to: the frozen baseline dataset digest it
+    was perturbed from, the mechanism, the scenario parameters/intensity, the
+    window, and -- most importantly -- the ACTUAL generated market content.
+
+    The seed is intentionally EXCLUDED: two numerically identical market worlds
+    (e.g. a ``drawdown`` world generated under two different seeds, or a
+    confirmation world that happens to coincide with the primary) MUST collapse
+    to the SAME effective identity. ``role`` (``primary`` vs ``confirmation``)
+    is also excluded on purpose -- relabeling a world does not make it
+    independent evidence.
+
+    This is the identity used to prove Phase 5 confirmation disjointness:
+    ``primary.world_hash not in confirmation_world_hashes`` and all
+    ``confirmation_world_hashes`` pairwise distinct.
+    """
+    h = hashlib.sha256()
+    h.update(base_digest.encode("utf-8"))
+    h.update(b"|")
+    h.update(definition.mechanism.encode("utf-8"))
+    h.update(b"|")
+    h.update(str(definition.intensity).encode("utf-8"))
+    h.update(b"|")
+    h.update(str(definition.start_index).encode("utf-8"))
+    h.update(b"|")
+    h.update(str(definition.duration).encode("utf-8"))
+    h.update(b"|")
+    h.update(definition.generator_version.encode("utf-8"))
+    h.update(b"|")
+    h.update(
+        json.dumps(
+            {k: str(v) for k, v in definition.parameters.items()},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    h.update(b"|")
+    h.update(_panel_content_digest(panel).encode("utf-8"))
+    return h.hexdigest()
 
 
 def _panel_digest(panel: MarketDataPanel, definition: ScenarioDefinition) -> str:
@@ -330,4 +403,6 @@ __all__ = [
     "generate_scenario",
     "assert_panel_invariants",
     "stable_seed",
+    "effective_world_hash",
+    "_panel_content_digest",
 ]

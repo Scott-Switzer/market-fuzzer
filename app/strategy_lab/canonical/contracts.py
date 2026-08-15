@@ -261,6 +261,15 @@ class FailureRecord(BaseModel):
     confirmation_successes: int
     confirmation_rate: float
     confirmation_rate_lcb95: float
+    # Phase 5 disjoint-evidence lineage (item 1 of the next sequence): the
+    # EFFECTIVE-WORLD identities prove primary/confirmation disjointness.
+    # ``primary_world_hash`` is the candidate failure's own world identity;
+    # ``confirmation_world_hashes`` are the distinct independent confirmation
+    # worlds. ``primary_world_hash not in confirmation_world_hashes`` and the
+    # confirmation list is pairwise distinct -- guaranteed by the campaign
+    # service, not asserted here.
+    primary_world_hash: str
+    confirmation_world_hashes: list[str]
 
     @model_validator(mode="after")
     def _check_evidence(self) -> FailureRecord:

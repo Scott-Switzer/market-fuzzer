@@ -21,6 +21,7 @@ from decimal import Decimal
 
 import numpy as np
 
+from app.persistence.models import AdjacentPassRow, MinimizationTrialRow
 from app.strategy_lab.submission.panels import MarketDataPanel
 
 
@@ -176,8 +177,8 @@ def test_campaign_same_key_same_request_one_campaign(client):
     pid = _project(client)
     c = _compile(client, "Allocate 60% to SPY and 40% to AGG and rebalance monthly.")
     a = _approve(client, pid, c["spec_draft"], c["canonical_hash"]).json()
-    r1 = _campaign(client, a, ["drawdown"], key="CMP").json()
-    r2 = _campaign(client, a, ["drawdown"], key="CMP").json()
+    r1 = _campaign(client, a, ["vol_spike"], key="CMP").json()
+    r2 = _campaign(client, a, ["vol_spike"], key="CMP").json()
     assert r1["campaign_id"] == r2["campaign_id"]
 
 
@@ -497,18 +498,24 @@ def test_unknown_mechanism_rejected_422(client):
 # --------------------------------------------------------------------------
 # 18.6 confirmation / minimization / adjacent pass
 # --------------------------------------------------------------------------
-def test_campaign_records_minimization_and_adjacent(client, db):
-    from app.persistence.database import make_engine, make_session_factory
-    from app.persistence.models import AdjacentPassRow, MinimizationTrialRow
-
+def test_campaign_records_minimization_and_adjacent(client, db, monkeypatch):
+    # Phase 5 disjoint-evidence: confirmation runs on a seed-CONSUMING mechanism
+    # (vol_spike) so confirmation worlds are genuinely disjoint; run_strategy is
+    # forced to fail for a deterministic end-to-end confirm+minimize+adjacent run.
+    monkeypatch.setattr(
+        "app.strategies.pipeline.run_strategy",
+        lambda *a, **k: __import__("types").SimpleNamespace(
+            metrics={"sharpe": -1.0, "cumulative_return": -0.5, "max_drawdown": -0.9, "turnover": 0.1}
+        ),
+    )
     pid = _project(client)
     c = _compile(client, "Allocate 60% to SPY and 40% to AGG and rebalance monthly.")
     a = _approve(client, pid, c["spec_draft"], c["canonical_hash"]).json()
-    r = _campaign(client, a, ["drawdown"], budget=8, seeds=(1, 2, 3), key="cmp-min")
+    r = _campaign(client, a, ["vol_spike"], budget=8, seeds=(1, 2, 3), key="cmp-min")
     assert r.status_code == 200, r.text
     campaign_id = r.json()["campaign_id"]
 
-    eng = make_session_factory(make_engine(db["url"]))()
+    eng = db["factory"]()
     # Minimization trials were persisted (real re-evaluation, not fabricated).
     trials = eng.query(MinimizationTrialRow).filter_by(campaign_id=campaign_id).all()
     assert len(trials) >= 1
@@ -527,15 +534,23 @@ def test_campaign_records_minimization_and_adjacent(client, db):
     eng.close()
 
 
-def test_still_failing_worlds_never_report_adjacent(client):
+def test_still_failing_worlds_never_report_adjacent(client, monkeypatch):
+    # Phase 5 disjoint-evidence: confirmation on a seed-CONSUMING mechanism so
+    # confirmation worlds are genuinely disjoint; run_strategy forced to fail.
+    monkeypatch.setattr(
+        "app.strategies.pipeline.run_strategy",
+        lambda *a, **k: __import__("types").SimpleNamespace(
+            metrics={"sharpe": -1.0, "cumulative_return": -0.5, "max_drawdown": -0.9, "turnover": 0.1}
+        ),
+    )
     pid = _project(client)
     c = _compile(client, "Allocate 60% to SPY and 40% to AGG and rebalance monthly.")
     a = _approve(client, pid, c["spec_draft"], c["canonical_hash"]).json()
-    # A predicate that the drawdown world still fails must not produce an adjacent pass.
+    # A predicate that the world still fails must not produce an adjacent pass.
     r = _campaign(
         client,
         a,
-        ["drawdown"],
+        ["vol_spike"],
         budget=8,
         seeds=(1, 2, 3),
         predicates=[{"metric": "sharpe", "operator": "lt", "threshold": "0"}],
@@ -682,7 +697,7 @@ def test_five_family_slices_run_and_persist(client):
         camp = _campaign(
             client,
             a,
-            ["drawdown"],
+            ["vol_spike"],
             budget=4,
             seeds=(1, 2),
             predicates=[{"metric": "sharpe", "operator": "lt", "threshold": "0"}],
