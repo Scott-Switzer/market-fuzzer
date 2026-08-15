@@ -31,7 +31,11 @@ from app.persistence.database import (  # noqa: E402
 from app.persistence.models import (  # noqa: E402
     Base,
     CampaignRow,
+    Project,
+    RunRow,
     ScenarioWorldRow,
+    Strategy,
+    StrategyVersionRow,
 )
 
 
@@ -46,13 +50,47 @@ def pg_factory():
 
 
 def _make_campaign(s) -> str:
+    """Build the full FK chain (project -> strategy -> strategy_version -> run ->
+    campaign) and return the new campaign_id. The world_hash UNIQUE constraint is
+    the thing under test, but the row can only be inserted once its FK chain
+    (run_id -> runs.id) actually exists -- on real PostgreSQL a dangling run_id
+    fails the FK before the uniqueness assertion is ever reached."""
+    project_id = "p1"
+    strategy_id = "s1"
+    run_id = str(uuid.uuid4())
+    if s.get(Project, project_id) is None:
+        s.add(Project(id=project_id, name="WS"))
+    if s.get(Strategy, strategy_id) is None:
+        s.add(Strategy(id=strategy_id, project_id=project_id, name="S"))
+    if s.get(StrategyVersionRow, 1) is None:
+        s.add(
+            StrategyVersionRow(
+                strategy_id=strategy_id,
+                version=1,
+                canonical_hash="0" * 64,
+                canonical_json="{}",
+                state="approved",
+            )
+        )
+        s.flush()
+    if s.get(RunRow, run_id) is None:
+        s.add(
+            RunRow(
+                id=run_id,
+                project_id=project_id,
+                strategy_id=strategy_id,
+                strategy_version=1,
+                strategy_hash="0" * 64,
+                data_mode="demo_fixture",
+            )
+        )
     camp_id = str(uuid.uuid4())
     s.add(
         CampaignRow(
             id=camp_id,
-            run_id=str(uuid.uuid4()),
-            project_id="p1",
-            strategy_id="s1",
+            run_id=run_id,
+            project_id=project_id,
+            strategy_id=strategy_id,
             strategy_version=1,
             strategy_hash="0" * 64,
             base_panel_digest="d" * 64,

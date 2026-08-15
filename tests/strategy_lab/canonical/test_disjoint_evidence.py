@@ -27,14 +27,78 @@ from __future__ import annotations
 from decimal import Decimal
 from types import SimpleNamespace
 
-from app.persistence.models import CampaignRow, RunRow, ScenarioWorldRow, WorldEvaluationRow
+from app.persistence.models import (
+    CampaignRow,
+    RunRow,
+    ScenarioWorldRow,
+    WorldEvaluationRow,
+)
 from app.strategy_lab.canonical.data_service import build_demo_panel
+from app.strategy_lab.canonical.predicates import (
+    ComparisonOperator,
+    FailurePredicate,
+    MetricName,
+)
 from app.strategy_lab.canonical.scenarios import (
     ScenarioDefinition,
     effective_world_hash,
     generate_scenario,
     stable_seed,
 )
+
+
+def _make_chain(sess, campaign_id, run_id="run-1", project_id="proj-1", strategy_id="strat-1"):
+    """Build the full FK chain so world rows can be persisted in a unit test:
+    project -> strategy -> strategy_version -> run -> campaign. Returns the
+    CampaignRow.id to use as campaign_id."""
+    from app.persistence.models import Project, Strategy, StrategyVersionRow
+
+    if sess.get(Project, project_id) is None:
+        sess.add(Project(id=project_id, name="WS"))
+    if sess.get(Strategy, strategy_id) is None:
+        sess.add(Strategy(id=strategy_id, project_id=project_id, name="S"))
+    sv = sess.get(StrategyVersionRow, 1)
+    if sv is None:
+        sess.add(
+            StrategyVersionRow(
+                strategy_id=strategy_id,
+                version=1,
+                canonical_hash="0" * 64,
+                canonical_json="{}",
+                state="approved",
+            )
+        )
+        sess.flush()
+        sv = sess.get(StrategyVersionRow, 1)
+    if sess.get(RunRow, run_id) is None:
+        sess.add(
+            RunRow(
+                id=run_id,
+                project_id=project_id,
+                strategy_id=strategy_id,
+                strategy_version=1,
+                strategy_hash="0" * 64,
+                data_mode="demo_fixture",
+            )
+        )
+    camp = sess.get(CampaignRow, campaign_id)
+    if camp is None:
+        sess.add(
+            CampaignRow(
+                id=campaign_id,
+                run_id=run_id,
+                project_id=project_id,
+                strategy_id=strategy_id,
+                strategy_version=1,
+                strategy_hash="0" * 64,
+                mechanisms=["vol_spike"],
+                seeds=[1],
+                failure_predicates=[],
+                confirmation_policy={},
+            )
+        )
+    sess.flush()
+    return campaign_id
 
 
 # ---------------------------------------------------------------------------
@@ -352,4 +416,200 @@ def test_frozen_baseline_worlds_bound_to_frozen_digest(client, monkeypatch, db):
     assert rows
     for row in rows:
         assert row.world_hash  # non-empty, baseline-bound effective identity
+    sess.close()
+
+
+class _StubApproved:
+    """Minimal stand-in so ``approved.to_spec()`` works without a real strategy."""
+
+    def to_spec(self):
+        return {"id": "x", "version": 1}
+
+
+# ---------------------------------------------------------------------------
+# Regression: confirmation identities participate in the CAMPAIGN-WIDE seen set
+# (issue #2) -- not only pairwise-within-one-failure.
+# ---------------------------------------------------------------------------
+def test_confirmation_hashes_join_campaign_wide_seen_set(db, monkeypatch):
+    """The confirmation helper must consult AND mutate the campaign-wide
+    ``seen_world_hashes`` set, so a later primary / minimization / adjacent /
+    another-failure's-confirmation world that realizes the SAME effective
+    identity is deduped at the application level -- not only confirmation worlds
+    within a single failure.
+
+    Reproduces the fix: previously the helper held its own local ``seen`` and
+    never returned its accepted hashes, so the outer campaign set stayed blind
+    to confirmation identities.
+    """
+    import app.strategy_lab.canonical.campaign_service as cs
+
+    sess = db["factory"]()
+    _make_chain(sess, "camp-x")
+    base = build_demo_panel(["SPY", "AGG"], None, seed=1)
+    bd = "BASEDIGEST"
+    mech = "vol_spike"
+    intensity = Decimal("0.3")
+    defn = ScenarioDefinition(
+        mechanism=mech,
+        seed=stable_seed(mech, 1, 1, 300, int(intensity * 1000)),
+        intensity=intensity,
+        start_index=10,
+        duration=30,
+    )
+    preds = [
+        FailurePredicate(
+            metric=MetricName("sharpe"),
+            operator=ComparisonOperator("lt"),
+            threshold=Decimal("0"),
+        )
+    ]
+    # The caller (campaign body) adds the primary's hash to the shared set
+    # before invoking the helper; simulate that so the test mirrors production.
+    shared: set[str] = set()
+    shared.add("PRIMARY_HASH")
+    # A pre-existing (e.g. earlier primary/minimization) effective identity that
+    # a confirmation world might otherwise collide with.
+    pre_existing = "PRE_EXISTING_HASH_FROM_ANOTHER_WORLD"
+    shared.add(pre_existing)
+
+    monkeypatch.setattr(cs, "run_strategy", _fake_run_strategy)
+
+    confirmed, trials, cwh = cs._derive_disjoint_confirmation_worlds(
+        session=sess,
+        campaign_id="camp-x",
+        approved=_StubApproved(),
+        base_panel=base,
+        base_digest=bd,
+        predicates=preds,
+        expected_canonical_hash="0" * 64,
+        mechanism=mech,
+        seed=1,
+        intensity=float(intensity),
+        definition=defn,
+        primary_world_hash="PRIMARY_HASH",
+        world_key="k",
+        confirmation_policy=cs.ConfirmationPolicy(
+            required_successes=1, total_trials=2, independent_seeds=[1, 2]
+        ),
+        seen_world_hashes=shared,
+    )
+    # Confirmation ran and produced distinct worlds.
+    assert trials == 2
+    assert len(cwh) == 2
+    assert "PRIMARY_HASH" not in cwh
+    # The shared set now contains the confirmation identities (and the primary).
+    for h in cwh:
+        assert h in shared
+    assert "PRIMARY_HASH" in shared
+    assert pre_existing in shared  # untouched but still present
+    sess.close()
+
+
+# ---------------------------------------------------------------------------
+# Regression: _probe_one reuses the persisted world on a duplicate identity
+# instead of raising UnboundLocalError or inserting a duplicate row (issue #1).
+# ---------------------------------------------------------------------------
+def test_probe_one_reuses_persisted_world_on_duplicate_identity(db, monkeypatch):
+    """When ``_probe_one`` is invoked twice with the SAME effective identity, the
+    second call must reuse the already-persisted ScenarioWorldRow (no
+    UnboundLocalError, no second row with the same world_hash)."""
+    import app.strategy_lab.canonical.campaign_service as cs
+
+    sess = db["factory"]()
+    _make_chain(sess, "camp-p")
+    base = build_demo_panel(["SPY", "AGG"], None, seed=1)
+    bd = "BASEDIGEST"
+    mech = "vol_spike"
+    intensity = 0.3
+    base_def = ScenarioDefinition(
+        mechanism=mech,
+        seed=stable_seed(mech, 1, 1, 300, int(intensity * 1000)),
+        intensity=Decimal(str(intensity)),
+        start_index=10,
+        duration=30,
+    )
+    preds = [
+        FailurePredicate(
+            metric=MetricName("sharpe"),
+            operator=ComparisonOperator("lt"),
+            threshold=Decimal("0"),
+        )
+    ]
+    # Collapse every probe identity to one constant -> the 2nd call must reuse.
+    monkeypatch.setattr(cs, "effective_world_hash", lambda *a, **k: "DUP_PROBE_HASH")
+    monkeypatch.setattr(cs, "run_strategy", _fake_run_strategy)
+
+    # _probe_one persists a MinimizationTrialRow whose failure_id FK references a
+    # WorldEvaluationRow; create that parent evaluation so the FK is satisfied.
+    from app.persistence.models import ScenarioWorldRow as SWR
+    from app.persistence.models import WorldEvaluationRow as WER
+
+    sess.add(
+        SWR(
+            id="world-p",
+            campaign_id="camp-p",
+            world_key="k",
+            mechanism=mech,
+            seed=1,
+            intensity=0.3,
+            definition={},
+            content_digest="x",
+            world_hash="PRIMARY_HASH",
+        )
+    )
+    sess.add(
+        WER(
+            id="fail-p",
+            campaign_id="camp-p",
+            world_id="world-p",
+            outcome="failed_predicate",
+            predicate_results=[],
+            metrics={},
+            error_message=None,
+            role="primary",
+        )
+    )
+    sess.flush()
+
+    seen: set[str] = set()
+    cs._probe_one(
+        sess,
+        "camp-p",
+        "fail-p",
+        mech,
+        _StubApproved(),
+        base,
+        preds,
+        "0" * 64,
+        intensity,
+        base_def,
+        bd,
+        seen,
+    )
+    cs._probe_one(
+        sess,
+        "camp-p",
+        "fail-p",
+        mech,
+        _StubApproved(),
+        base,
+        preds,
+        "0" * 64,
+        intensity,
+        base_def,
+        bd,
+        seen,
+    )
+    sess.flush()
+    # Exactly ONE ScenarioWorldRow with the duplicate identity;
+    # both evaluations reference that same world row.
+    rows = sess.query(ScenarioWorldRow).filter_by(world_hash="DUP_PROBE_HASH").all()
+    assert len(rows) == 1, f"expected exactly one persisted world, got {len(rows)}"
+    evals = (
+        sess.query(WorldEvaluationRow)
+        .filter_by(campaign_id="camp-p", role="minimization")
+        .all()
+    )
+    assert len(evals) == 2
+    assert all(e.world_id == rows[0].id for e in evals)
     sess.close()

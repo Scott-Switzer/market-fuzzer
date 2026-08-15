@@ -129,23 +129,28 @@ def _derive_disjoint_confirmation_worlds(
     mechanism: str,
     seed: int,
     intensity: float,
-    definition: ScenarioDefinition,
+    definition: ScenarioDefinition,  # noqa: F821
     primary_world_hash: str,
     world_key: str,
     confirmation_policy: ConfirmationPolicy,
+    seen_world_hashes: set[str],
 ) -> tuple[int, int, list[str]]:
     """Generate ``total_trials`` DISTINCT effective confirmation worlds.
 
     Returns ``(confirmed_here, confirmation_trials, confirmation_world_hashes)``.
 
     Every produced world's ``effective_world_hash`` must be disjoint from the
-    primary search world AND from every other accepted confirmation world. On a
-    collision we deterministically derive a fresh seed (an increasing ``attempt``
-    salt folded into ``stable_seed``) and regenerate, up to a bounded budget. If
-    the budget is exhausted before ``total_trials`` distinct worlds exist, raise
-    ``ConfirmationIndependenceError`` -- the request cannot be satisfied without
-    fabricating independence (e.g. a seed-invariant mechanism whose every seed
-    yields the identical world).
+    primary search world AND from every other accepted confirmation world AND
+    from any world already realized in this campaign (the shared
+    ``seen_world_hashes`` set is consulted, and every accepted confirmation
+    world's identity is added back to it so later primary/minimization/adjacent
+    worlds — and other failures' confirmations — cannot collide with it without
+    application-level dedup noticing). On a collision we deterministically derive
+    a fresh seed (an increasing ``attempt`` salt folded into ``stable_seed``) and
+    regenerate, up to a bounded budget. If the budget is exhausted before
+    ``total_trials`` distinct worlds exist, raise ``ConfirmationIndependenceError``
+    -- the request cannot be satisfied without fabricating independence (e.g. a
+    seed-invariant mechanism whose every seed yields the identical world).
     """
     total = confirmation_policy.total_trials
     if total <= 0:
@@ -153,7 +158,10 @@ def _derive_disjoint_confirmation_worlds(
     # Bounded, deterministic attempt budget: generous but finite, so a
     # seed-invariant mechanism terminates explicitly instead of looping forever.
     max_attempt = max(16, total * 8)
-    seen: set[str] = {primary_world_hash}
+    # Use the campaign-wide set so confirmations also dedup against primaries,
+    # minimization probes, adjacent worlds, and other failures' confirmations.
+    seen: set[str] = set(seen_world_hashes)
+    seen.add(primary_world_hash)
     accepted: list[tuple[ScenarioDefinition, Any, str]] = []
     independent_seeds = confirmation_policy.independent_seeds
     for k in range(total):
@@ -171,6 +179,7 @@ def _derive_disjoint_confirmation_worlds(
             wh = effective_world_hash(base_digest, cdef, cworld.panel)
             if wh not in seen:
                 seen.add(wh)
+                seen_world_hashes.add(wh)
                 accepted.append((cdef, cworld, wh))
                 found = True
                 break
@@ -585,6 +594,7 @@ def _execute_campaign_body(
                     primary_world_hash=primary_world_hash,
                     world_key=world_key,
                     confirmation_policy=confirmation_policy,
+                    seen_world_hashes=seen_world_hashes,
                 )
                 if confirmed_here >= confirmation_policy.required_successes:
                     fails += 1
@@ -870,8 +880,17 @@ def _probe_one(
     scenario = generate_scenario(base_panel, defn)
     wh = effective_world_hash(base_digest, defn, scenario.panel)
     # No duplicate effective evidence: if this probe's identity already exists
-    # (e.g. the adjacent pass revisits the same intensity), the world row is
-    # already persisted; still return the evaluated outcome.
+    # (e.g. the adjacent pass revisits the same intensity, or two probes land on
+    # the same intensity), reuse the already-persisted world row rather than
+    # inserting a duplicate (which the DB UNIQUE constraint would also reject).
+    if wh in seen_world_hashes:
+        world_row = (
+            session.query(ScenarioWorldRow)
+            .filter_by(campaign_id=campaign_id, world_hash=wh)
+            .one_or_none()
+        )
+        if world_row is None:  # defensive: identity seen but row missing
+            seen_world_hashes.discard(wh)
     if wh not in seen_world_hashes:
         seen_world_hashes.add(wh)
         world_row = ScenarioWorldRow(
