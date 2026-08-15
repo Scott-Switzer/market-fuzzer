@@ -56,17 +56,30 @@ def _bt_body(a, key, universe=("SPY", "AGG")):
     }
 
 
-def _cmp_body(a, key, seeds=(1, 2), budget=4):
+def _cmp_body(a, key, seeds=(1, 2), budget=4, mechs=("vol_spike",)):
     return {
         "strategy_id": a["strategy_id"],
         "strategy_version": a["strategy_version"],
         "expected_canonical_hash": a["canonical_hash"],
-        "mechanism_families": ["drawdown"],
+        "mechanism_families": list(mechs),
         "seed_list": list(seeds),
         "world_budget": budget,
         "failure_predicates": [{"metric": "sharpe", "operator": "lt", "threshold": "0"}],
         "idempotency_key": key,
     }
+
+
+def _fake_run_strategy(*args, **kwargs):
+    """Force every world evaluation to FAIL the sharpe<0 predicate, so a
+    confirmed failure (and thus confirmation/minimization) is always produced.
+    vol_spike is seed-consuming, so distinct confirmation worlds are possible."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        metrics={"sharpe": -1.0, "cumulative_return": -0.5, "max_drawdown": -0.9, "turnover": 0.1},
+        positions=[],
+        trades=[],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +298,8 @@ def test_backtest_replay_identical_after_restart(client, reopen):
         assert b1[field] == b2[field], field
 
 
-def test_campaign_replay_identical_after_restart(client, reopen):
+def test_campaign_replay_identical_after_restart(client, reopen, monkeypatch):
+    monkeypatch.setattr("app.strategy_lab.canonical.campaign_service.run_strategy", _fake_run_strategy)
     pid, a = _approved(client)
     r1 = client.post("/api/strategy-lab/v2/campaigns", json=_cmp_body(a, "cmp-replay"))
     assert r1.status_code == 200, r1.text
@@ -317,9 +331,10 @@ def test_stable_seed_is_process_stable_and_deterministic():
     assert stable_seed("a", 1) == expected
 
 
-def test_minimization_preserves_scenario_dimensions(client, db):
+def test_minimization_preserves_scenario_dimensions(client, db, monkeypatch):
     """Every minimization trial and the adjacent pass must share the original
     failure's mechanism, seed, start_index and duration — only intensity moves."""
+    monkeypatch.setattr("app.strategy_lab.canonical.campaign_service.run_strategy", _fake_run_strategy)
     pid, a = _approved(client)
     r = client.post("/api/strategy-lab/v2/campaigns", json=_cmp_body(a, "cmp-dim", seeds=(1, 2, 3), budget=8))
     assert r.status_code == 200, r.text
@@ -394,7 +409,8 @@ def test_scenarios_do_not_change_data_outside_window():
 # ---------------------------------------------------------------------------
 # Gate 11: confirmation counts equal executed trials
 # ---------------------------------------------------------------------------
-def test_confirmation_policy_counts_match_execution(client, db):
+def test_confirmation_policy_counts_match_execution(client, db, monkeypatch):
+    monkeypatch.setattr("app.strategy_lab.canonical.campaign_service.run_strategy", _fake_run_strategy)
     seeds = (1, 2, 3, 4)  # NOT three seeds — policy must reflect reality
     pid, a = _approved(client)
     r = client.post("/api/strategy-lab/v2/campaigns", json=_cmp_body(a, "cmp-conf", seeds=seeds, budget=8))

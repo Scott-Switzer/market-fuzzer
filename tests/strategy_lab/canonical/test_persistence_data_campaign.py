@@ -109,7 +109,7 @@ def test_campaign_uses_approved_hash(client):
             "strategy_id": a["strategy_id"],
             "strategy_version": a["strategy_version"],
             "expected_canonical_hash": a["canonical_hash"],
-            "mechanism_families": ["drawdown", "vol_spike"],
+            "mechanism_families": ["vol_spike"],
             "seed_list": [1, 2, 3],
             "world_budget": 6,
             "failure_predicates": [{"metric": "sharpe", "operator": "lt", "threshold": "0"}],
@@ -126,7 +126,17 @@ def test_campaign_uses_approved_hash(client):
         assert body["adjacent_pass"] is None
 
 
-def test_campaign_confirmed_failure_minimizes_and_finds_adjacent(client):
+def test_campaign_confirmed_failure_minimizes_and_finds_adjacent(client, monkeypatch):
+    # Phase 5 disjoint-evidence: confirmation must run on a seed-CONSUMING
+    # mechanism (vol_spike) so confirmation worlds are genuinely disjoint from
+    # the primary. run_strategy is forced to fail so the full confirm + minimize
+    # + adjacent pipeline exercises deterministically.
+    monkeypatch.setattr(
+        "app.strategies.pipeline.run_strategy",
+        lambda *a, **k: __import__("types").SimpleNamespace(
+            metrics={"sharpe": -1.0, "cumulative_return": -0.5, "max_drawdown": -0.9, "turnover": 0.1}
+        ),
+    )
     pid = _project(client)
     c = _compile(client, "Allocate 60% to SPY and 40% to AGG and rebalance monthly.")
     a = _approve(client, pid, c["spec_draft"], c["canonical_hash"])
@@ -136,7 +146,7 @@ def test_campaign_confirmed_failure_minimizes_and_finds_adjacent(client):
             "strategy_id": a["strategy_id"],
             "strategy_version": a["strategy_version"],
             "expected_canonical_hash": a["canonical_hash"],
-            "mechanism_families": ["drawdown"],
+            "mechanism_families": ["vol_spike"],
             "seed_list": [1, 2],
             "world_budget": 6,
             "failure_predicates": [{"metric": "sharpe", "operator": "lt", "threshold": "0"}],
@@ -206,7 +216,7 @@ def test_campaign_runs_against_frozen_baseline_panel(client, db):
             "strategy_version": a["strategy_version"],
             "expected_canonical_hash": a["canonical_hash"],
             "baseline_run_id": baseline_run_id,
-            "mechanism_families": ["drawdown"],
+            "mechanism_families": ["vol_spike"],
             "seed_list": [1, 2],
             "world_budget": 6,
             "failure_predicates": [{"metric": "sharpe", "operator": "lt", "threshold": "0"}],
@@ -224,10 +234,15 @@ def test_campaign_runs_against_frozen_baseline_panel(client, db):
     assert frozen_panel.dataset_digest == frozen_digest
 
 
-def test_campaign_failure_carries_derived_severity_and_evidence(client):
-    """P5 mathematical-trustworthiness: a confirmed failure must carry a
-    severity DERIVED from evidence (not the 'medium' default) and honest
-    confirmation evidence (trials/successes/confidence), not empty fields."""
+def test_campaign_failure_carries_derived_severity_and_evidence(client, monkeypatch):
+    # Phase 5 disjoint-evidence: confirmation on a seed-CONSUMING mechanism so
+    # confirmation worlds are genuinely disjoint; run_strategy forced to fail.
+    monkeypatch.setattr(
+        "app.strategies.pipeline.run_strategy",
+        lambda *a, **k: __import__("types").SimpleNamespace(
+            metrics={"sharpe": -1.0, "cumulative_return": -0.5, "max_drawdown": -0.9, "turnover": 0.1}
+        ),
+    )
     pid = _project(client)
     c = _compile(client, "Allocate 60% to SPY and 40% to AGG and rebalance monthly.")
     a = _approve(client, pid, c["spec_draft"], c["canonical_hash"])
@@ -237,7 +252,7 @@ def test_campaign_failure_carries_derived_severity_and_evidence(client):
             "strategy_id": a["strategy_id"],
             "strategy_version": a["strategy_version"],
             "expected_canonical_hash": a["canonical_hash"],
-            "mechanism_families": ["drawdown"],
+            "mechanism_families": ["vol_spike"],
             "seed_list": [1, 2, 3],
             "world_budget": 6,
             "failure_predicates": [{"metric": "sharpe", "operator": "lt", "threshold": "0"}],
@@ -246,7 +261,7 @@ def test_campaign_failure_carries_derived_severity_and_evidence(client):
     )
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["confirmed_failures"], "drawdown should confirm a failure"
+    assert body["confirmed_failures"], "vol_spike should confirm a disjoint failure"
     for f in body["confirmed_failures"]:
         # Severity is derived into a valid level (not left unset).
         assert f["severity"] in ("low", "medium", "high", "critical")
@@ -261,12 +276,15 @@ def test_campaign_failure_carries_derived_severity_and_evidence(client):
         assert f["stress_intensity"] >= 0.0
 
 
-def test_campaign_passing_critical_predicate_excluded_from_severity(client):
-    """Regression for the original wiring bug: when a CRITICAL predicate
-    (max_drawdown) is configured but PASSES while a non-critical predicate
-    (sharpe) fails, the returned failure must contain ONLY the actual failure
-    and must NOT be scored critical. Exercises the zip(predicates,
-    predicate_results) logic end-to-end, not just compute_failure_severity."""
+def test_campaign_passing_critical_predicate_excluded_from_severity(client, monkeypatch):
+    # Phase 5 disjoint-evidence: confirmation on a seed-CONSUMING mechanism so
+    # confirmation worlds are genuinely disjoint; run_strategy forced to fail.
+    monkeypatch.setattr(
+        "app.strategies.pipeline.run_strategy",
+        lambda *a, **k: __import__("types").SimpleNamespace(
+            metrics={"sharpe": -1.0, "cumulative_return": -0.5, "max_drawdown": -0.9, "turnover": 0.1}
+        ),
+    )
     pid = _project(client)
     c = _compile(client, "Allocate 60% to SPY and 40% to AGG and rebalance monthly.")
     a = _approve(client, pid, c["spec_draft"], c["canonical_hash"])
@@ -276,7 +294,7 @@ def test_campaign_passing_critical_predicate_excluded_from_severity(client):
             "strategy_id": a["strategy_id"],
             "strategy_version": a["strategy_version"],
             "expected_canonical_hash": a["canonical_hash"],
-            "mechanism_families": ["drawdown"],
+            "mechanism_families": ["vol_spike"],
             "seed_list": [1, 2, 3],
             "world_budget": 6,
             # Non-critical predicate that fails; critical drawdown predicate that

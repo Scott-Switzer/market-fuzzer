@@ -68,6 +68,22 @@ class BaselineMismatchError(CanonicalError):
     """A supplied baseline_run_id does not belong to the same project/version/hash."""
 
 
+class ConfirmationIndependenceError(CanonicalError):
+    """Phase 5 disjoint-evidence guard.
+
+    A candidate failure's confirmation loop could not generate the requested
+    number of *distinct effective worlds* within the bounded deterministic
+    attempt budget: every candidate realization collided with the primary
+    search world (or with another confirmation world). Granting confirmation
+    credit here would be FABRICATED independence, so the campaign terminates
+    explicitly rather than silently reducing ``confirmation_trials``.
+
+    Maps to HTTP 422 (semantic impossibility for the requested mechanism /
+    stress level), not a 500 -- the request was well-formed but the confirmation
+    evidence cannot be made mathematically disjoint.
+    """
+
+
 class BenchmarkConflictError(CanonicalError):
     """Benchmark is in the tradable universe but benchmark_tradable is False."""
 
@@ -93,6 +109,7 @@ __all__ = [
     "PriorAttemptFailedError",
     "InvalidScenarioMechanismError",
     "BaselineMismatchError",
+    "ConfirmationIndependenceError",
     "BenchmarkConflictError",
     "ArtifactIntegrityError",
     "ResourceNotFoundError",

@@ -52,6 +52,7 @@ from app.strategy_lab.canonical.durable import (
 )
 from app.strategy_lab.canonical.errors import (
     BaselineMismatchError,
+    ConfirmationIndependenceError,
     HashMismatchError,
 )
 from app.strategy_lab.canonical.predicates import (
@@ -64,6 +65,7 @@ from app.strategy_lab.canonical.predicates import (
 from app.strategy_lab.canonical.scenarios import (
     ScenarioDefinition,
     assert_panel_invariants,
+    effective_world_hash,
     generate_scenario,
     stable_seed,
 )
@@ -113,6 +115,120 @@ def _evaluate_world(
             "scenario": None,
             "role": role,
         }
+
+
+def _derive_disjoint_confirmation_worlds(
+    *,
+    session,
+    campaign_id: str,
+    approved,
+    base_panel: MarketDataPanel,
+    base_digest: str,
+    predicates: list[FailurePredicate],
+    expected_canonical_hash: str,
+    mechanism: str,
+    seed: int,
+    intensity: float,
+    definition: ScenarioDefinition,  # noqa: F821
+    primary_world_hash: str,
+    world_key: str,
+    confirmation_policy: ConfirmationPolicy,
+    seen_world_hashes: set[str],
+) -> tuple[int, int, list[str]]:
+    """Generate ``total_trials`` DISTINCT effective confirmation worlds.
+
+    Returns ``(confirmed_here, confirmation_trials, confirmation_world_hashes)``.
+
+    Every produced world's ``effective_world_hash`` must be disjoint from the
+    primary search world AND from every other accepted confirmation world AND
+    from any world already realized in this campaign (the shared
+    ``seen_world_hashes`` set is consulted, and every accepted confirmation
+    world's identity is added back to it so later primary/minimization/adjacent
+    worlds — and other failures' confirmations — cannot collide with it without
+    application-level dedup noticing). On a collision we deterministically derive
+    a fresh seed (an increasing ``attempt`` salt folded into ``stable_seed``) and
+    regenerate, up to a bounded budget. If the budget is exhausted before
+    ``total_trials`` distinct worlds exist, raise ``ConfirmationIndependenceError``
+    -- the request cannot be satisfied without fabricating independence (e.g. a
+    seed-invariant mechanism whose every seed yields the identical world).
+    """
+    total = confirmation_policy.total_trials
+    if total <= 0:
+        return 0, 0, []
+    # Bounded, deterministic attempt budget: generous but finite, so a
+    # seed-invariant mechanism terminates explicitly instead of looping forever.
+    max_attempt = max(16, total * 8)
+    # Use the campaign-wide set so confirmations also dedup against primaries,
+    # minimization probes, adjacent worlds, and other failures' confirmations.
+    seen: set[str] = set(seen_world_hashes)
+    seen.add(primary_world_hash)
+    accepted: list[tuple[ScenarioDefinition, Any, str]] = []
+    independent_seeds = confirmation_policy.independent_seeds
+    for k in range(total):
+        cseed = independent_seeds[k] if k < len(independent_seeds) else seed
+        found = False
+        for attempt in range(1, max_attempt + 1):
+            cdef = ScenarioDefinition(
+                mechanism=mechanism,
+                seed=stable_seed(mechanism, seed, cseed, k, int(intensity * 1000), "confirm", attempt),
+                intensity=Decimal(str(intensity)),
+                start_index=definition.start_index,
+                duration=definition.duration,
+            )
+            cworld = generate_scenario(base_panel, cdef)
+            wh = effective_world_hash(base_digest, cdef, cworld.panel)
+            if wh not in seen:
+                seen.add(wh)
+                seen_world_hashes.add(wh)
+                accepted.append((cdef, cworld, wh))
+                found = True
+                break
+        if not found:
+            raise ConfirmationIndependenceError(
+                f"could not generate {total} distinct confirmation worlds for "
+                f"mechanism={mechanism!r} intensity={intensity}: every realization "
+                f"collided with the primary or another confirmation world within "
+                f"{max_attempt} deterministic attempts (the mechanism is "
+                f"seed-invariant at this stress level, so independent confirmation "
+                f"evidence is mathematically unavailable)"
+            )
+    # Evaluate + persist each distinct confirmation world exactly once.
+    confirmed_here = 0
+    confirmation_world_hashes: list[str] = []
+    for cdef, cworld, wh in accepted:
+        cev = _evaluate_world(
+            approved, base_panel, cdef, predicates, expected_canonical_hash, role="confirmation"
+        )
+        cworld_row = ScenarioWorldRow(
+            id=cworld.scenario_id,
+            campaign_id=campaign_id,
+            world_key=f"{world_key}:confirm{wh[:16]}",
+            mechanism=mechanism,
+            seed=cdef.seed,
+            intensity=intensity,
+            definition=cdef.to_dict(),
+            content_digest=cworld.content_digest,
+            world_hash=wh,
+            diagnostics=cworld.diagnostics,
+        )
+        session.add(cworld_row)
+        session.flush()
+        c_eval = WorldEvaluationRow(
+            id=str(uuid.uuid4()),
+            campaign_id=campaign_id,
+            world_id=cworld_row.id,
+            outcome=cev["outcome"],
+            predicate_results=cev["predicate_results"],
+            metrics=cev["metrics"],
+            error_message=cev["error_message"],
+            role="confirmation",
+        )
+        session.add(c_eval)
+        session.flush()
+        confirmation_world_hashes.append(wh)
+        if cev["outcome"] == "failed_predicate":
+            confirmed_here += 1
+    return confirmed_here, len(accepted), confirmation_world_hashes
 
 
 def run_campaign(
@@ -313,6 +429,7 @@ def run_campaign(
             campaign=campaign,
             approved=approved,
             base_panel=base_panel,
+            base_digest=base_digest,
             predicates=predicates,
             expected_canonical_hash=expected_canonical_hash,
             strategy_id=strategy_id,
@@ -340,6 +457,7 @@ def _execute_campaign_body(
     campaign,
     approved,
     base_panel,
+    base_digest,
     predicates,
     expected_canonical_hash,
     strategy_id,
@@ -358,6 +476,16 @@ def _execute_campaign_body(
     evaluated_worlds = 0
     predicate_failures = 0
     evaluation_errors = 0
+    # Phase 5 disjoint-evidence (item 1): an EFFECTIVE-WORLD identity may appear
+    # at most once per campaign. Seed-invariant mechanisms (drawdown,
+    # correlation_breakdown) ignore the per-world seed, so several
+    # (mechanism, intensity, seed) tuples can realize the SAME effective world.
+    # Also, minimization probes and the adjacent-pass world can revisit an
+    # intensity already realized by another probe. Skip duplicate effective
+    # worlds rather than crash on the unique constraint or count the same
+    # evidence twice. The same set is consulted by primary, confirmation,
+    # minimization, and adjacent-pass insertions.
+    seen_world_hashes: set[str] = set()
 
     for mechanism in mechanism_families:
         if mechanism not in ("drawdown", "vol_spike", "correlation_breakdown"):
@@ -379,6 +507,17 @@ def _execute_campaign_body(
                 )
                 # Persist the world definition up-front (durable, reproducible).
                 scenario = generate_scenario(base_panel, definition)
+                # Canonical EFFECTIVE-WORLD identity (seed-excluded, content-derived,
+                # tied to the frozen baseline digest). This is what confirmation
+                # worlds must be provably disjoint from.
+                primary_world_hash = effective_world_hash(base_digest, definition, scenario.panel)
+                # Skip a PRIMARY world whose effective identity already appeared
+                # earlier in this campaign (seed-invariant mechanism realized the
+                # same world under a different seed): no duplicate evidence, no
+                # unique-constraint crash.
+                if primary_world_hash in seen_world_hashes:
+                    continue
+                seen_world_hashes.add(primary_world_hash)
                 world_row = ScenarioWorldRow(
                     id=scenario.scenario_id,
                     campaign_id=campaign.id,
@@ -388,6 +527,7 @@ def _execute_campaign_body(
                     intensity=intensity,
                     definition=definition.to_dict(),
                     content_digest=scenario.content_digest,
+                    world_hash=primary_world_hash,
                     diagnostics=scenario.diagnostics,
                 )
                 session.add(world_row)
@@ -419,53 +559,43 @@ def _execute_campaign_body(
                 if ev["outcome"] != "failed_predicate":
                     continue
 
-                # Confirm by re-running independent seeds on the SAME mechanism+intensity.
-                # Statistical evidence (P5): run ``total_trials`` independent evaluations
-                # (the confirmation policy's denominator) and require
-                # ``required_successes`` of them to also fail. ``confirmation_trials``
-                # is the actual number evaluated; ``confirmed_here`` the successes.
-                confirmed_here = 0
-                confirmation_trials = 0
-                for cseed in confirmation_policy.independent_seeds[: confirmation_policy.total_trials]:
-                    cdef = ScenarioDefinition(
-                        mechanism=mechanism,
-                        seed=stable_seed(mechanism, seed, cseed, int(intensity * 1000), "confirm"),
-                        intensity=Decimal(str(intensity)),
-                        start_index=definition.start_index,
-                        duration=definition.duration,
-                    )
-                    cev = _evaluate_world(
-                        approved, base_panel, cdef, predicates, expected_canonical_hash, role="confirmation"
-                    )
-                    cworld = generate_scenario(base_panel, cdef)
-                    cworld_row = ScenarioWorldRow(
-                        id=cworld.scenario_id,
-                        campaign_id=campaign.id,
-                        world_key=f"{world_key}:confirm{cseed}",
-                        mechanism=mechanism,
-                        seed=cdef.seed,
-                        intensity=intensity,
-                        definition=cdef.to_dict(),
-                        content_digest=cworld.content_digest,
-                        diagnostics=cworld.diagnostics,
-                    )
-                    session.add(cworld_row)
-                    session.flush()
-                    c_eval = WorldEvaluationRow(
-                        id=str(uuid.uuid4()),
-                        campaign_id=campaign.id,
-                        world_id=cworld_row.id,
-                        outcome=cev["outcome"],
-                        predicate_results=cev["predicate_results"],
-                        metrics=cev["metrics"],
-                        error_message=cev["error_message"],
-                        role="confirmation",
-                    )
-                    session.add(c_eval)
-                    session.flush()
-                    confirmation_trials += 1
-                    if cev["outcome"] == "failed_predicate":
-                        confirmed_here += 1
+                # Confirm by re-running INDEPENDENT seeds on the SAME mechanism+intensity,
+                # but ONLY on worlds that are provably DISJOINT from the primary search
+                # world (and from each other) at the level of EFFECTIVE-WORLD identity.
+                # This is the Phase 5 disjoint-evidence invariant: confirmation credit can
+                # never be derived from the same effective world that discovered the
+                # failure (nor from a duplicate confirmation world).
+                #
+                # Implementation: generate candidate confirmation worlds; compute each
+                # one's effective_world_hash; reject any that collides with the primary or
+                # with an already-accepted confirmation world; deterministically derive a
+                # fresh seed (bounded attempt budget) and retry on collision. If the
+                # requested number of distinct effective worlds cannot be produced within
+                # the budget -- e.g. a seed-invariant mechanism like ``drawdown`` or
+                # ``correlation_breakdown`` where every seed yields the SAME world -- the
+                # campaign terminates explicitly (ConfirmationIndependenceError) rather
+                # than fabricating independence by silently re-counting the primary world.
+                (
+                    confirmed_here,
+                    confirmation_trials,
+                    confirmation_world_hashes,
+                ) = _derive_disjoint_confirmation_worlds(
+                    session=session,
+                    campaign_id=campaign.id,
+                    approved=approved,
+                    base_panel=base_panel,
+                    base_digest=base_digest,
+                    predicates=predicates,
+                    expected_canonical_hash=expected_canonical_hash,
+                    mechanism=mechanism,
+                    seed=seed,
+                    intensity=intensity,
+                    definition=definition,
+                    primary_world_hash=primary_world_hash,
+                    world_key=world_key,
+                    confirmation_policy=confirmation_policy,
+                    seen_world_hashes=seen_world_hashes,
+                )
                 if confirmed_here >= confirmation_policy.required_successes:
                     fails += 1
                     predicate_failures += 1
@@ -503,6 +633,8 @@ def _execute_campaign_body(
                             confirmation_successes=confirmed_here,
                             confirmation_rate=conf_rate,
                             confirmation_rate_lcb95=rate_lcb95,
+                            primary_world_hash=primary_world_hash,
+                            confirmation_world_hashes=list(confirmation_world_hashes),
                         )
                     )
         if total_for_mech:
@@ -538,6 +670,8 @@ def _execute_campaign_body(
             expected_canonical_hash,
             min_val,
             base_def,
+            base_digest,
+            seen_world_hashes,
         )
         monotone = _is_monotone(session, campaign.id, best.failure_id)
         minimization = MinimizationRecord(
@@ -559,6 +693,8 @@ def _execute_campaign_body(
                 expected_canonical_hash,
                 passing_val,
                 base_def,
+                base_digest,
+                seen_world_hashes,
             )
             if adj is not None:
                 adjacent_pass = adj
@@ -639,7 +775,17 @@ def _execute_campaign_body(
 
 
 def _minimize(
-    session, campaign, best, approved, base_panel, predicates, expected_hash, min_val, base_def
+    session,
+    campaign,
+    best,
+    approved,
+    base_panel,
+    predicates,
+    expected_hash,
+    min_val,
+    base_def,
+    base_digest,
+    seen_world_hashes,
 ) -> float | None:
     """Bisection between a verified failing bound (min_val) and 0 (verified
     passing). Varies ONLY intensity; mechanism/seed/start/duration/params are
@@ -660,6 +806,8 @@ def _minimize(
         expected_hash,
         0.0,
         base_def,
+        base_digest,
+        seen_world_hashes,
     )
     if probe is None:
         # 0.0 errored; cannot establish a passing bound via bisection
@@ -685,6 +833,8 @@ def _minimize(
             expected_hash,
             mid,
             base_def,
+            base_digest,
+            seen_world_hashes,
         )
         if ok is None:
             break  # evaluation error -> stop descending
@@ -709,6 +859,8 @@ def _probe_one(
     expected_hash,
     intensity,
     base_def,
+    base_digest,
+    seen_world_hashes,
 ) -> bool | None:
     """Return True if passing, False if failing, None on evaluation error. Persists a trial.
 
@@ -726,19 +878,33 @@ def _probe_one(
     )
     ev = _evaluate_world(approved, base_panel, defn, predicates, expected_hash, role="minimization")
     scenario = generate_scenario(base_panel, defn)
-    world_row = ScenarioWorldRow(
-        id=scenario.scenario_id,
-        campaign_id=campaign_id,
-        world_key=f"{failure_id}:min{int(intensity * 1000)}:{scenario.scenario_id[:8]}",
-        mechanism=mechanism,
-        seed=defn.seed,
-        intensity=intensity,
-        definition=defn.to_dict(),
-        content_digest=scenario.content_digest,
-        diagnostics=scenario.diagnostics,
-    )
-    session.add(world_row)
-    session.flush()
+    wh = effective_world_hash(base_digest, defn, scenario.panel)
+    # No duplicate effective evidence: if this probe's identity already exists
+    # (e.g. the adjacent pass revisits the same intensity, or two probes land on
+    # the same intensity), reuse the already-persisted world row rather than
+    # inserting a duplicate (which the DB UNIQUE constraint would also reject).
+    if wh in seen_world_hashes:
+        world_row = (
+            session.query(ScenarioWorldRow).filter_by(campaign_id=campaign_id, world_hash=wh).one_or_none()
+        )
+        if world_row is None:  # defensive: identity seen but row missing
+            seen_world_hashes.discard(wh)
+    if wh not in seen_world_hashes:
+        seen_world_hashes.add(wh)
+        world_row = ScenarioWorldRow(
+            id=scenario.scenario_id,
+            campaign_id=campaign_id,
+            world_key=f"{failure_id}:min{int(intensity * 1000)}:{scenario.scenario_id[:8]}",
+            mechanism=mechanism,
+            seed=defn.seed,
+            intensity=intensity,
+            definition=defn.to_dict(),
+            content_digest=scenario.content_digest,
+            world_hash=wh,
+            diagnostics=scenario.diagnostics,
+        )
+        session.add(world_row)
+        session.flush()
     session.add(
         WorldEvaluationRow(
             id=str(uuid.uuid4()),
@@ -804,6 +970,8 @@ def _build_adjacent_pass(
     expected_hash,
     passing_val,
     base_def,
+    base_digest,
+    seen_world_hashes,
 ) -> AdjacentPassRecord | None:
     """Evaluate the adjacent (passing) case and only emit a record if EVERY
     failure predicate is proven to pass. The scenario is IDENTICAL to the
@@ -824,18 +992,30 @@ def _build_adjacent_pass(
     if any(r.failed for r in results):
         return None
     scenario = generate_scenario(base_panel, defn)
-    world_row = ScenarioWorldRow(
-        id=scenario.scenario_id,
-        campaign_id=campaign.id,
-        world_key=f"{failure_id}:adjacent",
-        mechanism=mechanism,
-        seed=defn.seed,
-        intensity=passing_val,
-        definition=defn.to_dict(),
-        content_digest=scenario.content_digest,
-        diagnostics=scenario.diagnostics,
-    )
-    session.add(world_row)
+    wh = effective_world_hash(base_digest, defn, scenario.panel)
+    # No duplicate effective evidence: if this adjacent world's identity already
+    # exists (e.g. it coincides with a minimization probe at the same intensity),
+    # reuse the already-persisted world row; otherwise persist it once.
+    if wh in seen_world_hashes:
+        world_row = session.query(ScenarioWorldRow).filter_by(campaign_id=campaign.id, world_hash=wh).first()
+        if world_row is None:  # defensive: identity seen but row gone
+            seen_world_hashes.discard(wh)
+    if wh not in seen_world_hashes:
+        seen_world_hashes.add(wh)
+        world_row = ScenarioWorldRow(
+            id=scenario.scenario_id,
+            campaign_id=campaign.id,
+            world_key=f"{failure_id}:adjacent",
+            mechanism=mechanism,
+            seed=defn.seed,
+            intensity=passing_val,
+            definition=defn.to_dict(),
+            content_digest=scenario.content_digest,
+            world_hash=wh,
+            diagnostics=scenario.diagnostics,
+        )
+        session.add(world_row)
+        session.flush()
     session.flush()
     session.add(
         WorldEvaluationRow(

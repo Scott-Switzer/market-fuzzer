@@ -331,6 +331,12 @@ class ScenarioWorldRow(Base):
     __tablename__ = "scenario_worlds"
     __table_args__ = (
         UniqueConstraint("campaign_id", "world_key", name="campaign_world_key"),
+        # Phase 5 disjoint-evidence invariant (item 1 of the next sequence):
+        # the EFFECTIVE world identity (seed-excluded, content-derived) may
+        # appear at most ONCE per campaign. This is the DB-level backstop that
+        # guarantees a confirmation world can never reuse the primary world's
+        # identity (nor duplicate another confirmation world's identity).
+        UniqueConstraint("campaign_id", "world_hash", name="uq_scenario_worlds_campaign_world_hash"),
         Index("ix_scenario_worlds_campaign_id", "campaign_id"),
     )
 
@@ -342,6 +348,10 @@ class ScenarioWorldRow(Base):
     intensity: Mapped[float] = mapped_column(Float, nullable=False)
     definition: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     content_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Canonical EFFECTIVE-WORLD identity (seed-excluded, content-derived, tied
+    # to the frozen baseline dataset digest). Proves Phase 5 confirmation
+    # disjointness. See ``app.strategy_lab.canonical.scenarios.effective_world_hash``.
+    world_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     diagnostics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
