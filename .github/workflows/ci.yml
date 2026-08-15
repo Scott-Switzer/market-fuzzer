@@ -77,7 +77,7 @@ jobs:
       - run: python -m pip install -e '.[dev]'
       - run: python -m alembic upgrade head
       - run: python -m alembic check
-      - run: python -m pytest tests/integration/test_postgres_persistence.py tests/integration/test_migrations.py -q -p no:cacheprovider
+      - run: python -m pytest tests/integration/test_postgres_persistence.py tests/integration/test_migrations.py tests/integration/test_postgres_datasets.py -q -p no:cacheprovider
 
   docker:
     runs-on: ubuntu-latest
