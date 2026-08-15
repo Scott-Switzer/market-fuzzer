@@ -198,15 +198,13 @@ def run_campaign(
     enforce_bounds(canonical_base_panel)
     check_required_history(spec, canonical_base_panel)
     base_digest = canonical_base_panel.dataset_digest
-
-    # Execute directly against the canonical MarketDataPanel (Phase 3: no
-    # canonical->legacy panel conversion; run_strategy consumes the canonical
-    # contract fields dates/assets/open/close/benchmark_close).
     base_panel = canonical_base_panel
 
     # Baseline linkage: validate exists + same project/version/hash (Phase 2.6 D14).
     # When present, replay against the baseline's EXACT persisted input panel
-    # (Phase 2.6.1 gate 7), not a freshly re-acquired one.
+    # (Phase 2.6.1 gate 7), NOT a freshly re-acquired one -- the campaign MUST
+    # execute against the frozen dataset so generated worlds are perturbations
+    # of it and no provider re-acquisition occurs (P5 Failure Lab depends on this).
     baseline_run = None
     if baseline_run_id is not None:
         baseline_run = RunRepository(session).get(baseline_run_id)
@@ -220,7 +218,7 @@ def run_campaign(
         from app.market_data.errors import DatasetDigestMismatchError
 
         try:
-            canonical_base_panel, manifest = load_frozen_panel(
+            frozen_panel, manifest = load_frozen_panel(
                 get_default_store(),
                 baseline_run_id,
             )
@@ -228,14 +226,12 @@ def run_campaign(
             raise BaselineMismatchError(f"baseline dataset digest mismatch: {exc}") from exc
         except Exception as exc:
             raise BaselineMismatchError(f"baseline panel reload failed: {exc}") from exc
-        # Verify baseline digest matches campaign expectation
-        if manifest["dataset_digest"] != base_digest:
-            raise BaselineMismatchError(
-                f"baseline dataset digest {manifest['dataset_digest']} != expected {base_digest}"
-            )
-
-        # Baseline panel is already canonical MarketDataPanel; enforce bounds
-        # and required history directly (no canonical->legacy conversion).
+        # Use the FROZEN panel for all downstream computation (no re-acquisition).
+        base_panel = frozen_panel
+        # Digest is taken from the frozen manifest, not a fresh acquisition, so
+        # the self-check below is consistent and the persisted dataset_digest is
+        # the frozen one's identity.
+        base_digest = manifest["dataset_digest"]
         enforce_bounds(base_panel)
         check_required_history(spec, base_panel)
 

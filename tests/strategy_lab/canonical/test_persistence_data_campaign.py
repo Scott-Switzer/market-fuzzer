@@ -176,3 +176,49 @@ def test_campaign_hash_mismatch_blocked(client):
         },
     )
     assert r.status_code == 422
+
+
+def test_campaign_runs_against_frozen_baseline_panel(client, db):
+    """Phase 4 baseline linkage (P5-blocking): a campaign started from a
+    historical backtest's run_id must execute against that run's FROZEN dataset
+    -- no provider re-acquisition. The campaign records the frozen baseline's
+    dataset_digest as its base_panel_digest, and the frozen panel reloads
+    identically (proving generated worlds are perturbations of X)."""
+    from app.market_data.artifacts import load_frozen_panel
+    from app.persistence.models import CampaignRow
+    from app.strategy_lab.canonical.durable import get_default_store
+
+    pid = _project(client)
+    c = _compile(client, "Allocate 60% to SPY and 40% to AGG and rebalance monthly.")
+    a = _approve(client, pid, c["spec_draft"], c["canonical_hash"])
+    bt = _backtest(client, a, ["SPY", "AGG"])
+    baseline_run_id = bt.json()["run_id"]
+
+    # The frozen baseline panel's canonical digest.
+    _store = get_default_store()
+    frozen_panel, frozen_manifest = load_frozen_panel(_store, baseline_run_id)
+    frozen_digest = frozen_manifest["dataset_digest"]
+
+    r = client.post(
+        "/api/strategy-lab/v2/campaigns",
+        json={
+            "strategy_id": a["strategy_id"],
+            "strategy_version": a["strategy_version"],
+            "expected_canonical_hash": a["canonical_hash"],
+            "baseline_run_id": baseline_run_id,
+            "mechanism_families": ["drawdown"],
+            "seed_list": [1, 2],
+            "world_budget": 6,
+            "failure_predicates": [{"metric": "sharpe", "operator": "lt", "threshold": "0"}],
+            "idempotency_key": "cmp-baseline-" + a["canonical_hash"],
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    # The campaign persisted the FROZEN baseline digest as its base panel.
+    session = db["factory"]()
+    campaign = session.query(CampaignRow).filter_by(baseline_run_id=baseline_run_id).one()
+    session.close()
+    assert campaign.base_panel_digest == frozen_digest
+    # Sanity: the frozen panel is self-consistent (reload verified the digest).
+    assert frozen_panel.dataset_digest == frozen_digest
