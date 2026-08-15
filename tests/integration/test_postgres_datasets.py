@@ -160,13 +160,16 @@ def test_concurrent_identical_freezes_one_row(pg):
     from app.market_data.artifacts import _register_dataset
 
     _seed_project(pg(), "p1")
+    # Acquire the two sessions up front (the pg fixture drops+recreates the
+    # schema, so it must NOT be called from inside the worker threads).
+    s1 = pg()
+    s2 = pg()
     errors: list[BaseException] = []
 
-    def _work() -> None:
+    def _work(session) -> None:
         try:
-            s = pg()
             _register_dataset(
-                s,
+                session,
                 project_id="p1",
                 canonical_digest=DIGEST_A,
                 provider="synthetic_fixture",
@@ -176,17 +179,18 @@ def test_concurrent_identical_freezes_one_row(pg):
                 quality_json={},
                 artifact_manifest_ref="runs/x/market-data-manifest.json",
             )
-            s.commit()
-            s.close()
+            session.commit()
         except Exception as e:  # noqa: BLE001 - surface any unexpected failure
             errors.append(e)
 
-    t1 = threading.Thread(target=_work)
-    t2 = threading.Thread(target=_work)
+    t1 = threading.Thread(target=_work, args=(s1,))
+    t2 = threading.Thread(target=_work, args=(s2,))
     t1.start()
     t2.start()
     t1.join()
     t2.join()
+    s1.close()
+    s2.close()
 
     assert not errors, f"concurrent freeze raised: {errors}"
     s = pg()
