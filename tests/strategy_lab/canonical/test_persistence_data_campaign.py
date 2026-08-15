@@ -222,3 +222,36 @@ def test_campaign_runs_against_frozen_baseline_panel(client, db):
     assert campaign.base_panel_digest == frozen_digest
     # Sanity: the frozen panel is self-consistent (reload verified the digest).
     assert frozen_panel.dataset_digest == frozen_digest
+
+
+def test_campaign_failure_carries_derived_severity_and_evidence(client):
+    """P5 mathematical-trustworthiness: a confirmed failure must carry a
+    severity DERIVED from evidence (not the 'medium' default) and honest
+    confirmation evidence (trials/successes/confidence), not empty fields."""
+    pid = _project(client)
+    c = _compile(client, "Allocate 60% to SPY and 40% to AGG and rebalance monthly.")
+    a = _approve(client, pid, c["spec_draft"], c["canonical_hash"])
+    r = client.post(
+        "/api/strategy-lab/v2/campaigns",
+        json={
+            "strategy_id": a["strategy_id"],
+            "strategy_version": a["strategy_version"],
+            "expected_canonical_hash": a["canonical_hash"],
+            "mechanism_families": ["drawdown"],
+            "seed_list": [1, 2, 3],
+            "world_budget": 6,
+            "failure_predicates": [{"metric": "sharpe", "operator": "lt", "threshold": "0"}],
+            "idempotency_key": "cmp-evidence-" + a["canonical_hash"],
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["confirmed_failures"], "drawdown should confirm a failure"
+    for f in body["confirmed_failures"]:
+        # Severity is derived into a valid level (not left unset).
+        assert f["severity"] in ("low", "medium", "high", "critical")
+        # Evidence is populated from the confirmation trials.
+        assert f["confirmation_trials"] >= 1
+        assert f["confirmation_successes"] >= 1
+        assert f["confirmation_successes"] <= f["confirmation_trials"]
+        assert 0.0 < f["confidence"] <= 1.0

@@ -251,6 +251,12 @@ class FailureRecord(BaseModel):
     canonical_hash: str
     predicate: str
     metrics: dict[str, Any]
+    # P5: severity + confirmation evidence are derived from evaluation, not
+    # asserted by default.
+    severity: str = "medium"
+    confirmation_trials: int = 0
+    confirmation_successes: int = 0
+    confidence: float = 0.0
 
 
 class MinimizationRecord(BaseModel):
