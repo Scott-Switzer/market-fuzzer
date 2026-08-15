@@ -251,12 +251,14 @@ class FailureRecord(BaseModel):
     canonical_hash: str
     predicate: str
     metrics: dict[str, Any]
-    # P5: severity + confirmation evidence are derived from evaluation, not
-    # asserted by default.
+    # P5: severity is derived from failure CONSEQUENCE (not raw stress magnitude);
+    # stress_intensity preserves the raw scenario magnitude separately.
     severity: str = "medium"
+    stress_intensity: float = 0.0
     confirmation_trials: int = 0
     confirmation_successes: int = 0
-    confidence: float = 0.0
+    confirmation_rate: float = 0.0
+    confirmation_rate_lcb95: float = 0.0
 
 
 class MinimizationRecord(BaseModel):

@@ -23,7 +23,7 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
-from app.domain.failure import compute_severity, confirmation_confidence
+from app.domain.failure import compute_failure_severity, confirmation_rate_lcb95
 from app.domain.run import JobState, RunStage, RunStatus
 from app.market_data.panel import MarketDataPanel
 from app.persistence.models import (
@@ -469,14 +469,29 @@ def _execute_campaign_body(
                 if confirmed_here >= confirmation_policy.required_successes:
                     fails += 1
                     predicate_failures += 1
-                    violated = [describe_predicate(p) for p in predicates]
-                    severity = compute_severity(
-                        intensity=intensity,
+                    # Severity is derived from CONSEQUENCE: only the predicates
+                    # that ACTUALLY failed (not every configured predicate).
+                    pred_results = [PredicateResult(**pr) for pr in ev["predicate_results"]]
+                    failed_pairs = [(p, r) for p, r in zip(predicates, pred_results, strict=True) if r.failed]
+                    violated = [describe_predicate(p) for p, _ in failed_pairs]
+                    # Breach severity: how badly the failed thresholds were crossed
+                    # (0 = just crossed, 1 = deep breach), max across failed predicates.
+                    breach_severity = 0.0
+                    for _p, r in failed_pairs:
+                        try:
+                            thr = abs(float(r.threshold)) or 1.0
+                            breach = min(1.0, abs(float(r.value) - float(r.threshold)) / thr)
+                        except (TypeError, ValueError):
+                            breach = 0.0
+                        breach_severity = max(breach_severity, breach)
+                    severity = compute_failure_severity(
+                        failed_predicate_names=violated,
                         confirmation_successes=confirmed_here,
                         confirmation_trials=confirmation_trials,
-                        violated_predicates=violated,
+                        breach_severity=breach_severity,
                     )
-                    confidence = confirmation_confidence(confirmed_here, confirmation_trials)
+                    conf_rate = (confirmed_here / confirmation_trials) if confirmation_trials else 0.0
+                    rate_lcb95 = confirmation_rate_lcb95(confirmed_here, confirmation_trials)
                     confirmed.append(
                         FailureRecord(
                             failure_id=primary_id,
@@ -491,9 +506,11 @@ def _execute_campaign_body(
                             predicate="|".join(violated),
                             metrics=ev["metrics"],
                             severity=severity.value,
+                            stress_intensity=float(intensity),
                             confirmation_trials=confirmation_trials,
                             confirmation_successes=confirmed_here,
-                            confidence=confidence,
+                            confirmation_rate=conf_rate,
+                            confirmation_rate_lcb95=rate_lcb95,
                         )
                     )
         if total_for_mech:

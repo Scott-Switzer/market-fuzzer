@@ -254,4 +254,8 @@ def test_campaign_failure_carries_derived_severity_and_evidence(client):
         assert f["confirmation_trials"] >= 1
         assert f["confirmation_successes"] >= 1
         assert f["confirmation_successes"] <= f["confirmation_trials"]
-        assert 0.0 < f["confidence"] <= 1.0
+        # Confirmation rate in [0,1]; LCB95 is a lower bound <= rate.
+        assert 0.0 <= f["confirmation_rate"] <= 1.0
+        assert 0.0 <= f["confirmation_rate_lcb95"] <= f["confirmation_rate"] + 1e-9
+        # Raw stress intensity is preserved separately (not fed into severity).
+        assert f["stress_intensity"] >= 0.0
