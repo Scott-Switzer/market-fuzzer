@@ -185,18 +185,39 @@ def run_campaign(
         "universe": list(spec.universe),
         "benchmark": spec.benchmark,
     }
-    base_panel, _prov = acquire_panel(
-        source=ds.get("source", "demo_fixture"),
+    # Acquire canonical market-data panel (Phase 3 cutover)
+    from app.market_data.service import acquire_panel as acquire_canonical_panel
+
+    canonical_base_panel, _quality = acquire_canonical_panel(
+        data_source=ds,
         universe=ds.get("universe", list(spec.universe)),
         benchmark=ds.get("benchmark"),
-        start=ds.get("start"),
-        end=ds.get("end"),
-        seed=ds.get("seed"),
         benchmark_tradable=spec.benchmark_tradable,
+        allow_synthetic=ds.get("allow_synthetic", False),
     )
-    enforce_bounds(base_panel)
-    check_required_history(spec, base_panel)
-    base_digest = _prov.content_digest
+    enforce_bounds(canonical_base_panel)
+    check_required_history(spec, canonical_base_panel)
+    base_digest = canonical_base_panel.dataset_digest
+
+    # Convert canonical panel to legacy format for strategy execution
+    from app.strategy_lab.submission.panels import MarketDataPanel as LegacyPanel
+
+    base_panel = LegacyPanel(
+        dates=canonical_base_panel.dates,
+        assets=canonical_base_panel.assets,
+        open=canonical_base_panel.open,
+        high=canonical_base_panel.high,
+        low=canonical_base_panel.low,
+        close=canonical_base_panel.close,
+        volume=canonical_base_panel.volume,
+        benchmark_close=canonical_base_panel.benchmark_close,
+        metadata={a: type("AssetMetadata", (), {"ticker": a, "is_benchmark": False}) for a in canonical_base_panel.assets},
+        provenance=type("DataProvenance", (), {
+            "source": canonical_base_panel.provider,
+            "tier": 3 if canonical_base_panel.provider == "synthetic_fixture" else 2,
+            "label": canonical_base_panel.provider,
+        })(),
+    )
 
     # Baseline linkage: validate exists + same project/version/hash (Phase 2.6 D14).
     # When present, replay against the baseline's EXACT persisted input panel
@@ -210,14 +231,43 @@ def run_campaign(
             raise BaselineMismatchError("baseline run belongs to a different strategy version")
         if baseline_run.strategy_hash != expected_canonical_hash:
             raise BaselineMismatchError("baseline run hash does not match the requested strategy")
-        from app.strategy_lab.canonical.data_service import panel_from_dict
+        from app.market_data.artifacts import load_frozen_panel
+        from app.market_data.errors import DatasetDigestMismatchError
 
-        panel_payload = _read_json(get_default_store(), f"runs/{baseline_run_id}/input-panel.json")
-        if panel_payload is None:
-            raise BaselineMismatchError(
-                f"baseline run {baseline_run_id} has no persisted input panel; cannot replay"
+        try:
+            canonical_base_panel, manifest = load_frozen_panel(
+                get_default_store(),
+                baseline_run_id,
             )
-        base_panel = panel_from_dict(panel_payload)
+        except DatasetDigestMismatchError as exc:
+            raise BaselineMismatchError(f"baseline dataset digest mismatch: {exc}") from exc
+        except Exception as exc:
+            raise BaselineMismatchError(f"baseline panel reload failed: {exc}") from exc
+        # Verify baseline digest matches campaign expectation
+        if manifest["dataset_digest"] != base_digest:
+            raise BaselineMismatchError(
+                f"baseline dataset digest {manifest['dataset_digest']} != expected {base_digest}"
+            )
+
+        # Convert canonical panel to legacy format for strategy execution
+        from app.strategy_lab.submission.panels import MarketDataPanel as LegacyPanel
+
+        base_panel = LegacyPanel(
+            dates=canonical_base_panel.dates,
+            assets=canonical_base_panel.assets,
+            open=canonical_base_panel.open,
+            high=canonical_base_panel.high,
+            low=canonical_base_panel.low,
+            close=canonical_base_panel.close,
+            volume=canonical_base_panel.volume,
+            benchmark_close=canonical_base_panel.benchmark_close,
+            metadata={a: type("AssetMetadata", (), {"ticker": a, "is_benchmark": False}) for a in canonical_base_panel.assets},
+            provenance=type("DataProvenance", (), {
+                "source": canonical_base_panel.provider,
+                "tier": 3 if canonical_base_panel.provider == "synthetic_fixture" else 2,
+                "label": canonical_base_panel.provider,
+            })(),
+        )
         enforce_bounds(base_panel)
         check_required_history(spec, base_panel)
 

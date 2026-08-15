@@ -18,9 +18,10 @@ import numpy as np
 from app.domain.run import JobState, RunStage, RunStatus
 from app.persistence.repositories import RunRepository, StrategyRepository
 from app.strategies.pipeline import run_strategy
+from app.market_data.service import acquire_panel as acquire_canonical_panel
+from app.market_data.artifacts import freeze_panel
 from app.strategy_lab.canonical.contracts import BacktestResponse, DataSourceProvenance
 from app.strategy_lab.canonical.data_service import (
-    acquire_panel,
     check_required_history,
     enforce_bounds,
 )
@@ -150,17 +151,15 @@ def run_backtest(
     if spec.compute_hash() != stored_hash:
         raise HashMismatchError("reconstructed spec hash != stored hash")
 
-    panel, prov = acquire_panel(
-        source=data_source["source"],
+    # Acquire canonical market-data panel (Phase 3 cutover)
+    canonical_panel, quality = acquire_canonical_panel(
+        data_source=data_source,
         universe=data_source.get("universe", []),
         benchmark=data_source.get("benchmark"),
-        start=data_source.get("start"),
-        end=data_source.get("end"),
-        seed=data_source.get("seed"),
         benchmark_tradable=spec.benchmark_tradable,
-        csv_b64=data_source.get("csv_b64"),
+        allow_synthetic=data_source.get("allow_synthetic", False),
     )
-    enforce_bounds(panel)
+    enforce_bounds(canonical_panel)
     # Benchmark isolation (Phase 2.6 section 6.1): a benchmark requested in the
     # data source that is ALSO a tradable universe member must be explicitly
     # tradable; otherwise the request is rejected (never silently merged).
@@ -174,7 +173,7 @@ def run_backtest(
             raise BenchmarkConflictError(
                 f"benchmark {ds_bench} is in the tradable universe but benchmark_tradable is False"
             )
-    check_required_history(spec, panel)
+    check_required_history(spec, canonical_panel)
 
     # --- durable lifecycle (Phase 2.6 section 4) ---
     run = create_pending_run(
@@ -183,7 +182,7 @@ def run_backtest(
         strategy_id=strategy_id,
         strategy_version=strategy_version,
         strategy_hash=stored_hash,
-        data_mode=prov.source,
+        data_mode=canonical_panel.provider,
         limitations=[
             "Deterministic synthetic panel for CI/offline; not a production guarantee.",
             "Costs are assumptions; real slippage/locate may differ.",
@@ -218,10 +217,33 @@ def run_backtest(
     store = get_default_store()
     artifact_index: list[dict[str, Any]] = []
 
+    # Freeze canonical panel artifacts (Phase 3)
+    freeze_panel(canonical_panel, quality, _make_data_request(data_source), store, run.id, session=session)
+
     try:
+        # Convert canonical panel to legacy format for strategy execution
+        from app.strategy_lab.submission.panels import MarketDataPanel as LegacyPanel
+
+        legacy_panel = LegacyPanel(
+            dates=canonical_panel.dates,
+            assets=canonical_panel.assets,
+            open=canonical_panel.open,
+            high=canonical_panel.high,
+            low=canonical_panel.low,
+            close=canonical_panel.close,
+            volume=canonical_panel.volume,
+            benchmark_close=canonical_panel.benchmark_close,
+            metadata={a: type("AssetMetadata", (), {"ticker": a, "is_benchmark": False}) for a in canonical_panel.assets},
+            provenance=type("DataProvenance", (), {
+                "source": canonical_panel.provider,
+                "tier": 3 if canonical_panel.provider == "synthetic_fixture" else 2,
+                "label": canonical_panel.provider,
+            })(),
+        )
+
         result = run_strategy(
             spec,
-            panel,
+            legacy_panel,
             initial_capital=float(initial_capital),
             expected_hash=stored_hash,
         )
@@ -253,14 +275,12 @@ def run_backtest(
         )
         # Exact input panel (Phase 2.6.1 gate 7): campaigns replay against THIS
         # persisted panel, not a re-acquired one.
-        from app.strategy_lab.canonical.data_service import panel_to_dict
-
         write_artifact(
             session,
             store=store,
             run_id=run.id,
             key=f"runs/{run.id}/input-panel.json",
-            payload=panel_to_dict(panel),
+            payload=canonical_panel.to_dict(),
             artifact_index=artifact_index,
         )
         write_artifact(
@@ -276,7 +296,18 @@ def run_backtest(
             store=store,
             run_id=run.id,
             key=f"runs/{run.id}/data-provenance.json",
-            payload=prov.model_dump(mode="json"),
+            payload={
+                "provider": canonical_panel.provider,
+                "provider_version": canonical_panel.provider_version,
+                "retrieval_timestamp": canonical_panel.retrieval_timestamp.isoformat(),
+                "as_of": canonical_panel.as_of.isoformat() if canonical_panel.as_of else None,
+                "calendar_policy": canonical_panel.calendar_policy.value,
+                "adjustment_policy": canonical_panel.adjustment_policy.value,
+                "missing_data_policy": canonical_panel.missing_data_policy,
+                "eligibility_source": canonical_panel.eligibility_source.value,
+                "dataset_digest": canonical_panel.dataset_digest,
+                "source_metadata": canonical_panel.source_metadata,
+            },
             artifact_index=artifact_index,
         )
         write_artifact(
@@ -332,7 +363,8 @@ def run_backtest(
             "canonical_hash": stored_hash,
             "run_id": run.id,
             "input_capital": float(initial_capital),
-            "data_content_digest": prov.content_digest,
+            "data_content_digest": canonical_panel.dataset_digest,
+            "dataset_digest": canonical_panel.dataset_digest,
             "executor_type": spec.strategy_type.value,
             "accounting_engine": "generic_accounting/v1",
             "declared_limitations": [
@@ -378,8 +410,23 @@ def run_backtest(
             turnover=turnover_last,
             cost_summary=result.cost_summary,
             warnings=list(result.warnings),
-            reasons_to_distrust=_reasons_to_distrust(spec, panel, result),
-            data_provenance=DataSourceProvenance.model_validate(prov.model_dump(mode="json")),
+            reasons_to_distrust=_reasons_to_distrust(spec, canonical_panel, result),
+            data_provenance=DataSourceProvenance.model_validate({
+                "source": canonical_panel.provider,
+                "source_name": canonical_panel.provider,
+                "requested_symbols": data_source.get("universe", []),
+                "returned_symbols": list(canonical_panel.assets),
+                "benchmark": data_source.get("benchmark"),
+                "start_date": str(canonical_panel.dates[0]),
+                "end_date": str(canonical_panel.dates[-1]),
+                "retrieval_timestamp": canonical_panel.retrieval_timestamp.isoformat(),
+                "adjustment_policy": canonical_panel.adjustment_policy.value,
+                "calendar_policy": canonical_panel.calendar_policy.value,
+                "missing_data_policy": canonical_panel.missing_data_policy,
+                "coverage_by_symbol": {},
+                "warnings": [],
+                "content_digest": canonical_panel.dataset_digest,
+            }),
             artifact_references=artifact_index,
         )
         # Persist the EXACT response for identical replay (gate 6): both on the
@@ -451,6 +498,19 @@ def _replay_or_reject_backtest(session, ir, idempotency_key: str) -> BacktestRes
         )
     raise IdempotencyInFlightError(
         f"idempotency key {idempotency_key!r} is already reserved for an in-flight backtest"
+    )
+
+
+def _make_data_request(data_source: dict) -> Any:
+    """Build a canonical MarketDataRequest from a legacy data_source dict."""
+    from app.market_data.service import request_from_legacy
+
+    return request_from_legacy(
+        data_source=data_source,
+        universe=data_source.get("universe", []),
+        benchmark=data_source.get("benchmark"),
+        benchmark_tradable=False,
+        allow_synthetic=data_source.get("allow_synthetic", False),
     )
 
 
