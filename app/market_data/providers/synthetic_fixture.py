@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
 
 import numpy as np
 
@@ -18,7 +17,6 @@ from app.market_data.contracts import (
     AssetType,
     EligibilitySource,
     Frequency,
-    InstrumentIdentifier,
     MarketDataRequest,
     ProviderCapabilities,
 )
@@ -84,18 +82,14 @@ class SyntheticFixtureProvider(MarketDataProvider):
         if not request.allow_synthetic_fixture:
             from app.market_data.errors import ProviderCapabilityError
 
-            raise ProviderCapabilityError(
-                "synthetic_fixture provider requires allow_synthetic_fixture=True"
-            )
+            raise ProviderCapabilityError("synthetic_fixture provider requires allow_synthetic_fixture=True")
         return RawProviderDataset(
             provider="synthetic_fixture",
             provider_version=GENERATOR_VERSION,
             request=request,
             payload={"seed": request.extra.get("seed", 20240101)},
             retrieval_timestamp=datetime.now(UTC).isoformat(),
-            warnings=(
-                "synthetic fixture: weekday-only calendar, no exchange realism, deterministic seed",
-            ),
+            warnings=("synthetic fixture: weekday-only calendar, no exchange realism, deterministic seed",),
         )
 
     def normalize(self, raw: RawProviderDataset) -> tuple[MarketDataPanel, DataQualityReport]:

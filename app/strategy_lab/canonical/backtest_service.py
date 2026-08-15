@@ -16,11 +16,11 @@ from typing import Any
 import numpy as np
 
 from app.domain.run import JobState, RunStage, RunStatus
+from app.market_data.artifacts import freeze_panel
+from app.market_data.service import acquire_panel as acquire_canonical_panel
 from app.persistence.repositories import RunRepository, StrategyRepository
 from app.strategies.pipeline import run_strategy
-from app.market_data.service import acquire_panel as acquire_canonical_panel
-from app.market_data.artifacts import freeze_panel
-from app.strategy_lab.canonical.contracts import BacktestResponse, DataSourceProvenance
+from app.strategy_lab.canonical.contracts import BacktestResponse, DatasetQualitySummary, DataSourceProvenance
 from app.strategy_lab.canonical.data_service import (
     check_required_history,
     enforce_bounds,
@@ -221,29 +221,12 @@ def run_backtest(
     freeze_panel(canonical_panel, quality, _make_data_request(data_source), store, run.id, session=session)
 
     try:
-        # Convert canonical panel to legacy format for strategy execution
-        from app.strategy_lab.submission.panels import MarketDataPanel as LegacyPanel
-
-        legacy_panel = LegacyPanel(
-            dates=canonical_panel.dates,
-            assets=canonical_panel.assets,
-            open=canonical_panel.open,
-            high=canonical_panel.high,
-            low=canonical_panel.low,
-            close=canonical_panel.close,
-            volume=canonical_panel.volume,
-            benchmark_close=canonical_panel.benchmark_close,
-            metadata={a: type("AssetMetadata", (), {"ticker": a, "is_benchmark": False}) for a in canonical_panel.assets},
-            provenance=type("DataProvenance", (), {
-                "source": canonical_panel.provider,
-                "tier": 3 if canonical_panel.provider == "synthetic_fixture" else 2,
-                "label": canonical_panel.provider,
-            })(),
-        )
-
+        # Execute directly against the canonical MarketDataPanel (Phase 3:
+        # no canonical->legacy panel conversion; run_strategy consumes the
+        # canonical contract fields dates/assets/open/close/benchmark_close).
         result = run_strategy(
             spec,
-            legacy_panel,
+            canonical_panel,
             initial_capital=float(initial_capital),
             expected_hash=stored_hash,
         )
@@ -411,22 +394,42 @@ def run_backtest(
             cost_summary=result.cost_summary,
             warnings=list(result.warnings),
             reasons_to_distrust=_reasons_to_distrust(spec, canonical_panel, result),
-            data_provenance=DataSourceProvenance.model_validate({
-                "source": canonical_panel.provider,
-                "source_name": canonical_panel.provider,
-                "requested_symbols": data_source.get("universe", []),
-                "returned_symbols": list(canonical_panel.assets),
-                "benchmark": data_source.get("benchmark"),
-                "start_date": str(canonical_panel.dates[0]),
-                "end_date": str(canonical_panel.dates[-1]),
-                "retrieval_timestamp": canonical_panel.retrieval_timestamp.isoformat(),
-                "adjustment_policy": canonical_panel.adjustment_policy.value,
-                "calendar_policy": canonical_panel.calendar_policy.value,
-                "missing_data_policy": canonical_panel.missing_data_policy,
-                "coverage_by_symbol": {},
-                "warnings": [],
-                "content_digest": canonical_panel.dataset_digest,
-            }),
+            data_provenance=DataSourceProvenance.model_validate(
+                {
+                    "source": data_source.get("source", canonical_panel.provider),
+                    "source_name": data_source.get("source", canonical_panel.provider),
+                    "requested_symbols": data_source.get("universe", []),
+                    "returned_symbols": list(canonical_panel.assets),
+                    "benchmark": data_source.get("benchmark"),
+                    "start_date": str(canonical_panel.dates[0]),
+                    "end_date": str(canonical_panel.dates[-1]),
+                    "retrieval_timestamp": canonical_panel.retrieval_timestamp.isoformat(),
+                    "adjustment_policy": canonical_panel.adjustment_policy.value,
+                    "calendar_policy": canonical_panel.calendar_policy.value,
+                    "missing_data_policy": canonical_panel.missing_data_policy,
+                    "coverage_by_symbol": {},
+                    "warnings": [],
+                    "content_digest": canonical_panel.dataset_digest,
+                }
+            ),
+            dataset_digest=canonical_panel.dataset_digest,
+            dataset_provider=canonical_panel.provider,
+            dataset_provider_version=canonical_panel.provider_version,
+            dataset_calendar_policy=canonical_panel.calendar_policy.value,
+            dataset_adjustment_policy=canonical_panel.adjustment_policy.value,
+            dataset_missing_data_policy=canonical_panel.missing_data_policy,
+            dataset_eligibility_source=canonical_panel.eligibility_source.value,
+            dataset_quality=DatasetQualitySummary.model_validate(
+                {
+                    "requested_instruments": list(quality.requested_instruments),
+                    "returned_instruments": list(quality.returned_instruments),
+                    "missing_instruments": list(quality.missing_instruments),
+                    "eligibility_coverage": float(quality.eligibility_coverage),
+                    "benchmark_coverage": float(quality.benchmark_coverage),
+                    "history_requirement_met": bool(quality.history_requirement_met),
+                    "warnings": list(quality.warnings),
+                }
+            ),
             artifact_references=artifact_index,
         )
         # Persist the EXACT response for identical replay (gate 6): both on the

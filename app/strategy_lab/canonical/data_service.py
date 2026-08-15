@@ -16,6 +16,7 @@ from datetime import UTC, date, datetime, timedelta
 import numpy as np
 
 from app.domain.strategy_spec import StrategySpec
+from app.market_data.panel import MarketDataPanel as CanonicalMarketDataPanel
 from app.strategy_lab.canonical.contracts import DataSourceProvenance
 from app.strategy_lab.canonical.errors import DataUnavailableError, PanelTooShortError
 from app.strategy_lab.submission.panels import (
@@ -255,7 +256,7 @@ def acquire_panel(
     raise DataUnavailableError(f"unsupported data source: {source}")
 
 
-def enforce_bounds(panel: MarketDataPanel) -> None:
+def enforce_bounds(panel: CanonicalMarketDataPanel) -> None:
     """Reject requests exceeding central bounded-execution limits (section 6.5)."""
     from app.strategy_lab.canonical.errors import BoundedExecutionLimitError
 
@@ -268,7 +269,7 @@ def enforce_bounds(panel: MarketDataPanel) -> None:
         raise BoundedExecutionLimitError(f"panel cells {T * N} > max {MAX_CELLS}")
 
 
-def check_required_history(spec: StrategySpec, panel: MarketDataPanel) -> None:
+def check_required_history(spec: StrategySpec, panel: CanonicalMarketDataPanel) -> None:
     """Verify the supplied history satisfies the executor's lookback needs.
 
     Uses the executor's declared ``minimum_history_requirements`` (Phase 2.6

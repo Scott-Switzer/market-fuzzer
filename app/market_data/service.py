@@ -7,7 +7,7 @@ through the provider registry, and returns panels with full provenance.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 
 from app.market_data.contracts import (
@@ -15,14 +15,6 @@ from app.market_data.contracts import (
     Frequency,
     InstrumentIdentifier,
     MarketDataRequest,
-)
-from app.market_data.errors import (
-    DataQualityError,
-    EligibilityError,
-    MarketDataError,
-    MissingDataError,
-    ProviderCapabilityError,
-    ProviderNotFoundError,
 )
 from app.market_data.panel import MarketDataPanel
 from app.market_data.quality import DataQualityReport
@@ -79,8 +71,8 @@ def request_from_legacy(
     seed = data_source.get("seed")
     extra = {"seed": seed} if seed else {}
 
-    from app.market_data.calendar import CalendarPolicy
     from app.market_data.adjustments import AdjustmentPolicy
+    from app.market_data.calendar import CalendarPolicy
 
     cal_policy = data_source.get("calendar_policy", "provider_observed")
     if isinstance(cal_policy, str):

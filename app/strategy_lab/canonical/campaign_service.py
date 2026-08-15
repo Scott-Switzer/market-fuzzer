@@ -24,6 +24,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.domain.run import JobState, RunStage, RunStatus
+from app.market_data.panel import MarketDataPanel
 from app.persistence.models import (
     AdjacentPassRow,
     CampaignRow,
@@ -41,7 +42,7 @@ from app.strategy_lab.canonical.contracts import (
     MinimizationRecord,
     PredicateResult,
 )
-from app.strategy_lab.canonical.data_service import acquire_panel, check_required_history, enforce_bounds
+from app.strategy_lab.canonical.data_service import check_required_history, enforce_bounds
 from app.strategy_lab.canonical.durable import (
     create_pending_run,
     create_queued_job,
@@ -65,7 +66,6 @@ from app.strategy_lab.canonical.scenarios import (
     generate_scenario,
     stable_seed,
 )
-from app.strategy_lab.submission.panels import MarketDataPanel
 
 
 def _run_on_world(approved, panel: MarketDataPanel, expected_hash: str) -> Any:
@@ -199,25 +199,10 @@ def run_campaign(
     check_required_history(spec, canonical_base_panel)
     base_digest = canonical_base_panel.dataset_digest
 
-    # Convert canonical panel to legacy format for strategy execution
-    from app.strategy_lab.submission.panels import MarketDataPanel as LegacyPanel
-
-    base_panel = LegacyPanel(
-        dates=canonical_base_panel.dates,
-        assets=canonical_base_panel.assets,
-        open=canonical_base_panel.open,
-        high=canonical_base_panel.high,
-        low=canonical_base_panel.low,
-        close=canonical_base_panel.close,
-        volume=canonical_base_panel.volume,
-        benchmark_close=canonical_base_panel.benchmark_close,
-        metadata={a: type("AssetMetadata", (), {"ticker": a, "is_benchmark": False}) for a in canonical_base_panel.assets},
-        provenance=type("DataProvenance", (), {
-            "source": canonical_base_panel.provider,
-            "tier": 3 if canonical_base_panel.provider == "synthetic_fixture" else 2,
-            "label": canonical_base_panel.provider,
-        })(),
-    )
+    # Execute directly against the canonical MarketDataPanel (Phase 3: no
+    # canonical->legacy panel conversion; run_strategy consumes the canonical
+    # contract fields dates/assets/open/close/benchmark_close).
+    base_panel = canonical_base_panel
 
     # Baseline linkage: validate exists + same project/version/hash (Phase 2.6 D14).
     # When present, replay against the baseline's EXACT persisted input panel
@@ -249,25 +234,8 @@ def run_campaign(
                 f"baseline dataset digest {manifest['dataset_digest']} != expected {base_digest}"
             )
 
-        # Convert canonical panel to legacy format for strategy execution
-        from app.strategy_lab.submission.panels import MarketDataPanel as LegacyPanel
-
-        base_panel = LegacyPanel(
-            dates=canonical_base_panel.dates,
-            assets=canonical_base_panel.assets,
-            open=canonical_base_panel.open,
-            high=canonical_base_panel.high,
-            low=canonical_base_panel.low,
-            close=canonical_base_panel.close,
-            volume=canonical_base_panel.volume,
-            benchmark_close=canonical_base_panel.benchmark_close,
-            metadata={a: type("AssetMetadata", (), {"ticker": a, "is_benchmark": False}) for a in canonical_base_panel.assets},
-            provenance=type("DataProvenance", (), {
-                "source": canonical_base_panel.provider,
-                "tier": 3 if canonical_base_panel.provider == "synthetic_fixture" else 2,
-                "label": canonical_base_panel.provider,
-            })(),
-        )
+        # Baseline panel is already canonical MarketDataPanel; enforce bounds
+        # and required history directly (no canonical->legacy conversion).
         enforce_bounds(base_panel)
         check_required_history(spec, base_panel)
 

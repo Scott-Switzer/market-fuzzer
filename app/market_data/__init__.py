@@ -25,11 +25,11 @@ from app.market_data.errors import (
     UnsupportedAdjustmentError,
 )
 from app.market_data.panel import MarketDataPanel
-from app.market_data.quality import DataQualityReport, MissingDataPolicy
 
 # Register providers
 from app.market_data.providers.synthetic_fixture import SyntheticFixtureProvider
 from app.market_data.providers.yfinance_adapter import YFinanceProvider
+from app.market_data.quality import DataQualityReport, MissingDataPolicy
 from app.market_data.registry import default_registry
 
 _reg = default_registry()

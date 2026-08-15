@@ -136,6 +136,7 @@ class RunRow(Base):
     strategy_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     strategy_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     data_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    dataset_digest: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="created")
     stages_completed: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     seeds: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
@@ -173,6 +174,33 @@ class JobRow(Base):
     result_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class DatasetRow(Base):
+    """Frozen canonical dataset (market-data panel) registry (Phase 3 D5).
+
+    Every acquired panel is recorded once per (project_id, canonical_digest).
+    Runs reference the digest via ``RunRow.dataset_digest`` so a campaign can
+    prove it replayed the EXACT frozen baseline the originating backtest used.
+    """
+
+    __tablename__ = "datasets"
+    __table_args__ = (
+        Index("ix_datasets_canonical_digest", "canonical_digest"),
+        Index("ix_datasets_project_id", "project_id"),
+        UniqueConstraint("project_id", "canonical_digest", name="uq_datasets_project_digest"),
+    )
+
+    dataset_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    canonical_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    provenance_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    quality_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    artifact_manifest_ref: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class FailureRow(Base):

@@ -238,7 +238,7 @@ def write_artifact(
 
 
 def read_artifact(store, *, run_id: str, key: str) -> Any:
-    raw = store.read(run_id, key)
+    raw = store.get(key)
     if raw is None:
         raise FileNotFoundError(key)
     return json.loads(raw)

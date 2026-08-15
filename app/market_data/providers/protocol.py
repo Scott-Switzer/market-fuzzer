@@ -60,17 +60,13 @@ class MarketDataProvider(ABC):
             )
         for field in request.required_fields:
             if field not in caps.supported_fields:
-                raise ProviderCapabilityError(
-                    f"provider {caps.provider_name} does not support field {field}"
-                )
+                raise ProviderCapabilityError(f"provider {caps.provider_name} does not support field {field}")
         if len(request.instruments) > caps.max_instruments_per_request:
             raise ProviderCapabilityError(
                 f"provider {caps.provider_name} supports max {caps.max_instruments_per_request} instruments"
             )
         if request.benchmark and not caps.benchmark_supported:
-            raise ProviderCapabilityError(
-                f"provider {caps.provider_name} does not support benchmark data"
-            )
+            raise ProviderCapabilityError(f"provider {caps.provider_name} does not support benchmark data")
 
 
 __all__ = ["MarketDataProvider", "RawProviderDataset"]

@@ -7,7 +7,6 @@ without reacquiring data.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from app.evidence.artifact_store import ArtifactStore
@@ -30,20 +29,26 @@ def freeze_panel(
     """Persist a canonical panel as frozen artifacts.
 
     Returns the manifest dict. All artifacts are indexed in the store.
+
+    When ``session`` is provided, also registers a ``DatasetRow`` (Phase 3 D5)
+    so the run can later prove it referenced this exact frozen dataset, and
+    stamps ``RunRow.dataset_digest``.
     """
     from app.strategy_lab.canonical.durable import write_artifact
 
     artifacts: list[dict[str, Any]] = []
 
-    # Request
-    write_artifact(
-        session=session,
-        store=store,
-        run_id=run_id,
-        key=f"runs/{run_id}/market-data-request.json",
-        payload=_request_to_dict(request),
-        artifact_index=artifacts,
-    )
+    # Request (only when a request object is supplied; tests may freeze a panel
+    # without a request object, in which case the request artifact is skipped).
+    if request is not None:
+        write_artifact(
+            session=session,
+            store=store,
+            run_id=run_id,
+            key=f"runs/{run_id}/market-data-request.json",
+            payload=_request_to_dict(request),
+            artifact_index=artifacts,
+        )
 
     # Panel (deterministic columnar representation)
     write_artifact(
@@ -104,6 +109,55 @@ def freeze_panel(
         artifact_index=artifacts,
     )
 
+    # Persist the dataset registry row + link the run (Phase 3 D5), if a session
+    # is available. Falls back silently to artifacts-only when no session is
+    # passed (caller is responsible for persistence in that case).
+    if session is not None:
+        from app.persistence.models import DatasetRow, RunRow
+
+        project_id = None
+        run_row = session.get(RunRow, run_id)
+        if run_row is not None:
+            project_id = run_row.project_id
+
+        if project_id is not None:
+            request_json = _request_to_dict(request)
+            provenance_json = {
+                "provider": panel.provider,
+                "provider_version": panel.provider_version,
+                "retrieval_timestamp": panel.retrieval_timestamp.isoformat(),
+                "as_of": panel.as_of.isoformat() if panel.as_of else None,
+                "calendar_policy": panel.calendar_policy.value,
+                "adjustment_policy": panel.adjustment_policy.value,
+                "missing_data_policy": panel.missing_data_policy,
+                "eligibility_source": panel.eligibility_source.value,
+                "source_metadata": panel.source_metadata,
+            }
+            existing = (
+                session.query(DatasetRow)
+                .filter_by(project_id=project_id, canonical_digest=panel.dataset_digest)
+                .first()
+            )
+            if existing is None:
+                # upsert by primary key (dataset_id == "ds_<digest>"): a second
+                # freeze of an identical panel (e.g. idempotent re-run) must not
+                # violate the unique dataset_id constraint.
+                session.merge(
+                    DatasetRow(
+                        dataset_id=f"ds_{panel.dataset_digest}",
+                        project_id=project_id,
+                        canonical_digest=panel.dataset_digest,
+                        provider=panel.provider,
+                        provider_version=panel.provider_version,
+                        request_json=request_json,
+                        provenance_json=provenance_json,
+                        quality_json=quality.to_dict(),
+                        artifact_manifest_ref=f"runs/{run_id}/market-data-manifest.json",
+                    )
+                )
+            if run_row is not None:
+                run_row.dataset_digest = panel.dataset_digest
+
     return manifest
 
 
@@ -126,9 +180,7 @@ def load_frozen_panel(
     recomputed = compute_dataset_digest(panel)
 
     if recomputed != panel.dataset_digest:
-        raise DatasetDigestMismatchError(
-            f"stored digest {panel.dataset_digest} != recomputed {recomputed}"
-        )
+        raise DatasetDigestMismatchError(f"stored digest {panel.dataset_digest} != recomputed {recomputed}")
     if expected_digest is not None and panel.dataset_digest != expected_digest:
         raise DatasetDigestMismatchError(
             f"expected digest {expected_digest} != stored {panel.dataset_digest}"

@@ -7,7 +7,6 @@ provider responses; CI never depends on live network access.
 
 from __future__ import annotations
 
-import hashlib
 from datetime import UTC, datetime
 from typing import Any
 
@@ -168,7 +167,6 @@ class YFinanceProvider(MarketDataProvider):
         if request.benchmark:
             bench_tk = request.benchmark.symbol
             if bench_tk in tickers:
-                bench_idx = tickers.index(bench_tk)
                 if ("Close", bench_tk) in df.columns:
                     bench_series = df[("Close", bench_tk)].to_numpy(dtype=float)
                     bench_inst = request.benchmark

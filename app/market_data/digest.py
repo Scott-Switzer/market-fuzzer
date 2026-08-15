@@ -68,7 +68,8 @@ def compute_dataset_digest(panel: Any) -> str:
 
     # Source metadata affecting interpretation (sorted, exclude display labels)
     semantic_meta = {
-        k: v for k, v in panel.source_metadata.items()
+        k: v
+        for k, v in panel.source_metadata.items()
         if k not in ("label", "display_name", "description", "notes")
     }
     h.update(json.dumps(semantic_meta, sort_keys=True, separators=(",", ":")).encode())

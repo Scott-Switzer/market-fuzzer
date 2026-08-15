@@ -9,7 +9,7 @@ from __future__ import annotations
 from app.market_data.contracts import MarketDataRequest
 from app.market_data.errors import ProviderNotFoundError
 from app.market_data.panel import MarketDataPanel
-from app.market_data.providers.protocol import MarketDataProvider, RawProviderDataset
+from app.market_data.providers.protocol import MarketDataProvider
 from app.market_data.quality import DataQualityReport
 
 

@@ -85,7 +85,16 @@ class MarketDataPanel:
             raise DataQualityError("duplicate stable instrument IDs")
 
         # Shape alignment
-        for name in ("open", "high", "low", "close", "volume", "eligibility_mask", "observed_mask", "imputation_mask"):
+        for name in (
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "eligibility_mask",
+            "observed_mask",
+            "imputation_mask",
+        ):
             arr = getattr(self, name)
             if arr.shape != (T, N):
                 raise DataQualityError(f"{name} shape {arr.shape} != ({T}, {N})")

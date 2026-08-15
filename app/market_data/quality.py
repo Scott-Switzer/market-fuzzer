@@ -145,18 +145,22 @@ def validate_panel_quality(
         volume = panel.volume[:, j]
 
         first_valid = panel.dates[int(np.argmax(obs))].isoformat() if np.any(obs) else None
-        last_valid = panel.dates[len(obs) - 1 - int(np.argmax(obs[::-1]))].isoformat() if np.any(obs) else None
+        last_valid = (
+            panel.dates[len(obs) - 1 - int(np.argmax(obs[::-1]))].isoformat() if np.any(obs) else None
+        )
 
         observed_bars = int(np.sum(obs))
         missing_bars = int(np.sum(~obs & panel.eligibility_mask[:, j]))
         imputed_bars = int(np.sum(panel.imputation_mask[:, j]))
         longest_missing = _longest_streak(obs)
         invalid_prices = int(np.sum((close <= 0) | ~np.isfinite(close)))
-        invalid_ohlc = int(np.sum(
-            (panel.high[:, j] < np.maximum(panel.open[:, j], close))
-            | (panel.low[:, j] > np.minimum(panel.open[:, j], close))
-            | (panel.high[:, j] < panel.low[:, j])
-        ))
+        invalid_ohlc = int(
+            np.sum(
+                (panel.high[:, j] < np.maximum(panel.open[:, j], close))
+                | (panel.low[:, j] > np.minimum(panel.open[:, j], close))
+                | (panel.high[:, j] < panel.low[:, j])
+            )
+        )
         zero_volume = int(np.sum((volume == 0) & obs))
         stale = _stale_streaks(close, obs)
 
@@ -169,19 +173,21 @@ def validate_panel_quality(
             if frac > 0.5:
                 warnings.append(f"{inst.symbol}: {zero_volume}/{observed_bars} zero-volume bars")
 
-        per_instrument.append(InstrumentQuality(
-            symbol=inst.symbol,
-            first_valid=first_valid,
-            last_valid=last_valid,
-            observed_bars=observed_bars,
-            missing_bars=missing_bars,
-            imputed_bars=imputed_bars,
-            longest_missing_streak=longest_missing,
-            invalid_price_count=invalid_prices,
-            invalid_ohlc_count=invalid_ohlc,
-            zero_volume_count=zero_volume,
-            stale_streaks=stale,
-        ))
+        per_instrument.append(
+            InstrumentQuality(
+                symbol=inst.symbol,
+                first_valid=first_valid,
+                last_valid=last_valid,
+                observed_bars=observed_bars,
+                missing_bars=missing_bars,
+                imputed_bars=imputed_bars,
+                longest_missing_streak=longest_missing,
+                invalid_price_count=invalid_prices,
+                invalid_ohlc_count=invalid_ohlc,
+                zero_volume_count=zero_volume,
+                stale_streaks=stale,
+            )
+        )
 
     elig_cov = float(np.mean(panel.eligibility_mask)) if panel.eligibility_mask.size else 0.0
     bench_cov = 1.0 if panel.benchmark_close is not None else 0.0
