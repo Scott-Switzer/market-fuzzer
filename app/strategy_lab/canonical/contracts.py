@@ -194,6 +194,19 @@ class DataSourceProvenance(BaseModel):
     content_digest: str | None
 
 
+class DatasetQualitySummary(BaseModel):
+    """Structured data-quality summary surfaced in the V2 response (Phase 3 D17)."""
+
+    model_config = ConfigDict(extra="forbid")
+    requested_instruments: list[str]
+    returned_instruments: list[str]
+    missing_instruments: list[str]
+    eligibility_coverage: float
+    benchmark_coverage: float
+    history_requirement_met: bool
+    warnings: list[str]
+
+
 class BacktestResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     api_version: str = "v2"
@@ -213,6 +226,15 @@ class BacktestResponse(BaseModel):
     warnings: list[str]
     reasons_to_distrust: list[str]
     data_provenance: DataSourceProvenance
+    # Phase 3 D17: canonical dataset metadata for independent verification.
+    dataset_digest: str
+    dataset_provider: str
+    dataset_provider_version: str
+    dataset_calendar_policy: str
+    dataset_adjustment_policy: str
+    dataset_missing_data_policy: str
+    dataset_eligibility_source: str
+    dataset_quality: DatasetQualitySummary
     artifact_references: list[dict[str, Any]]
 
 
@@ -311,6 +333,7 @@ class AuditRecord(BaseModel):
     data_source_digest: str | None
     artifact_hashes: list[str]
     compiler_version: str
+    dataset_digest: str | None = None
     schema_version: str
     limitations: list[str]
 

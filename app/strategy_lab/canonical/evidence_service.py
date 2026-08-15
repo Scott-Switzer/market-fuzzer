@@ -100,6 +100,7 @@ def build_audit_record(
     data_digest = None
     artifact_hashes: list[str] = []
     audit_run_id = None
+    dataset_digest: str | None = None
     if run_row is not None:
         audit_run_id = run_row.id
     elif campaign_row is not None:
@@ -118,6 +119,14 @@ def build_audit_record(
             data_digest = _json.loads(manifest).get("data_content_digest")
         elif campaign_row is not None:
             data_digest = campaign_row.base_panel_digest
+        # Phase 3 D18: verify the canonical dataset digest from the market-data
+        # frozen-panel manifest so the audit proves the EXACT dataset used.
+        dataset_digest = None
+        md_manifest = store.get(f"runs/{audit_run_id}/market-data-manifest.json")
+        if md_manifest is not None:
+            import json as _json
+
+            dataset_digest = _json.loads(md_manifest).get("dataset_digest")
 
     # Limitations reflect the ACTUAL data mode of the audited resource, not a
     # generic constant (Phase 2.6.1 gate 12).
@@ -148,6 +157,7 @@ def build_audit_record(
         data_source_digest=data_digest,
         artifact_hashes=artifact_hashes,
         compiler_version=compiler_label,
+        dataset_digest=dataset_digest,
         schema_version=approved.schema_version,
         limitations=limitations,
     )

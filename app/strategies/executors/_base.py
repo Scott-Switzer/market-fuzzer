@@ -26,7 +26,11 @@ def context_from_panel(panel: object) -> StrategyExecutionContext:
             else np.asarray(panel.benchmark_close, dtype=float)  # type: ignore[attr-defined]
         ),
         data_provenance={
-            "source": getattr(getattr(panel, "provenance", None), "source", "unknown"),
+            "source": (
+                getattr(getattr(panel, "provenance", None), "source", "unknown")
+                if getattr(panel, "provenance", None) is not None
+                else getattr(panel, "provider", "unknown")
+            ),
         },
     )
 

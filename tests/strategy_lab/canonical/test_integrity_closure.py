@@ -317,14 +317,39 @@ def test_short_history_api_returns_structured_422(client, monkeypatch):
     c = _compile(client, "Allocate 60% to SPY and 40% to AGG and rebalance monthly.")
     a = _approve(client, pid, c["spec_draft"], c["canonical_hash"]).json()
 
-    real_acquire = bts.acquire_panel
+    real_acquire = bts.acquire_canonical_panel
 
     def short_acquire(*args, **kwargs):
-        panel, prov = real_acquire(*args, **kwargs)
+        panel, quality = real_acquire(*args, **kwargs)
         # 1 bar is below EVERY executor's minimum decision bars.
-        return _slice_panel(panel, 1), prov
+        from app.market_data.panel import MarketDataPanel
 
-    monkeypatch.setattr(bts, "acquire_panel", short_acquire)
+        short_panel = MarketDataPanel(
+            dates=panel.dates[:1],
+            instruments=panel.instruments,
+            open=panel.open[:1],
+            high=panel.high[:1],
+            low=panel.low[:1],
+            close=panel.close[:1],
+            volume=panel.volume[:1],
+            benchmark_close=panel.benchmark_close[:1] if panel.benchmark_close is not None else None,
+            benchmark_instrument=panel.benchmark_instrument,
+            eligibility_mask=panel.eligibility_mask[:1],
+            observed_mask=panel.observed_mask[:1],
+            imputation_mask=panel.imputation_mask[:1],
+            provider=panel.provider,
+            provider_version=panel.provider_version,
+            retrieval_timestamp=panel.retrieval_timestamp,
+            as_of=panel.as_of,
+            calendar_policy=panel.calendar_policy,
+            adjustment_policy=panel.adjustment_policy,
+            missing_data_policy=panel.missing_data_policy,
+            eligibility_source=panel.eligibility_source,
+            source_metadata=panel.source_metadata,
+        )
+        return short_panel, quality
+
+    monkeypatch.setattr(bts, "acquire_canonical_panel", short_acquire)
     r = client.post(
         "/api/strategy-lab/v2/backtests",
         json={

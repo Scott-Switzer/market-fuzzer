@@ -22,13 +22,17 @@ from __future__ import annotations
 import hashlib
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
 import numpy as np
 
+from app.market_data.adjustments import AdjustmentPolicy
+from app.market_data.calendar import CalendarPolicy
+from app.market_data.contracts import AssetType, EligibilitySource, InstrumentIdentifier
+from app.market_data.panel import MarketDataPanel
 from app.strategy_lab.canonical.errors import InvalidScenarioMechanismError
-from app.strategy_lab.submission.panels import MarketDataPanel
 
 
 class ScenarioMechanism:
@@ -220,19 +224,55 @@ def generate_scenario(base: MarketDataPanel, definition: ScenarioDefinition) -> 
         diagnostics["transformation_method"] = "deterministic_return_rotation_windowed"
 
     open_, high, low = _rebuild_ohlc(close)
+    # Build a CANONICAL MarketDataPanel (Phase 3). The base may be a legacy
+    # MarketDataPanel (from build_demo_panel) or an already-canonical panel;
+    # read its fields defensively so both shapes work.
+    scenario_id = str(uuid.uuid4())
+    T, N = close.shape
+    eligibility = np.ones((T, N), dtype=bool)
+    observed = np.ones((T, N), dtype=bool)
+    imputed = np.zeros((T, N), dtype=bool)
+    legacy_assets = getattr(base, "assets", None)
+    base_instruments = getattr(base, "instruments", None)
+    if base_instruments is not None:
+        instruments = tuple(base_instruments)
+    elif legacy_assets is not None:
+        instruments = tuple(
+            InstrumentIdentifier(symbol=a, asset_type=AssetType.EQUITY, currency="USD") for a in legacy_assets
+        )
+    else:
+        instruments = tuple(
+            InstrumentIdentifier(symbol=f"A{i}", asset_type=AssetType.EQUITY, currency="USD")
+            for i in range(N)
+        )
+    benchmark_instrument = getattr(base, "benchmark_instrument", None)
     panel = MarketDataPanel(
         dates=base.dates,
-        assets=base.assets,  # symbol identity preserved
+        instruments=instruments,
         open=open_,
         high=high,
         low=low,
         close=close,
         volume=base.volume,
-        benchmark_close=base.benchmark_close,
-        metadata=base.metadata,
-        provenance=base.provenance,
+        benchmark_close=getattr(base, "benchmark_close", None),
+        benchmark_instrument=benchmark_instrument,
+        eligibility_mask=eligibility,
+        observed_mask=observed,
+        imputation_mask=imputed,
+        provider=getattr(base, "provider", "synthetic_fixture"),
+        provider_version=getattr(base, "provider_version", "unknown"),
+        retrieval_timestamp=getattr(base, "retrieval_timestamp", datetime.now(UTC)),
+        as_of=getattr(base, "as_of", None),
+        calendar_policy=getattr(base, "calendar_policy", CalendarPolicy.SYNTHETIC_WEEKDAY),
+        adjustment_policy=getattr(base, "adjustment_policy", AdjustmentPolicy.RAW),
+        missing_data_policy=getattr(base, "missing_data_policy", "none"),
+        eligibility_source=getattr(base, "eligibility_source", EligibilitySource.SYNTHETIC_FIXTURE),
+        source_metadata={
+            **getattr(base, "source_metadata", {}),
+            "scenario": mech,
+            "scenario_id": scenario_id,
+        },
     )
-    scenario_id = str(uuid.uuid4())
     return GeneratedScenario(
         scenario_id=scenario_id,
         definition=definition,

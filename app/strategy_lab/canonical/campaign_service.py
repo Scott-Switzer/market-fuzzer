@@ -24,6 +24,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.domain.run import JobState, RunStage, RunStatus
+from app.market_data.panel import MarketDataPanel
 from app.persistence.models import (
     AdjacentPassRow,
     CampaignRow,
@@ -41,7 +42,7 @@ from app.strategy_lab.canonical.contracts import (
     MinimizationRecord,
     PredicateResult,
 )
-from app.strategy_lab.canonical.data_service import acquire_panel, check_required_history, enforce_bounds
+from app.strategy_lab.canonical.data_service import check_required_history, enforce_bounds
 from app.strategy_lab.canonical.durable import (
     create_pending_run,
     create_queued_job,
@@ -65,7 +66,6 @@ from app.strategy_lab.canonical.scenarios import (
     generate_scenario,
     stable_seed,
 )
-from app.strategy_lab.submission.panels import MarketDataPanel
 
 
 def _run_on_world(approved, panel: MarketDataPanel, expected_hash: str) -> Any:
@@ -185,18 +185,24 @@ def run_campaign(
         "universe": list(spec.universe),
         "benchmark": spec.benchmark,
     }
-    base_panel, _prov = acquire_panel(
-        source=ds.get("source", "demo_fixture"),
+    # Acquire canonical market-data panel (Phase 3 cutover)
+    from app.market_data.service import acquire_panel as acquire_canonical_panel
+
+    canonical_base_panel, _quality = acquire_canonical_panel(
+        data_source=ds,
         universe=ds.get("universe", list(spec.universe)),
         benchmark=ds.get("benchmark"),
-        start=ds.get("start"),
-        end=ds.get("end"),
-        seed=ds.get("seed"),
         benchmark_tradable=spec.benchmark_tradable,
+        allow_synthetic=ds.get("allow_synthetic", False),
     )
-    enforce_bounds(base_panel)
-    check_required_history(spec, base_panel)
-    base_digest = _prov.content_digest
+    enforce_bounds(canonical_base_panel)
+    check_required_history(spec, canonical_base_panel)
+    base_digest = canonical_base_panel.dataset_digest
+
+    # Execute directly against the canonical MarketDataPanel (Phase 3: no
+    # canonical->legacy panel conversion; run_strategy consumes the canonical
+    # contract fields dates/assets/open/close/benchmark_close).
+    base_panel = canonical_base_panel
 
     # Baseline linkage: validate exists + same project/version/hash (Phase 2.6 D14).
     # When present, replay against the baseline's EXACT persisted input panel
@@ -210,14 +216,26 @@ def run_campaign(
             raise BaselineMismatchError("baseline run belongs to a different strategy version")
         if baseline_run.strategy_hash != expected_canonical_hash:
             raise BaselineMismatchError("baseline run hash does not match the requested strategy")
-        from app.strategy_lab.canonical.data_service import panel_from_dict
+        from app.market_data.artifacts import load_frozen_panel
+        from app.market_data.errors import DatasetDigestMismatchError
 
-        panel_payload = _read_json(get_default_store(), f"runs/{baseline_run_id}/input-panel.json")
-        if panel_payload is None:
-            raise BaselineMismatchError(
-                f"baseline run {baseline_run_id} has no persisted input panel; cannot replay"
+        try:
+            canonical_base_panel, manifest = load_frozen_panel(
+                get_default_store(),
+                baseline_run_id,
             )
-        base_panel = panel_from_dict(panel_payload)
+        except DatasetDigestMismatchError as exc:
+            raise BaselineMismatchError(f"baseline dataset digest mismatch: {exc}") from exc
+        except Exception as exc:
+            raise BaselineMismatchError(f"baseline panel reload failed: {exc}") from exc
+        # Verify baseline digest matches campaign expectation
+        if manifest["dataset_digest"] != base_digest:
+            raise BaselineMismatchError(
+                f"baseline dataset digest {manifest['dataset_digest']} != expected {base_digest}"
+            )
+
+        # Baseline panel is already canonical MarketDataPanel; enforce bounds
+        # and required history directly (no canonical->legacy conversion).
         enforce_bounds(base_panel)
         check_required_history(spec, base_panel)
 

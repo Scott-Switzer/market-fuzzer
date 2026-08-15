@@ -1,0 +1,263 @@
+"""PostgreSQL dataset-persistence invariants (Phase 3 D5).
+
+These prove the ``datasets`` table behaves correctly on real PostgreSQL:
+FK enforcement, independent dataset identity (NOT digest-derived), the
+``(project_id, canonical_digest)`` uniqueness contract across two projects, and
+concurrent-freeze safety (exactly one row, no 500, both callers resolve to it).
+
+They are skipped unless ``FENRIX_TEST_POSTGRES_URL`` is set (CI sets it to the
+``services: postgres`` container). The SQLite unit tests in
+``tests/strategy_lab/canonical/test_phase3_data_layer.py`` cover the same logic
+offline; this file is the authoritative relational gate.
+
+All sessions are opened via ``session_scope`` (which commits/closes on exit) so
+the fixture teardown's ``drop_all`` never deadlocks on an open connection --
+the same pattern used by the proven tests in ``test_postgres_persistence.py``.
+"""
+
+from __future__ import annotations
+
+import os
+import threading
+import uuid
+
+import pytest
+
+pytest.importorskip("psycopg")
+
+PG_URL = os.environ.get("FENRIX_TEST_POSTGRES_URL")
+pytestmark = pytest.mark.skipif(
+    not PG_URL, reason="FENRIX_TEST_POSTGRES_URL not set; skipping real-Postgres tests"
+)
+
+from sqlalchemy import text  # noqa: E402
+
+from app.persistence.database import (  # noqa: E402
+    create_all,
+    make_engine,
+    make_session_factory,
+    session_scope,
+)
+from app.persistence.models import Base, DatasetRow, Project  # noqa: E402
+
+DIGEST_A = "a" * 64
+DIGEST_B = "b" * 64
+
+
+@pytest.fixture()
+def pg_factory():
+    engine = make_engine(PG_URL)
+    Base.metadata.drop_all(engine)
+    create_all(engine)
+    yield make_session_factory(engine)
+    Base.metadata.drop_all(engine)
+    engine.dispose()
+
+
+def _seed_project(factory, pid: str) -> None:
+    with session_scope(factory) as s:
+        s.add(Project(id=pid, name=pid, owner="tester"))
+        s.commit()
+
+
+def _register(factory, pid: str, digest: str) -> None:
+    """Insert a datasets row directly (the production path is exercised by the
+    SQLite suite); here we assert the relational contract on real Postgres."""
+    with session_scope(factory) as s:
+        s.add(
+            DatasetRow(
+                dataset_id=f"ds_{uuid.uuid4().hex}",
+                project_id=pid,
+                canonical_digest=digest,
+                provider="synthetic_fixture",
+                provider_version="synthetic-gen/1.0",
+                request_json={},
+                provenance_json={},
+                quality_json={},
+                artifact_manifest_ref="runs/x/market-data-manifest.json",
+            )
+        )
+        s.commit()
+
+
+def test_dataset_id_fits_schema(pg_factory):
+    """dataset_id is an independent ds_<uuid4 hex> (35 chars), well under 64,
+    and is NOT the digest (which would be 67 chars and globally scoped)."""
+    _seed_project(pg_factory, "p1")
+    _register(pg_factory, "p1", DIGEST_A)
+    with session_scope(pg_factory) as s:
+        row = s.query(DatasetRow).filter_by(project_id="p1", canonical_digest=DIGEST_A).one()
+    assert row.dataset_id.startswith("ds_")
+    assert len(row.dataset_id) <= 64
+    assert row.dataset_id != f"ds_{DIGEST_A}"
+    assert len(row.dataset_id) < 64
+
+
+def test_identical_digest_same_project_one_row(pg_factory):
+    from sqlalchemy.exc import IntegrityError
+
+    _seed_project(pg_factory, "p1")
+    _register(pg_factory, "p1", DIGEST_A)
+    # A second freeze of the identical (project, digest) must be rejected by the
+    # unique constraint -- proving the semantic identity lives in the DB, not the
+    # (digest-derived) primary key.
+    with pytest.raises(IntegrityError):
+        _register(pg_factory, "p1", DIGEST_A)
+    with session_scope(pg_factory) as s:
+        n = s.query(DatasetRow).filter_by(project_id="p1", canonical_digest=DIGEST_A).count()
+    assert n == 1
+
+
+def test_identical_digest_different_projects_two_rows(pg_factory):
+    _seed_project(pg_factory, "p1")
+    _seed_project(pg_factory, "p2")
+    _register(pg_factory, "p1", DIGEST_A)
+    _register(pg_factory, "p2", DIGEST_A)
+    with session_scope(pg_factory) as s:
+        rows = s.query(DatasetRow).filter_by(canonical_digest=DIGEST_A).all()
+    assert len(rows) == 2
+    assert rows[0].dataset_id != rows[1].dataset_id
+
+
+def test_missing_project_rejected_by_fk(pg_factory):
+    from sqlalchemy.exc import IntegrityError
+
+    with pytest.raises(IntegrityError):
+        with session_scope(pg_factory) as s:  # no project seeded
+            s.add(
+                DatasetRow(
+                    dataset_id=f"ds_{uuid.uuid4().hex}",
+                    project_id="ghost",
+                    canonical_digest=DIGEST_A,
+                    provider="synthetic_fixture",
+                    provider_version="v",
+                    request_json={},
+                    provenance_json={},
+                    quality_json={},
+                    artifact_manifest_ref="r",
+                )
+            )
+            s.commit()
+
+
+def test_concurrent_identical_freezes_one_row(pg_factory):
+    """Two threads drive the PRODUCTION ``_register_dataset`` helper through
+    independent sessions/transactions. Exactly one dataset row must exist, both
+    callers return normally (the loser's duplicate race is converted to
+    idempotent success, not an error), and no HTTP 500."""
+    from app.market_data.artifacts import _register_dataset
+
+    _seed_project(pg_factory, "p1")
+    s1 = pg_factory()
+    s2 = pg_factory()
+    errors: list[BaseException] = []
+
+    def _work(session) -> None:
+        try:
+            _register_dataset(
+                session,
+                project_id="p1",
+                canonical_digest=DIGEST_A,
+                provider="synthetic_fixture",
+                provider_version="synthetic-gen/1.0",
+                request_json={},
+                provenance_json={},
+                quality_json={},
+                artifact_manifest_ref="runs/x/market-data-manifest.json",
+            )
+            session.commit()
+        except Exception as e:  # noqa: BLE001 - surface any UNEXPECTED failure
+            errors.append(e)
+
+    t1 = threading.Thread(target=_work, args=(s1,))
+    t2 = threading.Thread(target=_work, args=(s2,))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+    s1.close()
+    s2.close()
+
+    assert not errors, f"concurrent freeze raised: {errors}"
+    with session_scope(pg_factory) as s:
+        rows = s.query(DatasetRow).filter_by(project_id="p1", canonical_digest=DIGEST_A).all()
+    assert len(rows) == 1  # exactly one dataset row for the (project, digest) pair
+
+
+def test_duplicate_race_preserves_outer_transaction(pg_factory):
+    """The savepoint must isolate the duplicate-key race so unrelated work the
+    caller already staged in the enclosing transaction survives.
+
+    Seed a pending (uncommitted) Project row + a distinct dataset in the SAME
+    session, then trigger a duplicate (project, digest) insert via the production
+    helper. After the race resolves, the originally-staged project must still be
+    present and committable -- proving ``_register_dataset`` did NOT roll back
+    the outer transaction.
+    """
+    from app.market_data.artifacts import _register_dataset
+
+    # Build a session with an outer (enclosing) transaction already begun.
+    s = pg_factory()
+    try:
+        # Staged-but-uncommitted unrelated work in the outer transaction.
+        s.add(Project(id="p1", name="p1", owner="tester"))
+        # A first, successful registration of (p1, DIGEST_A).
+        _register_dataset(
+            s,
+            project_id="p1",
+            canonical_digest=DIGEST_A,
+            provider="synthetic_fixture",
+            provider_version="synthetic-gen/1.0",
+            request_json={},
+            provenance_json={},
+            quality_json={},
+            artifact_manifest_ref="runs/x/market-data-manifest.json",
+        )
+        # Second registration of the SAME (p1, DIGEST_A): must hit the unique
+        # constraint, roll back only the savepoint, and leave p1 staged.
+        _register_dataset(
+            s,
+            project_id="p1",
+            canonical_digest=DIGEST_A,
+            provider="synthetic_fixture",
+            provider_version="synthetic-gen/1.0",
+            request_json={},
+            provenance_json={},
+            quality_json={},
+            artifact_manifest_ref="runs/x/market-data-manifest.json",
+        )
+        s.commit()
+    finally:
+        s.close()
+
+    # The outer transaction survived: the staged project persisted, and exactly
+    # one dataset row exists (the duplicate was idempotently collapsed).
+    with session_scope(pg_factory) as sess:
+        proj = sess.get(Project, "p1")
+        n = sess.query(DatasetRow).filter_by(project_id="p1", canonical_digest=DIGEST_A).count()
+    assert proj is not None, "outer transaction was rolled back by the duplicate race"
+    assert n == 1
+
+
+def test_alembic_check_clean_on_postgres(pg_factory):
+    """The migrated schema must match the models exactly (no pending ops)."""
+    from pathlib import Path
+
+    from alembic import command
+    from alembic.config import Config
+
+    repo_root = Path(__file__).resolve().parents[2]
+    cfg = Config(str(repo_root / "alembic.ini"))
+    cfg.set_main_option("script_location", str(repo_root / "app" / "persistence" / "migrations"))
+    cfg.set_main_option("sqlalchemy.url", PG_URL)
+    # The pg_factory fixture created the schema via Base.metadata.create_all and
+    # left the alembic_version table stamped at head. Drop the whole schema
+    # (including alembic_version) so alembic builds from scratch and check() can
+    # compare the migrated schema against the models.
+    engine = make_engine(PG_URL)
+    Base.metadata.drop_all(engine)
+    with engine.connect() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
+        conn.commit()
+    command.upgrade(cfg, "head")
+    command.check(cfg)  # raises if models != migrations
