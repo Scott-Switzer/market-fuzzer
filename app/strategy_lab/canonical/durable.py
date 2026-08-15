@@ -294,7 +294,7 @@ def cancel_job(session: Session, *, run_id: str) -> bool:
     cancelled (RUNNING/QUEUED -> CANCELLED). A COMPLETED/FAILED/already-CANCELLED
     job is left untouched and returns False (idempotent, restart-safe).
     """
-    from app.domain.run import Job, JobState, RunStatus
+    from app.domain.run import Job, JobState, RunStage, RunStatus
 
     job = session.query(JobRow).filter(JobRow.run_id == run_id).first()
     if job is None:
@@ -302,7 +302,7 @@ def cancel_job(session: Session, *, run_id: str) -> bool:
     domain = Job(
         job_id=job.id,
         idempotency_key=job.idempotency_key,
-        stage=job.stage,
+        stage=RunStage(job.stage),
         state=JobState(job.state),
         attempts=job.attempts,
         max_attempts=job.max_attempts,
@@ -333,7 +333,7 @@ def reclaim_stale_jobs(session: Session, *, stale_after_seconds: int = 3600) -> 
     """
     from datetime import timedelta
 
-    from app.domain.run import Job, JobState, RunStatus
+    from app.domain.run import Job, JobState, RunStage, RunStatus
 
     cutoff = now() - timedelta(seconds=stale_after_seconds)
     stale = (
@@ -347,7 +347,7 @@ def reclaim_stale_jobs(session: Session, *, stale_after_seconds: int = 3600) -> 
         domain = Job(
             job_id=job.id,
             idempotency_key=job.idempotency_key,
-            stage=job.stage,
+            stage=RunStage(job.stage),
             state=JobState(job.state),
             attempts=job.attempts,
             max_attempts=job.max_attempts,
