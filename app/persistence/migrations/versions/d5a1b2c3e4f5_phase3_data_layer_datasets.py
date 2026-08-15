@@ -38,7 +38,12 @@ def upgrade() -> None:
     op.create_table(
         "datasets",
         sa.Column("dataset_id", sa.String(length=64), nullable=False),
-        sa.Column("project_id", sa.String(length=64), nullable=False),
+        sa.Column(
+            "project_id",
+            sa.String(length=64),
+            sa.ForeignKey("projects.id"),
+            nullable=False,
+        ),
         sa.Column("canonical_digest", sa.String(length=64), nullable=False),
         sa.Column("provider", sa.String(length=64), nullable=False),
         sa.Column("provider_version", sa.String(length=64), nullable=False),

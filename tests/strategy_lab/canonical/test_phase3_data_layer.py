@@ -654,3 +654,108 @@ def test_acquire_panel_unknown_source_rejected():
             universe=["A"],
             benchmark=None,
         )
+
+
+# --------------------------------------------------------------------------
+# D5 — datasets persistence (SQLite-level; Postgres invariants in
+# tests/integration/test_postgres_datasets.py)
+# --------------------------------------------------------------------------
+def _session_with_datasets(tmp_path, with_run: bool = False):
+    from app.persistence.database import create_all, make_engine, make_session_factory
+    from app.persistence.models import Project, RunRow, Strategy, StrategyVersionRow
+
+    url = f"sqlite:///{tmp_path / 'fenrix_ds_test.db'}"
+    engine = make_engine(url)
+    create_all(engine)
+    session = make_session_factory(engine)()
+    session.add(Project(id="proj1", name="p1", owner="tester"))
+    if with_run:
+        session.add(Strategy(id="s1", project_id="proj1", name="strat"))
+        session.add(
+            StrategyVersionRow(
+                strategy_id="s1",
+                version=1,
+                canonical_hash="0" * 64,
+                canonical_json="{}",
+                state="approved",
+            )
+        )
+        session.add(
+            RunRow(
+                id="run1",
+                project_id="proj1",
+                strategy_id="s1",
+                strategy_version=1,
+                strategy_hash="0" * 64,
+                data_mode="synthetic_fixture",
+                dataset_digest="",
+            )
+        )
+    session.commit()
+    return session
+
+
+def test_dataset_id_independent_of_digest(tmp_path):
+    from app.market_data.artifacts import _register_dataset
+    from app.persistence.models import DatasetRow
+
+    session = _session_with_datasets(tmp_path)
+    _register_dataset(
+        session,
+        project_id="proj1",
+        canonical_digest="a" * 64,
+        provider="synthetic_fixture",
+        provider_version="v",
+        request_json={},
+        provenance_json={},
+        quality_json={},
+        artifact_manifest_ref="runs/run1/m.json",
+    )
+    session.commit()
+    row = session.query(DatasetRow).filter_by(project_id="proj1", canonical_digest="a" * 64).one()
+    assert row.dataset_id.startswith("ds_")
+    assert row.dataset_id != f"ds_{'a' * 64}"
+    assert len(row.dataset_id) <= 64
+
+
+def test_identical_digest_same_project_single_row(tmp_path):
+    from app.market_data.artifacts import _register_dataset
+    from app.persistence.models import DatasetRow
+
+    session = _session_with_datasets(tmp_path)
+    for _ in range(3):
+        _register_dataset(
+            session,
+            project_id="proj1",
+            canonical_digest="a" * 64,
+            provider="synthetic_fixture",
+            provider_version="v",
+            request_json={},
+            provenance_json={},
+            quality_json={},
+            artifact_manifest_ref="runs/run1/m.json",
+        )
+    session.commit()
+    n = session.query(DatasetRow).filter_by(project_id="proj1", canonical_digest="a" * 64).count()
+    assert n == 1
+
+
+def test_run_row_links_dataset_digest(tmp_path):
+    from app.evidence.artifact_store import FilesystemArtifactStore
+    from app.market_data.artifacts import freeze_panel
+    from app.market_data.service import request_from_legacy
+    from app.persistence.models import RunRow
+
+    session = _session_with_datasets(tmp_path, with_run=True)
+    store = FilesystemArtifactStore(str(tmp_path))
+    panel, quality = _synthetic_panel(["A"])
+    req = request_from_legacy(
+        {"source": "demo_fixture", "universe": ["A"], "allow_synthetic": True},
+        universe=["A"],
+        benchmark=None,
+        allow_synthetic=True,
+    )
+    freeze_panel(panel, quality, req, store, "run1", session=session)
+    session.commit()
+    run = session.get(RunRow, "run1")
+    assert run.dataset_digest == panel.dataset_digest

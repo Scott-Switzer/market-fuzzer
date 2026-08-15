@@ -81,7 +81,7 @@ These are not in `pyproject.toml` — they entered the venv ad hoc. Action: ensu
 ## 6. Approved product dependencies to ADD (§3.3, later phases)
 
 - **Backend:** Pydantic v2 (present), SQLAlchemy 2 + Alembic (Phase 1), PostgreSQL driver (Phase 1), Celery 5.6 + RabbitMQ (Phase 1/11), DuckDB (test fixtures), OpenTelemetry SDK (Phase 7), `prov` (Phase 7). All MIT/BSD/Apache → auto-allow.
-- **Frontend (Phase 4, in `web/`):** React+TS, Vite, `@salt-ds/*` (Apache-2.0), TanStack Query/Table (MIT), a router (React Router **or** TanStack Router — ADR to choose one), Plotly.js (MIT), React Hook Form + Zod (MIT), Playwright/Vitest/Storybook/`@axe-core/playwright` (all MIT/Apache).
+- **Frontend (P8 Product Consolidation, in `web/`):** React+TS, Vite, `@salt-ds/*` (Apache-2.0), TanStack Query/Table (MIT), a router (React Router **or** TanStack Router — ADR to choose one), Plotly.js (MIT), React Hook Form + Zod (MIT), Playwright/Vitest/Storybook/`@axe-core/playwright` (all MIT/Apache).
 
 ---
 

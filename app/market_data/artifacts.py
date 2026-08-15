@@ -7,7 +7,10 @@ without reacquiring data.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
+
+from sqlalchemy.exc import IntegrityError
 
 from app.evidence.artifact_store import ArtifactStore
 from app.market_data.digest import compute_dataset_digest
@@ -16,6 +19,64 @@ from app.market_data.panel import MarketDataPanel
 from app.market_data.quality import DataQualityReport
 
 SCHEMA_VERSION = "market-data-artifact/v3.0"
+
+
+def _register_dataset(
+    session,
+    *,
+    project_id: str,
+    canonical_digest: str,
+    provider: str,
+    provider_version: str,
+    request_json: dict[str, Any],
+    provenance_json: dict[str, Any],
+    quality_json: dict[str, Any],
+    artifact_manifest_ref: str,
+) -> None:
+    """Idempotently register a frozen dataset for (project_id, canonical_digest).
+
+    Identity is an independent ``ds_<uuid4 hex>`` row id -- NOT the digest -- so
+    two different projects that legitimately freeze the identical panel get
+    distinct primary keys while the semantic uniqueness lives in the
+    ``uq_datasets_project_digest`` constraint.
+
+    Concurrency: two simultaneous freezes of the same (project, digest) can both
+    observe "absent", both attempt the INSERT, and the loser hits the unique
+    constraint. We catch that :class:`IntegrityError`, roll back to a savepoint,
+    and return the row the winner committed. No HTTP 500, no duplicate row.
+    """
+    from app.persistence.models import DatasetRow
+
+    try:
+        with session.begin_nested():  # SAVEPOINT isolates the race from caller txn
+            session.add(
+                DatasetRow(
+                    dataset_id=f"ds_{uuid.uuid4().hex}",
+                    project_id=project_id,
+                    canonical_digest=canonical_digest,
+                    provider=provider,
+                    provider_version=provider_version,
+                    request_json=request_json,
+                    provenance_json=provenance_json,
+                    quality_json=quality_json,
+                    artifact_manifest_ref=artifact_manifest_ref,
+                )
+            )
+    except IntegrityError:
+        # Another concurrent freeze won the (project_id, canonical_digest) slot.
+        session.rollback()
+        existing = (
+            session.query(DatasetRow)
+            .filter_by(project_id=project_id, canonical_digest=canonical_digest)
+            .first()
+        )
+        if existing is None:
+            # Not a duplicate-row race: a real FK violation (project_id missing).
+            # Re-raise so the caller sees the genuine constraint failure.
+            raise
+        # Duplicate-row race resolved: the row already exists. Idempotent success.
+        return existing
+    return None
 
 
 def freeze_panel(
@@ -113,7 +174,7 @@ def freeze_panel(
     # is available. Falls back silently to artifacts-only when no session is
     # passed (caller is responsible for persistence in that case).
     if session is not None:
-        from app.persistence.models import DatasetRow, RunRow
+        from app.persistence.models import RunRow
 
         project_id = None
         run_row = session.get(RunRow, run_id)
@@ -133,30 +194,19 @@ def freeze_panel(
                 "eligibility_source": panel.eligibility_source.value,
                 "source_metadata": panel.source_metadata,
             }
-            existing = (
-                session.query(DatasetRow)
-                .filter_by(project_id=project_id, canonical_digest=panel.dataset_digest)
-                .first()
+            _register_dataset(
+                session,
+                project_id=project_id,
+                canonical_digest=panel.dataset_digest,
+                provider=panel.provider,
+                provider_version=panel.provider_version,
+                request_json=request_json,
+                provenance_json=provenance_json,
+                quality_json=quality.to_dict(),
+                artifact_manifest_ref=f"runs/{run_id}/market-data-manifest.json",
             )
-            if existing is None:
-                # upsert by primary key (dataset_id == "ds_<digest>"): a second
-                # freeze of an identical panel (e.g. idempotent re-run) must not
-                # violate the unique dataset_id constraint.
-                session.merge(
-                    DatasetRow(
-                        dataset_id=f"ds_{panel.dataset_digest}",
-                        project_id=project_id,
-                        canonical_digest=panel.dataset_digest,
-                        provider=panel.provider,
-                        provider_version=panel.provider_version,
-                        request_json=request_json,
-                        provenance_json=provenance_json,
-                        quality_json=quality.to_dict(),
-                        artifact_manifest_ref=f"runs/{run_id}/market-data-manifest.json",
-                    )
-                )
-            if run_row is not None:
-                run_row.dataset_digest = panel.dataset_digest
+        if run_row is not None:
+            run_row.dataset_digest = panel.dataset_digest
 
     return manifest
 

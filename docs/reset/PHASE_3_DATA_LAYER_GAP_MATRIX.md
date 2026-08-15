@@ -1,14 +1,13 @@
 # Phase 3 — Data Layer Gap Matrix
 
-> **Roadmap naming disambiguation (added 2026-08-14):** the term "Phase 3" was
-> previously used for BOTH the canonical market-data layer (this document) and
-> the React frontend in the Phase 0 reset plan. To remove the collision, this
-> milestone is **"Phase 3 — Canonical Market-Data Layer"** and the React
-> frontend is retroactively **"Phase 4 — Frontend (React/TS/Vite/Salt)"**. Older
-> docs (`ROUTE_AND_SURFACE_INVENTORY.md`, `DEPENDENCY_AND_LICENSE_AUDIT.md`) that
-> say "Phase 3" in a frontend context mean Phase 4.
+> **Roadmap naming (authoritative):** the canonical roadmap is
+> **P3 Canonical Data · P4 Durable Execution · P5 Failure Lab · P6 Exchange
+> Replay · P7 Evidence · P8 Product Consolidation**. React/UI work lives inside
+> **P8**, not a separate "Phase 4 frontend". This document covers P3. Older docs
+> that said "Phase 3" in a frontend sense meant the data layer; the React work
+> is P8.
 
-Branch: `reset/fenrix-data-layer-v1`  
+Branch: `reset/fenrix-data-layer-v1` 
 Base: `c088b0fa95da3feee891d33c9f6599f80b5d0f9d` (merge of PR #47)  
 Purpose: identify every data-path defect against the Phase 3 target architecture before implementation.
 

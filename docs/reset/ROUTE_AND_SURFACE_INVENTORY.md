@@ -23,9 +23,9 @@ Every route/surface below was extracted from source with `grep` at the baseline 
 
 | Route (app.py) | File | Role | Keep/adapt/quarantine/remove |
 |---|---|---|---|
-| `GET /` (:477) | `break-test.html` | current landing (break-test) | **REMOVE** (replaced by React Projects landing, Phase 4 frontend). Keep temporary redirect. |
-| `GET /strategy-lab` (:490) | `strategy-lab.html` | **real plain-English thesis entry** (`textarea#brief:90` → `/api/strategy-lab/compile`) | **ADAPT** — this is the flow to preserve/port to the React Strategy Builder (Phase 4 frontend). Its compiler machinery is reused. |
-| `GET /submission` (:496) | `submission.html` | Fenrix MVP w/ "not executed" dropdowns; oversized single page | **QUARANTINE → REMOVE** after React replacement (Phase 4 frontend, Phase 8 cleanup). Keep redirect. Its `extra="forbid"` + hard-coded flagship is the core drift (P0-1). |
+| `GET /` (:477) | `break-test.html` | current landing (break-test) | **REMOVE** (replaced by React Projects landing, P8 Product Consolidation). Keep temporary redirect. |
+| `GET /strategy-lab` (:490) | `strategy-lab.html` | **real plain-English thesis entry** (`textarea#brief:90` → `/api/strategy-lab/compile`) | **ADAPT** — this is the flow to preserve/port to the React Strategy Builder (P8 Product Consolidation). Its compiler machinery is reused. |
+| `GET /submission` (:496) | `submission.html` | Fenrix MVP w/ "not executed" dropdowns; oversized single page | **QUARANTINE → REMOVE** after React replacement (P8 Product Consolidation). Keep redirect. Its `extra="forbid"` + hard-coded flagship is the core drift (P0-1). |
 | `GET /legacy-start` (:502) / `GET /start` (:583) | `start.html` | abandoned onboarding | **REMOVE** (Phase 8), prove zero external links first |
 | `GET /arena` (:508) | `arena.html` | legacy arena UI | **REMOVE** (Phase 8) |
 | `GET /market-fuzzer` (:514) | `index.html` | legacy product page | **REMOVE** (Phase 8) |
@@ -66,4 +66,4 @@ Grouped by prefix (representative; full list via `grep -nE "^@app\.(get|post|put
 
 ## 5. Frontend build status
 
-No `web/` directory, no Vite, no React, no package.json for an app (only vendored JS in `app/static/*.js`, e.g. `submission.js`). All 9 surfaces are hand-written HTML + vanilla JS. **Phase 4 (frontend) creates `web/` as a real React/TypeScript/Vite/Salt application**; the HTML surfaces are retired with redirects as each React route reaches parity.
+No `web/` directory, no Vite, no React, no package.json for an app (only vendored JS in `app/static/*.js`, e.g. `submission.js`). All 9 surfaces are hand-written HTML + vanilla JS. **P8 (Product Consolidation) creates `web/` as a real React/TypeScript/Vite/Salt application**; the HTML surfaces are retired with redirects as each React route reaches parity.
