@@ -74,17 +74,18 @@ def _make_campaign(s) -> str:
         )
         s.flush()
     if s.get(RunRow, run_id) is None:
-        s.add(
-            RunRow(
-                id=run_id,
-                project_id=project_id,
-                strategy_id=strategy_id,
-                strategy_version=1,
-                strategy_hash="0" * 64,
-                data_mode="demo_fixture",
-            )
+        from app.domain.run import Run as RunDomain
+        from app.persistence.repositories import RunRepository
+
+        run = RunDomain(
+            run_id=run_id,
+            project_id=project_id,
+            strategy_id=strategy_id,
+            strategy_version=1,
+            strategy_hash="0" * 64,
+            data_mode="demo_fixture",
         )
-        s.flush()  # ensure the run row lands before the campaign FK references it
+        RunRepository(s).create(run)  # inserts + flushes the run row
     camp_id = str(uuid.uuid4())
     s.add(
         CampaignRow(
