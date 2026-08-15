@@ -84,6 +84,7 @@ def _make_campaign(s) -> str:
                 data_mode="demo_fixture",
             )
         )
+        s.flush()  # ensure the run row lands before the campaign FK references it
     camp_id = str(uuid.uuid4())
     s.add(
         CampaignRow(

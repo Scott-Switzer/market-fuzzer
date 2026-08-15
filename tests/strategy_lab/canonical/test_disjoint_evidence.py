@@ -605,11 +605,7 @@ def test_probe_one_reuses_persisted_world_on_duplicate_identity(db, monkeypatch)
     # both evaluations reference that same world row.
     rows = sess.query(ScenarioWorldRow).filter_by(world_hash="DUP_PROBE_HASH").all()
     assert len(rows) == 1, f"expected exactly one persisted world, got {len(rows)}"
-    evals = (
-        sess.query(WorldEvaluationRow)
-        .filter_by(campaign_id="camp-p", role="minimization")
-        .all()
-    )
+    evals = sess.query(WorldEvaluationRow).filter_by(campaign_id="camp-p", role="minimization").all()
     assert len(evals) == 2
     assert all(e.world_id == rows[0].id for e in evals)
     sess.close()

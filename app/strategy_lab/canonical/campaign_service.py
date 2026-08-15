@@ -885,9 +885,7 @@ def _probe_one(
     # inserting a duplicate (which the DB UNIQUE constraint would also reject).
     if wh in seen_world_hashes:
         world_row = (
-            session.query(ScenarioWorldRow)
-            .filter_by(campaign_id=campaign_id, world_hash=wh)
-            .one_or_none()
+            session.query(ScenarioWorldRow).filter_by(campaign_id=campaign_id, world_hash=wh).one_or_none()
         )
         if world_row is None:  # defensive: identity seen but row missing
             seen_world_hashes.discard(wh)
