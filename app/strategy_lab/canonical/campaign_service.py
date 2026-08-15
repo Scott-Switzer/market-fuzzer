@@ -23,6 +23,7 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
+from app.domain.failure import compute_failure_severity, confirmation_rate_lcb95
 from app.domain.run import JobState, RunStage, RunStatus
 from app.market_data.panel import MarketDataPanel
 from app.persistence.models import (
@@ -419,8 +420,13 @@ def _execute_campaign_body(
                     continue
 
                 # Confirm by re-running independent seeds on the SAME mechanism+intensity.
+                # Statistical evidence (P5): run ``total_trials`` independent evaluations
+                # (the confirmation policy's denominator) and require
+                # ``required_successes`` of them to also fail. ``confirmation_trials``
+                # is the actual number evaluated; ``confirmed_here`` the successes.
                 confirmed_here = 0
-                for cseed in confirmation_policy.independent_seeds:
+                confirmation_trials = 0
+                for cseed in confirmation_policy.independent_seeds[: confirmation_policy.total_trials]:
                     cdef = ScenarioDefinition(
                         mechanism=mechanism,
                         seed=stable_seed(mechanism, seed, cseed, int(intensity * 1000), "confirm"),
@@ -457,11 +463,27 @@ def _execute_campaign_body(
                     )
                     session.add(c_eval)
                     session.flush()
+                    confirmation_trials += 1
                     if cev["outcome"] == "failed_predicate":
                         confirmed_here += 1
                 if confirmed_here >= confirmation_policy.required_successes:
                     fails += 1
                     predicate_failures += 1
+                    # Severity is derived from CONSEQUENCE: only the predicates
+                    # that ACTUALLY failed (not every configured predicate).
+                    pred_results = [PredicateResult(**pr) for pr in ev["predicate_results"]]
+                    failed_pairs = [(p, r) for p, r in zip(predicates, pred_results, strict=True) if r.failed]
+                    violated = [describe_predicate(p) for p, _ in failed_pairs]
+                    # NOTE: raw per-predicate breach (observed value vs threshold) is
+                    # retained in the evaluation record, but a generic cross-metric
+                    # normalization is deliberately NOT folded into categorical severity.
+                    severity = compute_failure_severity(
+                        failed_predicate_names=violated,
+                        confirmation_successes=confirmed_here,
+                        confirmation_trials=confirmation_trials,
+                    )
+                    conf_rate = (confirmed_here / confirmation_trials) if confirmation_trials else 0.0
+                    rate_lcb95 = confirmation_rate_lcb95(confirmed_here, confirmation_trials)
                     confirmed.append(
                         FailureRecord(
                             failure_id=primary_id,
@@ -473,8 +495,14 @@ def _execute_campaign_body(
                             strategy_id=strategy_id,
                             strategy_version=strategy_version,
                             canonical_hash=expected_canonical_hash,
-                            predicate="|".join(describe_predicate(p) for p in predicates),
+                            predicate="|".join(violated),
                             metrics=ev["metrics"],
+                            severity=severity,
+                            stress_intensity=float(intensity),
+                            confirmation_trials=confirmation_trials,
+                            confirmation_successes=confirmed_here,
+                            confirmation_rate=conf_rate,
+                            confirmation_rate_lcb95=rate_lcb95,
                         )
                     )
         if total_for_mech:

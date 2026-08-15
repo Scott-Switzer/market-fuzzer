@@ -12,8 +12,9 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.domain.failure import Severity
 from app.domain.strategy_spec import StrategySpec
 
 
@@ -251,6 +252,24 @@ class FailureRecord(BaseModel):
     canonical_hash: str
     predicate: str
     metrics: dict[str, Any]
+    # P5: severity is derived from failure CONSEQUENCE (not raw stress magnitude);
+    # stress_intensity preserves the raw scenario magnitude separately. Evidence
+    # fields are REQUIRED -- no silent default (anti-pattern eliminated).
+    severity: Severity
+    stress_intensity: float
+    confirmation_trials: int
+    confirmation_successes: int
+    confirmation_rate: float
+    confirmation_rate_lcb95: float
+
+    @model_validator(mode="after")
+    def _check_evidence(self) -> FailureRecord:
+        assert self.confirmation_trials > 0, "confirmation_trials must be > 0"
+        assert 0 <= self.confirmation_successes <= self.confirmation_trials
+        assert abs(self.confirmation_rate - self.confirmation_successes / self.confirmation_trials) < 1e-9
+        assert 0.0 <= self.confirmation_rate_lcb95 <= self.confirmation_rate + 1e-9
+        assert 0.0 <= self.confirmation_rate <= 1.0
+        return self
 
 
 class MinimizationRecord(BaseModel):

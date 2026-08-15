@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from app.domain.failure import AdjacentPass, ConfirmedFailure, MinimizedBoundary, Severity
+from app.domain.failure import (
+    AdjacentPass,
+    ConfirmedFailure,
+    MinimizedBoundary,
+    Severity,
+    confirmation_rate_lcb95,
+)
 from app.domain.strategy_spec import Clause, ClauseState, StrategySpec, StrategyType
 from app.domain.strategy_version import ApprovedStrategyVersion, DraftStrategy
 
@@ -65,13 +71,18 @@ def test_confirmed_failure_carries_predicate_and_seed_agreement():
         strategy_hash="h",
         world_hash="w",
         mechanism="borrow_cost_increase",
-        intensity=0.8,
+        stress_intensity=0.8,
         violated_predicates=["low_sharpe", "high_drawdown"],
         seed_agreement="2 of 3",
         severity=Severity.HIGH,
+        confirmation_trials=3,
+        confirmation_successes=2,
+        confirmation_rate=2 / 3,
+        confirmation_rate_lcb95=confirmation_rate_lcb95(2, 3),
     )
     assert cf.violated_predicates
     assert cf.seed_agreement == "2 of 3"
+    assert cf.confirmation_rate == 2 / 3
 
 
 # --- strategy versioning / approval ---
