@@ -40,6 +40,22 @@ class MacroSpec(StrictModel):
     common_factor_strength: float = Field(default=0.35, ge=0.0, le=1.0)
 
 
+class AccountingSpec(StrictModel):
+    """Synthetic company operating state emitted by the world producer."""
+
+    period: str = "FY2025"
+    period_end: str = "2025-12-31T00:00:00Z"
+    available_at: str = "2026-02-15T12:00:00Z"
+    revenue: float = Field(gt=0)
+    cogs: float = Field(ge=0)
+    operating_expenses: float = Field(ge=0)
+    net_income: float
+    assets: float = Field(gt=0)
+    liabilities: float = Field(ge=0)
+    equity: float = Field(ge=0)
+    weighted_shares: float = Field(gt=0)
+
+
 class AssetSpec(StrictModel):
     ticker: str = Field(pattern=r"^[A-Z][A-Z0-9]{1,5}$")
     company_name: str = Field(min_length=3, max_length=80)
@@ -52,6 +68,7 @@ class AssetSpec(StrictModel):
     liquidity_profile: Literal["deep", "normal", "thin"] = "normal"
     event_sensitivity: float = Field(default=1.0, ge=0.0, le=3.0)
     mean_reversion: float = Field(default=0.02, ge=0.0, le=0.5)
+    accounting: AccountingSpec | None = None
 
 
 class ExchangeSpec(StrictModel):

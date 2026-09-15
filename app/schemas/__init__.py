@@ -1,4 +1,5 @@
 from .world import (
+    AccountingSpec,
     AgentPopulation,
     AgentsSpec,
     AssetSpec,
@@ -26,4 +27,5 @@ __all__ = [
     "MacroSpec",
     "ParentOrderSpec",
     "WorldSpec",
+    "AccountingSpec",
 ]
