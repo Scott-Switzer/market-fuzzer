@@ -76,6 +76,7 @@ def export_economy_v2(
     outcome: WorldOutcomeV2,
     output: Path,
     interventions_text: tuple[str, ...] = (),
+    generated_at: str = "deterministic",
 ) -> Path:
     """Write public/, hidden/, manifest.json for a completed V2 world."""
     world = _world_block(outcome)
@@ -308,7 +309,7 @@ def export_economy_v2(
         "world_id": outcome.world_id,
         "world_version": world["version"],
         "seed": outcome.seed,
-        "generated_at": "deterministic",
+        "generated_at": generated_at,
         "producer": {
             "name": "market-fuzzer-world-v2",
             "schema": EXPORT_SCHEMA,
@@ -356,11 +357,12 @@ def export_world_v2(
     years: int = 8,
     interventions: tuple[InterventionV2, ...] = (),
     causal_notes: tuple[str, ...] = (),
+    generated_at: str = "deterministic",
 ) -> Path:
     """Run the V2 economy and export a complete release in one call."""
     params = EconomyParamsV2(years=years, seed=seed)
     outcome = run_economy(params, interventions, world_id)
-    return export_economy_v2(outcome, output, causal_notes)
+    return export_economy_v2(outcome, output, causal_notes, generated_at=generated_at)
 
 
 def main() -> None:
@@ -368,6 +370,7 @@ def main() -> None:
     parser.add_argument("--world-id", default="fuzzer-000000")
     parser.add_argument("--seed", type=int, default=20260921)
     parser.add_argument("--years", type=int, default=8)
+    parser.add_argument("--generated-at", default="deterministic")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--intervene",
@@ -394,6 +397,7 @@ def main() -> None:
         seed=args.seed,
         years=args.years,
         interventions=tuple(ivs),
+        generated_at=args.generated_at,
     )
     print(path)
 
