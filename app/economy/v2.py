@@ -287,32 +287,58 @@ class WorldOutcomeV2:
 
 _SECTORS: dict[str, dict[str, float]] = {
     "Technology": {
-        "gross_margin": 0.62, "opex_rate": 0.32, "capital_intensity": 0.5,
-        "demand_beta": 1.4, "ar_days": 65.0, "inv_days": 45.0,
+        "gross_margin": 0.62,
+        "opex_rate": 0.32,
+        "capital_intensity": 0.5,
+        "demand_beta": 1.4,
+        "ar_days": 65.0,
+        "inv_days": 45.0,
     },
     "Industrials": {
-        "gross_margin": 0.34, "opex_rate": 0.20, "capital_intensity": 0.9,
-        "demand_beta": 1.1, "ar_days": 55.0, "inv_days": 85.0,
+        "gross_margin": 0.34,
+        "opex_rate": 0.20,
+        "capital_intensity": 0.9,
+        "demand_beta": 1.1,
+        "ar_days": 55.0,
+        "inv_days": 85.0,
     },
     "Healthcare": {
-        "gross_margin": 0.68, "opex_rate": 0.42, "capital_intensity": 0.6,
-        "demand_beta": 0.6, "ar_days": 50.0, "inv_days": 60.0,
+        "gross_margin": 0.68,
+        "opex_rate": 0.42,
+        "capital_intensity": 0.6,
+        "demand_beta": 0.6,
+        "ar_days": 50.0,
+        "inv_days": 60.0,
     },
     "Consumer": {
-        "gross_margin": 0.42, "opex_rate": 0.26, "capital_intensity": 0.7,
-        "demand_beta": 0.8, "ar_days": 35.0, "inv_days": 75.0,
+        "gross_margin": 0.42,
+        "opex_rate": 0.26,
+        "capital_intensity": 0.7,
+        "demand_beta": 0.8,
+        "ar_days": 35.0,
+        "inv_days": 75.0,
     },
     "Energy": {
-        "gross_margin": 0.38, "opex_rate": 0.14, "capital_intensity": 1.3,
-        "demand_beta": 1.2, "ar_days": 40.0, "inv_days": 55.0,
+        "gross_margin": 0.38,
+        "opex_rate": 0.14,
+        "capital_intensity": 1.3,
+        "demand_beta": 1.2,
+        "ar_days": 40.0,
+        "inv_days": 55.0,
     },
 }
 
 _REGIME_DEMAND: dict[str, float] = {
-    "contraction": -0.030, "slow": -0.010, "trend": 0.000, "expansion": 0.015,
+    "contraction": -0.030,
+    "slow": -0.010,
+    "trend": 0.000,
+    "expansion": 0.015,
 }
 _REGIME_RATE: dict[str, float] = {
-    "contraction": -0.010, "slow": -0.002, "trend": 0.000, "expansion": 0.004,
+    "contraction": -0.010,
+    "slow": -0.002,
+    "trend": 0.000,
+    "expansion": 0.004,
 }
 
 
@@ -377,16 +403,16 @@ class EconomyEngineV2:
         world_id: str = "fuzzer-000000",
     ) -> None:
         self.params = params.validate()
-        self.interventions = tuple(
-            sorted(interventions, key=lambda iv: (iv.company, iv.variable, iv.start))
-        )
+        self.interventions = tuple(sorted(interventions, key=lambda iv: (iv.company, iv.variable, iv.start)))
         self.world_id = world_id
         _, roster = build_economy(params)
         self.roster = roster
         self._macro_rng = derive_stream(params.seed, "macro")
         self._industry_rng = derive_stream(params.seed, "industry")
         self._news_rng = derive_stream(params.seed, "news")
-        self._company_rngs = {c["ticker"]: derive_stream(params.seed, f"latent:{c['ticker']}") for c in roster}
+        self._company_rngs = {
+            c["ticker"]: derive_stream(params.seed, f"latent:{c['ticker']}") for c in roster
+        }
         self._est_rngs = {c["ticker"]: derive_stream(params.seed, f"est:{c['ticker']}") for c in roster}
         self._price_rngs = {c["ticker"]: derive_stream(params.seed, f"price:{c['ticker']}") for c in roster}
 
@@ -438,9 +464,7 @@ class EconomyEngineV2:
                 0.0005,
                 p.rates_start + rate_delta + 0.5 * (inflation - p.inflation_trend) + _REGIME_RATE[regime],
             )
-            credit_index = max(
-                0.2, 1.0 + 6.0 * max(0.0, -gdp) + 0.4 * (policy_rate - p.rates_start) / 0.03
-            )
+            credit_index = max(0.2, 1.0 + 6.0 * max(0.0, -gdp) + 0.4 * (policy_rate - p.rates_start) / 0.03)
             out.append(
                 MacroStateV2(
                     date=_quarter_end(p.start_year + q // 4, (q % 4) * 3 + 3),
@@ -632,8 +656,7 @@ class EconomyEngineV2:
                     cost_push *= 1.25
                 price_realization = 1.0 + 0.7 * (float(s["pricing_power"]) - 0.5) * (input_cost_index - 1.0)
                 gross_margin = _clamp01(
-                    float(s["gross_margin0"])
-                    * (price_realization / max(cost_push, 0.5))
+                    float(s["gross_margin0"]) * (price_realization / max(cost_push, 0.5))
                     - 0.10 * (ist["intensity"] - 0.5)
                     + 0.02 * (float(s["mgmt_quality"]) - 0.5)
                     + rng.normal() * 0.008
@@ -703,31 +726,56 @@ class EconomyEngineV2:
 
                 quarters.append(
                     QuarterRowV2(
-                        company=ticker, sector=sector, fiscal_year=fy, fiscal_quarter=fq,
-                        period_end=when, available_at=filing_available,
-                        revenue=revenue, cogs=cogs, gross_profit=gross_profit,
-                        operating_expenses=opex, ebit=ebit, interest_expense=interest_expense,
-                        pretax_income=pretax, tax_expense=tax, net_income=reported_ni,
-                        eps=eps, operating_margin=operating_margin,
-                        gross_margin=gross_margin_pub, fraud_flag=inflating,
+                        company=ticker,
+                        sector=sector,
+                        fiscal_year=fy,
+                        fiscal_quarter=fq,
+                        period_end=when,
+                        available_at=filing_available,
+                        revenue=revenue,
+                        cogs=cogs,
+                        gross_profit=gross_profit,
+                        operating_expenses=opex,
+                        ebit=ebit,
+                        interest_expense=interest_expense,
+                        pretax_income=pretax,
+                        tax_expense=tax,
+                        net_income=reported_ni,
+                        eps=eps,
+                        operating_margin=operating_margin,
+                        gross_margin=gross_margin_pub,
+                        fraud_flag=inflating,
                     )
                 )
                 balance_sheets.append(
                     BalanceSheetV2(
-                        company=ticker, period_end=when, available_at=filing_available,
-                        assets=assets_next, liabilities=liabilities_next, equity=equity_next,
-                        cash=cash_next, receivables=receivables, inventory=inventory,
-                        pp_e_net=pp_e_net, debt=debt_next, payables=payables,
+                        company=ticker,
+                        period_end=when,
+                        available_at=filing_available,
+                        assets=assets_next,
+                        liabilities=liabilities_next,
+                        equity=equity_next,
+                        cash=cash_next,
+                        receivables=receivables,
+                        inventory=inventory,
+                        pp_e_net=pp_e_net,
+                        debt=debt_next,
+                        payables=payables,
                         equity_check_residual=assets_next - (liabilities_next + equity_next),
                         plug=plug,
                     )
                 )
                 cash_flows.append(
                     CashFlowV2(
-                        company=ticker, period_end=when, available_at=filing_available,
-                        operating_cf=operating_cf, investing_cf=investing_cf,
-                        financing_cf=financing_cf, depreciation=depreciation,
-                        capex=capex, dividends=dividends,
+                        company=ticker,
+                        period_end=when,
+                        available_at=filing_available,
+                        operating_cf=operating_cf,
+                        investing_cf=investing_cf,
+                        financing_cf=financing_cf,
+                        depreciation=depreciation,
+                        capex=capex,
+                        dividends=dividends,
                         net_change_in_cash=net_change_cash,
                     )
                 )
@@ -750,11 +798,16 @@ class EconomyEngineV2:
                 s["payables"] = payables
 
                 # ---- distress / default ------------------------------------ #
-                liquidity = _clamp01(0.9 * float(s["liquidity"]) + 0.1 * (cash_next / max(assets_next, 1.0) / 0.10))
+                liquidity = _clamp01(
+                    0.9 * float(s["liquidity"]) + 0.1 * (cash_next / max(assets_next, 1.0) / 0.10)
+                )
                 debt_stress = _clamp01(
                     0.85 * float(s["debt_stress"])
-                    + 0.15 * ((debt_next / max(equity_next, 1.0)) / 2.0
-                              + max(0.0, -operating_cf) / max(revenue, 1.0) * 4.0)
+                    + 0.15
+                    * (
+                        (debt_next / max(equity_next, 1.0)) / 2.0
+                        + max(0.0, -operating_cf) / max(revenue, 1.0) * 4.0
+                    )
                 )
                 s["liquidity"] = liquidity
                 s["debt_stress"] = debt_stress
@@ -781,15 +834,20 @@ class EconomyEngineV2:
 
                 earnings.append(
                     EarningsEventV2(
-                        company=ticker, call_at=call_at, period_end=when,
-                        revenue=revenue, net_income=reported_ni,
+                        company=ticker,
+                        call_at=call_at,
+                        period_end=when,
+                        revenue=revenue,
+                        net_income=reported_ni,
                         guidance_margin=float(pending_guidance) if pending_guidance is not None else None,
                         guidance_met=guidance_met,
                     )
                 )
                 events.append(
                     EventV2(
-                        at=call_at, company=ticker, kind="earnings_call",
+                        at=call_at,
+                        company=ticker,
+                        kind="earnings_call",
                         payload={
                             "revenue": round(revenue, 2),
                             "net_income": round(reported_ni, 2),
@@ -800,8 +858,10 @@ class EconomyEngineV2:
                 )
                 events.append(
                     EventV2(
-                        at=filing_available, company=ticker,
-                        kind="filing", payload={"form": "10-K" if fq == 4 else "10-Q", "period_end": when.isoformat()},
+                        at=filing_available,
+                        company=ticker,
+                        kind="filing",
+                        payload={"form": "10-K" if fq == 4 else "10-Q", "period_end": when.isoformat()},
                     )
                 )
 
@@ -815,16 +875,23 @@ class EconomyEngineV2:
                 issued_at = when - timedelta(days=45)
                 estimates.append(
                     EstimateRowV2(
-                        company=ticker, metric="revenue", period=period_label,
-                        source="consensus-v0", estimate=est_now,
-                        issued_at=issued_at, revised_at=call_at + timedelta(days=1),
+                        company=ticker,
+                        metric="revenue",
+                        period=period_label,
+                        source="consensus-v0",
+                        estimate=est_now,
+                        issued_at=issued_at,
+                        revised_at=call_at + timedelta(days=1),
                     )
                 )
                 if had_prior_est:
                     revisions.append(
                         RevisionV2(
-                            company=ticker, metric="revenue", period=period_label,
-                            previous_value=prior_est, revised_value=est_now,
+                            company=ticker,
+                            metric="revenue",
+                            period=period_label,
+                            previous_value=prior_est,
+                            revised_value=est_now,
                             original_available_at=when - timedelta(days=135),
                             revised_available_at=call_at + timedelta(days=1),
                             reason="post-earnings revision",
@@ -845,9 +912,12 @@ class EconomyEngineV2:
                 close = max(0.5, prev_close * (1.0 + ret))
                 prices.append(
                     PriceRowV2(
-                        company=ticker, session=when,
-                        open=prev_close, high=max(prev_close, close) * 1.005,
-                        low=min(prev_close, close) * 0.995, close=close,
+                        company=ticker,
+                        session=when,
+                        open=prev_close,
+                        high=max(prev_close, close) * 1.005,
+                        low=min(prev_close, close) * 0.995,
+                        close=close,
                         volume=max(1.0, shares * 0.001 * price_rng.uniform_range(0.5, 1.5)),
                     )
                 )

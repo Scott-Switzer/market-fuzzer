@@ -172,7 +172,11 @@ def test_fraud_intervention_produces_known_truth():
         ),
     )
     base = run_economy(p, base_iv)
-    iv = base_iv + (InterventionV2(company=ticker, variable="fraud_propensity", value=1.0, start=date(p.start_year, 4, 1)),)
+    iv = base_iv + (
+        InterventionV2(
+            company=ticker, variable="fraud_propensity", value=1.0, start=date(p.start_year, 4, 1)
+        ),
+    )
     cf = run_economy(p, iv)
 
     assert any(f["company"] == ticker for f in cf.fraud_windows)
