@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+import app.export_world_v2 as export_module
 from app.economy.v2 import EconomyParamsV2, InterventionV2, run_economy
 from app.export_world_v2 import export_world_v2
 
@@ -110,10 +111,15 @@ def test_estimates_are_issued_before_the_print():
             assert est.issued_at <= call.call_at
 
 
-def test_price_availability_equals_session():
-    w = run_economy(_params(years=2))
-    for p in w.prices:
-        assert p.session == p.session  # sessions are their own availability date
+def test_quarter_end_prices_do_not_use_post_session_information():
+    baseline = run_economy(EconomyParamsV2(years=2, seed=20260921, earnings_reaction=0.35))
+    no_event_reaction = run_economy(EconomyParamsV2(years=2, seed=20260921, earnings_reaction=0.0))
+
+    def key(world):
+        return [(p.company, p.session, p.open, p.high, p.low, p.close, p.volume) for p in world.prices]
+
+    assert key(baseline) == key(no_event_reaction)
+    for p in baseline.prices:
         assert p.high >= max(p.open, p.close)
         assert p.low <= min(p.open, p.close)
 
@@ -137,6 +143,12 @@ def test_intervention_is_isolated_to_the_treated_company():
     treated_pre_base = [q.revenue for q in base.quarters if q.company == ticker and q.period_end < START]
     treated_pre_cf = [q.revenue for q in cf.quarters if q.company == ticker and q.period_end < START]
     assert treated_pre_base == treated_pre_cf, "pre-intervention history must be identical"
+
+    base_latents = [(s.date, s.values["demand_index"]) for s in base.latents[ticker]]
+    cf_latents = [(s.date, s.values["demand_index"]) for s in cf.latents[ticker]]
+    assert [row for row in base_latents if row[0] < START] == [row for row in cf_latents if row[0] < START]
+    assert cf_latents
+    assert all(value == 1.6 for when, value in cf_latents if when >= START)
 
     treated_post_base = [q.revenue for q in base.quarters if q.company == ticker and q.period_end >= START]
     treated_post_cf = [q.revenue for q in cf.quarters if q.company == ticker and q.period_end >= START]
@@ -206,22 +218,52 @@ def test_fraud_intervention_produces_known_truth():
         assert q.net_income == pytest.approx(c.operating_cf - c.depreciation, rel=1e-9, abs=1e-6)
 
 
-def test_supplier_failure_crushes_gross_margin():
+def test_supplier_failure_requires_one():
     p = _params(years=4, seed=99)
     base = run_economy(p)
     ticker = base.companies[0]["ticker"]
-    iv = (InterventionV2(company=ticker, variable="supplier_failure", value=1.0, start=START),)
-    cf = run_economy(p, iv)
+    inactive = run_economy(
+        p,
+        (InterventionV2(company=ticker, variable="supplier_failure", value=0.0, start=START),),
+    )
+    active = run_economy(
+        p,
+        (InterventionV2(company=ticker, variable="supplier_failure", value=1.0, start=START),),
+    )
 
-    b_post = [q.gross_margin for q in base.quarters if q.company == ticker and q.period_end >= START]
-    c_post = [q.gross_margin for q in cf.quarters if q.company == ticker and q.period_end >= START]
-    assert c_post != b_post
-    assert sum(c_post) / len(c_post) < sum(b_post) / len(b_post)
+    base_post = [q.gross_margin for q in base.quarters if q.company == ticker and q.period_end >= START]
+    inactive_post = [
+        q.gross_margin for q in inactive.quarters if q.company == ticker and q.period_end >= START
+    ]
+    active_post = [q.gross_margin for q in active.quarters if q.company == ticker and q.period_end >= START]
+    assert inactive_post == base_post
+    assert active_post != base_post
+    assert sum(active_post) / len(active_post) < sum(base_post) / len(base_post)
 
 
 # --------------------------------------------------------------------------- #
 # export / sealing
 # --------------------------------------------------------------------------- #
+
+
+def test_provenance_caches_repository_sha(monkeypatch, request):
+    request.addfinalizer(export_module._git_sha.cache_clear)
+    export_module._git_sha.cache_clear()
+    calls = 0
+
+    def fake_check_output(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return "1" * 40 + "\n"
+
+    monkeypatch.setattr(export_module.subprocess, "check_output", fake_check_output)
+    world = {"world_type": "synthetic", "world_id": "W", "version": "v1"}
+    first = export_module._provenance(world, "public/a.json")
+    second = export_module._provenance(world, "public/b.json")
+
+    assert first["producer"]["git_sha"] == "1" * 40
+    assert second["producer"]["git_sha"] == "1" * 40
+    assert calls == 1
 
 
 def test_export_is_deterministic_and_sealed(tmp_path: Path):

@@ -584,18 +584,22 @@ class EconomyEngineV2:
                 # ---- interventions (do-clamps) --------------------------- #
                 demand_clamp = self._clamp(ticker, "demand_index", when)
                 fraud_clamp = self._clamp(ticker, "fraud_propensity", when)
-                supplier_failed = self._clamp(ticker, "supplier_failure", when) is not None
+                supplier_failed = self._clamp(ticker, "supplier_failure", when) == 1.0
 
                 # ---- macro -> company ------------------------------------ #
                 prior_demand = float(s["demand_index"])
-                demand_index = (demand_clamp if demand_clamp is not None else prior_demand) * (
-                    1.0
-                    + 0.30 * macro.gdp_growth * sp["demand_beta"]
-                    + 0.50 * ist["momentum"] * sp["demand_beta"]
-                    - 0.60 * ist["shock"]
-                    + rng.normal() * 0.04
-                )
-                demand_index = max(0.05, demand_index)
+                demand_noise = rng.normal() * 0.04
+                if demand_clamp is not None:
+                    demand_index = demand_clamp
+                else:
+                    demand_index = prior_demand * (
+                        1.0
+                        + 0.30 * macro.gdp_growth * sp["demand_beta"]
+                        + 0.50 * ist["momentum"] * sp["demand_beta"]
+                        - 0.60 * ist["shock"]
+                        + demand_noise
+                    )
+                    demand_index = max(0.05, demand_index)
                 s["demand_index"] = demand_index
 
                 input_cost_index = max(
@@ -899,15 +903,11 @@ class EconomyEngineV2:
                     )
                 s["prior_est"] = revenue  # next quarter's anchor is this actual
 
-                # price: quarterly session at period end, earnings reaction
+                # Quarter-end price uses only state available at the session timestamp.
+                # Current-quarter earnings and guidance are published after this row.
                 price_rng = self._price_rngs[ticker]
-                surprise = (reported_ni - est_now * (reported_ni / max(revenue, 1.0))) / max(
-                    abs(reported_ni), 1.0
-                )
                 drift = 0.10 * growth / 4.0
-                guidance_term = 0.0 if guidance_met is None else (0.004 if guidance_met else -0.006)
-                ret = drift + p.earnings_reaction * surprise + guidance_term
-                ret += price_rng.normal() * p.price_noise
+                ret = drift + price_rng.normal() * p.price_noise
                 prev_close = float(s["prior_close"])
                 close = max(0.5, prev_close * (1.0 + ret))
                 prices.append(
