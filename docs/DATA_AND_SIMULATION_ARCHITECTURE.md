@@ -44,6 +44,67 @@ entries or internal world identity; the release manifest carries only the
 namespace, transform-version map, and a deterministic canonical-JSON SHA-256
 of the registry.
 
+## World V2 ledger authority
+
+World V2 separates economic simulation from accounting. Causal state may use
+floating point for demand, growth, margins, macro variables, prices, and latent
+variables. At the accounting boundary, `app/economy/accounting_v1.py` converts
+monetary inputs with `Decimal(str(value))`, rounds once to canonical cents with
+`ROUND_HALF_UP`, and passes only exact `Decimal` amounts into the accounting
+kernel. The public exporter converts final values to JSON numbers only at the
+release boundary.
+
+The authority path is:
+
+```text
+causal/economic state
+    -> business transaction amounts
+    -> balanced journal entries
+    -> Ledger + OperationalBook + EquityBook
+    -> IS / BS / direct-and-indirect CF / WASO / basic EPS
+    -> canonical statement payload
+    -> FilingBook
+    -> public and hidden release artifacts
+```
+
+Period 0 is a real opening journal with matching receivable, payable, inventory,
+PP&E, and debt detail. Opening common stock uses integer issued shares at $0.01
+par; remaining opening equity is assigned deterministically to retained earnings
+and APIC. If a generated liability target is not solvent, only that opening
+liability target is reduced by the minimum cent-exact amount. World V2 never
+creates a miscellaneous equity balance, manufactures equity from an
+asset-minus-liability residual after transactions, floors cash, or inserts a
+balancing entry.
+Operating shortfalls become explicit debt tranches, and optional debt repayment
+is a normal financing transaction.
+
+Each quarter maps business activity to explicit sales, collections, inventory
+purchases and FIFO consumption, payable payments, SG&A, capex, straight-line
+depreciation, debt borrowing and repayment, interest accrual and payment, tax,
+and dividends. Fraudulent reported revenue has its own issued receivable and
+journal revenue; it is not collected and remains exact hidden evidence. Quarter
+close occurs after all period entries. Canonical whole-second UTC instants keep
+transactions, posting, close, and publication ordered.
+
+The kernel implementation is vendored byte-for-byte from
+`financial-system-core` commit
+`b533ef0ddf89b6de0041b2f64dc59514f40da46f` under
+`app/_vendor/fwf_kernel/`. Public CI cannot depend on that private repository
+at build or runtime, so the accepted M4.1 through M4.2B source is pinned for
+conformance in this repository rather than fetched, submoduled, or installed as
+a new package. `SOURCE.json` records the source repository, commit, MIT license, paths,
+and SHA-256 digests. The snapshot is not a local fork and its Python files must
+not be edited; a focused integrity test enforces every digest. Market Fuzzer's
+accepted M3 semantic RNG remains authoritative and is not replaced by a vendored
+RNG.
+
+Public financials and filing rows contain kernel-derived statement values,
+filing IDs, immutable version IDs, and canonical payload SHA-256 commitments.
+They do not expose journals, subledger details, fraud truth, latent state, or
+RNG addresses. `hidden/accounting.json` retains the exact Decimal journal,
+subledgers, equity, WASO/EPS, cash roll, derived statements, filing versions,
+payloads, and reconciliation evidence as decimal strings.
+
 ## Local data path
 
 Build an inspectable aggregate pack from a local intraday source:

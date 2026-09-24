@@ -53,6 +53,8 @@ addopts = "-q"
 [tool.ruff]
 line-length = 110
 target-version = "py312"
+extend-exclude = ["app/_vendor/fwf_kernel"]
+force-exclude = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

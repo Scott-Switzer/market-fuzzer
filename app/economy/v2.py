@@ -17,10 +17,11 @@ Everything is seeded, deterministic, and point-in-time stamped, and
 intervention-ready: the same seed with different interventions produces
 worlds identical everywhere except downstream of the intervened node.
 
-Balance-sheet identity holds exactly every quarter:
+Balance-sheet identity holds exactly every quarter from the pinned accounting kernel:
     assets == liabilities + equity
-and a separate `plug` field measures the reconciliation gap between the
-cash-flow statement and the cash carried on the balance sheet.
+Cash is maintained by explicit operating, investing, financing, and liquidity
+transactions; there is no synthetic balancing entry or independently
+manufactured equity.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from datetime import date, timedelta
 from math import pi as _pi
 from math import sin as _sin
 
+from app.economy.accounting_v1 import CompanyAccountingV1
 from app.world.rng import NAMESPACE_VERSION, TRANSFORM_VERSIONS, SemanticRNG, SemanticStream
 
 WORLD = "WORLD"
@@ -157,6 +159,7 @@ class QuarterRowV2:
     tax_expense: float
     net_income: float
 
+    weighted_average_shares: float
     eps: float
     operating_margin: float
     gross_margin: float
@@ -177,8 +180,6 @@ class BalanceSheetV2:
     pp_e_net: float
     debt: float
     payables: float
-    equity_check_residual: float
-    plug: float
 
 
 @dataclass
@@ -202,6 +203,10 @@ class FilingEventV2:
     filed_at: date
     available_at: date
     period_end: date
+    filing_id: str
+    version_id: str
+    version: int
+    payload_sha256: str
 
 
 @dataclass
@@ -281,7 +286,8 @@ class WorldOutcomeV2:
     events: list[EventV2]
     defaults: list[dict[str, str | float]] = field(default_factory=list)
     fraud_windows: list[dict[str, str | bool]] = field(default_factory=list)
-    initial_shares: dict[str, float] = field(default_factory=dict)
+    initial_shares: dict[str, int] = field(default_factory=dict)
+    accounting: dict[str, CompanyAccountingV1] = field(default_factory=dict)
     rng_namespace: str = NAMESPACE_VERSION
     rng_transform_versions: dict[str, str] = field(default_factory=lambda: dict(TRANSFORM_VERSIONS))
     stream_registry: list[dict[str, str]] = field(default_factory=list)
@@ -361,6 +367,23 @@ def _quarter_end(year: int, month: int) -> date:
 
 def _clamp01(x: float) -> float:
     return min(1.0, max(0.0, x))
+
+
+def _numeric_float(value: object, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be numeric")
+    return float(value)
+
+
+def _state_float(state: dict[str, object], key: str) -> float:
+    return _numeric_float(state[key], key)
+
+
+def _state_int(state: dict[str, object], key: str) -> int:
+    value = state[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{key} must be an integer")
+    return value
 
 
 def _sector_params(sector: str) -> dict[str, float]:
@@ -603,8 +626,14 @@ class EconomyEngineV2:
         sector_state: dict[str, dict[str, float]] = {}
 
         # per-company dynamic state
-        st: dict[str, dict[str, float | object]] = {}
-        initial_shares: dict[str, float] = {}
+        st: dict[str, dict[str, object]] = {}
+        initial_shares: dict[str, int] = {}
+        accounting: dict[str, CompanyAccountingV1] = {}
+        opening_rate = (
+            macro_path[0].policy_rate * (1.0 + macro_path[0].credit_index * 0.5)
+            if macro_path
+            else p.rates_start
+        )
         for company in self.roster:
             ticker = company["ticker"]
             sector = company["sector"]
@@ -626,8 +655,29 @@ class EconomyEngineV2:
                 equity0 * 0.05,
                 equity0 - (debt - cash) - pp_e_net - receivables - inventory + payables,
             )
-            shares = max(1.0, round((base_revenue / 25.0) * rng.uniform_range("initial_shares", 0.7, 1.3, 0)))
+            shares = max(
+                1, int(round((base_revenue / 25.0) * rng.uniform_range("initial_shares", 0.7, 1.3, 0)))
+            )
             initial_shares[ticker] = shares
+            accounting[ticker] = CompanyAccountingV1(
+                ticker=ticker,
+                initial_shares=shares,
+                cash_target=cash,
+                ar_target=receivables,
+                inventory_target=inventory,
+                ppe_target=pp_e_net,
+                ap_target=payables,
+                debt_target=debt,
+                retained_target=retained,
+                depreciation_rate=p.depreciation_rate,
+                interest_rate=opening_rate,
+                tax_rate=p.tax_rate,
+                payout_ratio=p.payout_ratio,
+                min_cash_buffer_ratio=p.min_cash_buffer,
+                sector=sector,
+                horizon_quarters=len(macro_path),
+                opening_date=date(p.start_year - 1, 12, 31),
+            )
             st[ticker] = {
                 "revenue_q": revenue_q,
                 "growth": 0.06 + p.growth_dispersion * rng.normal("growth", 0),
@@ -635,13 +685,6 @@ class EconomyEngineV2:
                 "gross_margin0": sp["gross_margin"] + p.margin_dispersion * rng.normal("gross_margin0", 0),
                 "gross_margin": sp["gross_margin"] + p.margin_dispersion * rng.normal("gross_margin", 0),
                 "shares": shares,
-                "debt": debt,
-                "cash": cash,
-                "pp_e_net": pp_e_net,
-                "receivables": receivables,
-                "inventory": inventory,
-                "payables": payables,
-                "retained": retained,
                 "demand_index": 1.0,
                 "input_cost_index": 1.0,
                 "labor_cost_index": 1.0,
@@ -696,7 +739,7 @@ class EconomyEngineV2:
                 supplier_failed = self._clamp(ticker, "supplier_failure", when) == 1.0
 
                 # ---- macro -> company ------------------------------------ #
-                prior_demand = float(s["demand_index"])
+                prior_demand = _state_float(s, "demand_index")
                 demand_noise = rng.normal("demand_noise", qi) * 0.04
                 if demand_clamp is not None:
                     demand_index = demand_clamp
@@ -713,7 +756,7 @@ class EconomyEngineV2:
 
                 input_cost_index = max(
                     0.2,
-                    float(s["input_cost_index"])
+                    _state_float(s, "input_cost_index")
                     * (
                         1.0
                         + 0.55 * (macro.inflation - p.inflation_trend)
@@ -722,7 +765,7 @@ class EconomyEngineV2:
                 )
                 labor_cost_index = max(
                     0.2,
-                    float(s["labor_cost_index"])
+                    _state_float(s, "labor_cost_index")
                     * (
                         1.0
                         + 0.45 * (macro.inflation - p.inflation_trend)
@@ -734,8 +777,8 @@ class EconomyEngineV2:
                 interest_rate = macro.policy_rate * (1.0 + macro.credit_index * 0.5)
 
                 # ---- operations ------------------------------------------ #
-                growth = 0.75 * float(s["growth"]) + 0.25 * (
-                    float(s["growth0"]) * (0.6 + 0.8 * float(s["mgmt_quality"]))
+                growth = 0.75 * _state_float(s, "growth") + 0.25 * (
+                    _state_float(s, "growth0") * (0.6 + 0.8 * _state_float(s, "mgmt_quality"))
                     + 0.35 * (macro.gdp_growth - p.gdp_trend) * sp["demand_beta"]
                     - 0.30 * (ist["intensity"] - 0.5)
                     + rng.normal("growth_noise", qi) * 0.05
@@ -743,7 +786,7 @@ class EconomyEngineV2:
                 growth = max(-0.45, min(0.60, growth))
                 s["growth"] = growth
                 demand_effect = (demand_index / prior_demand) - 1.0 if prior_demand > 0 else 0.0
-                revenue_q = max(1e6, float(s["revenue_q"]) * (1.0 + growth + demand_effect))
+                revenue_q = max(1e6, _state_float(s, "revenue_q") * (1.0 + growth + demand_effect))
                 s["revenue_q"] = revenue_q
 
                 # ---- fraud bookkeeping ------------------------------------ #
@@ -751,7 +794,9 @@ class EconomyEngineV2:
                 # random draw sequence, only the state they intervene on
                 fraud_draw = _clamp01(0.5 + 0.15 * rng.normal("fraud_propensity", qi))
                 fraud_prop = fraud_clamp if fraud_clamp is not None else fraud_draw
-                distress_proxy = float(s["debt_stress"]) * 0.6 + (1.0 - float(s["liquidity"])) * 0.4
+                distress_proxy = (
+                    _state_float(s, "debt_stress") * 0.6 + (1.0 - _state_float(s, "liquidity")) * 0.4
+                )
                 # organic fraud is RARE: either an extreme latent propensity,
                 # or high propensity under real distress (desperate + dishonest).
                 # Interventions clamp the propensity and bypass the gate.
@@ -771,78 +816,57 @@ class EconomyEngineV2:
                     s["fraud_start"] = None
                 inflating = bool(s["fraud_open"]) and not supplier_failed
 
-                # ---- P&L --------------------------------------------------- #
+                # ---- accounting ------------------------------------------- #
                 cost_push = 1.0 + 0.5 * (input_cost_index - 1.0) + 0.3 * (labor_cost_index - 1.0)
                 if supplier_failed:
                     cost_push *= 1.25
-                price_realization = 1.0 + 0.7 * (float(s["pricing_power"]) - 0.5) * (input_cost_index - 1.0)
+                price_realization = 1.0 + 0.7 * (_state_float(s, "pricing_power") - 0.5) * (
+                    input_cost_index - 1.0
+                )
                 gross_margin = _clamp01(
-                    float(s["gross_margin0"]) * (price_realization / max(cost_push, 0.5))
+                    _state_float(s, "gross_margin0") * (price_realization / max(cost_push, 0.5))
                     - 0.10 * (ist["intensity"] - 0.5)
-                    + 0.02 * (float(s["mgmt_quality"]) - 0.5)
+                    + 0.02 * (_state_float(s, "mgmt_quality") - 0.5)
                     + rng.normal("gross_margin_noise", qi) * 0.008
                 )
                 s["gross_margin"] = gross_margin
-
-                debt = float(s["debt"])
-                interest_expense = debt * interest_rate / 4.0
                 opex = revenue_q * sp["opex_rate"] * (1.0 + 0.10 * (labor_cost_index - 1.0))
-
-                # --- true economics (drives cash flow) --------------------- #
-                revenue = revenue_q
-                cogs = revenue_q * (1.0 - gross_margin)
-                true_ebit = (revenue_q - cogs) - opex
-                true_pretax = true_ebit - interest_expense
-                true_ni = true_pretax - max(0.0, true_pretax) * p.tax_rate
-
-                # --- reported P&L (fraud inflates revenue; still reconciles,
-                # like real fraudulent filings — but cash flow stays true, so
-                # reported earnings outrun cash generation: the accrual tell) -#
-                if inflating:
-                    revenue = revenue_q * 1.004
-                gross_profit = revenue - cogs
-                ebit = gross_profit - opex
-                pretax = ebit - interest_expense
-                tax = max(0.0, pretax) * p.tax_rate
-                reported_ni = pretax - tax
-                shares = float(s["shares"])
-                eps = reported_ni / shares
-                operating_margin = ebit / revenue
-                gross_margin_pub = gross_profit / revenue
-
-                # ---- balance sheet / cash flow ------------------------------ #
-                receivables = revenue * sp["ar_days"] / 90.0
-                inventory = revenue_q * sp["inv_days"] / 90.0
-                payables = revenue_q * p.days_payable / 90.0
-                depreciation = float(s["pp_e_net"]) * p.depreciation_rate / 4.0
                 capex = revenue_q * p.capex_rate * (0.7 + 0.6 * sp["capital_intensity"])
-                pp_e_net = max(0.0, float(s["pp_e_net"]) + capex - depreciation)
-
-                cash_target = float(s["cash"]) + true_ni + depreciation - capex
-                dividends = max(0.0, reported_ni) * p.payout_ratio
-                refinance_need = max(0.0, debt * 0.05 - cash_target * 0.5)
-                debt_change = refinance_need - dividends * 0.3
-                debt_next = max(0.0, debt + debt_change)
-                cash_next_unplugged = cash_target - dividends + debt_change
-                cash_next = max(0.0, cash_next_unplugged)
-                # plug = financing gap absorbed when cash would go negative;
-                # balance identity stays exact because equity absorbs the plug.
-                plug = cash_next - cash_next_unplugged
-
-                assets_next = cash_next + receivables + inventory + pp_e_net
-                liabilities_next = debt_next + payables
-                equity_next = assets_next - liabilities_next
-                retained_next = float(s["retained"]) + reported_ni - dividends
-                s["retained"] = retained_next
-
-                # operating cash flow reflects TRUE economics; during fraud
-                # reported earnings exceed cash generation (accrual red flag)
-                operating_cf = true_ni + depreciation
-                investing_cf = -capex
-                financing_cf = debt_change - dividends
-                net_change_cash = operating_cf + investing_cf + financing_cf
-
-                filing_available = when + timedelta(days=60 if fq == 4 else 35)
+                accounting_result = accounting[ticker].apply_quarter(
+                    sector=sector,
+                    period=qi + 1,
+                    period_end=when,
+                    true_revenue=revenue_q,
+                    gross_margin=gross_margin,
+                    days_receivable=sp["ar_days"],
+                    days_inventory=sp["inv_days"],
+                    days_payable=p.days_payable,
+                    sga=opex,
+                    capex=capex,
+                    tax_rate=p.tax_rate,
+                    payout_ratio=p.payout_ratio,
+                    current_interest_rate=interest_rate,
+                    fraud=inflating,
+                )
+                income = accounting_result.income_statement
+                balance = accounting_result.balance_sheet
+                cash_flow = accounting_result.cash_flow
+                revenue = float(income["revenue"])
+                cogs = float(income["cogs"])
+                gross_profit = float(income["gross_profit"])
+                ebit = float(income["operating_income"])
+                interest_expense = float(income["interest"])
+                pretax = float(income["pretax_income"])
+                tax = float(income["tax_expense"])
+                reported_ni = float(income["net_income"])
+                eps = float(accounting_result.basic_eps)
+                operating_margin = ebit / revenue if revenue else 0.0
+                gross_margin_pub = gross_profit / revenue if revenue else 0.0
+                depreciation = float(income["depreciation"])
+                capex_actual = float(accounting_result.capex)
+                dividends_actual = float(accounting_result.dividends)
+                net_change_cash = float(accounting_result.net_change_in_cash)
+                filing_available = accounting_result.available_date
                 call_at = when + timedelta(days=30)
 
                 quarters.append(
@@ -856,12 +880,13 @@ class EconomyEngineV2:
                         revenue=revenue,
                         cogs=cogs,
                         gross_profit=gross_profit,
-                        operating_expenses=opex,
+                        operating_expenses=float(income["sga"]),
                         ebit=ebit,
                         interest_expense=interest_expense,
                         pretax_income=pretax,
                         tax_expense=tax,
                         net_income=reported_ni,
+                        weighted_average_shares=float(accounting_result.weighted_average_shares),
                         eps=eps,
                         operating_margin=operating_margin,
                         gross_margin=gross_margin_pub,
@@ -873,17 +898,15 @@ class EconomyEngineV2:
                         company=ticker,
                         period_end=when,
                         available_at=filing_available,
-                        assets=assets_next,
-                        liabilities=liabilities_next,
-                        equity=equity_next,
-                        cash=cash_next,
-                        receivables=receivables,
-                        inventory=inventory,
-                        pp_e_net=pp_e_net,
-                        debt=debt_next,
-                        payables=payables,
-                        equity_check_residual=assets_next - (liabilities_next + equity_next),
-                        plug=plug,
+                        assets=float(balance["total_assets"]),
+                        liabilities=float(balance["total_liabilities"]),
+                        equity=float(balance["total_equity"]),
+                        cash=float(balance["cash"]),
+                        receivables=float(balance["ar"]),
+                        inventory=float(balance["inventory"]),
+                        pp_e_net=float(balance["ppe_net"]),
+                        debt=float(balance["debt"]),
+                        payables=float(balance["ap"]),
                     )
                 )
                 cash_flows.append(
@@ -891,43 +914,40 @@ class EconomyEngineV2:
                         company=ticker,
                         period_end=when,
                         available_at=filing_available,
-                        operating_cf=operating_cf,
-                        investing_cf=investing_cf,
-                        financing_cf=financing_cf,
+                        operating_cf=float(cash_flow["operating"]),
+                        investing_cf=float(cash_flow["investing"]),
+                        financing_cf=float(cash_flow["financing"]),
                         depreciation=depreciation,
-                        capex=capex,
-                        dividends=dividends,
+                        capex=capex_actual,
+                        dividends=dividends_actual,
                         net_change_in_cash=net_change_cash,
                     )
                 )
                 filings.append(
                     FilingEventV2(
                         company=ticker,
-                        kind="10-K" if fq == 4 else "10-Q",
+                        kind=accounting_result.filing.form.value,
                         filed_at=filing_available,
                         available_at=filing_available,
                         period_end=when,
+                        filing_id=accounting_result.filing.filing_id,
+                        version_id=accounting_result.filing.version_id,
+                        version=accounting_result.filing.version,
+                        payload_sha256=accounting_result.filing.payload_sha256,
                     )
                 )
 
-                # commit next state
-                s["cash"] = cash_next
-                s["debt"] = debt_next
-                s["pp_e_net"] = pp_e_net
-                s["receivables"] = receivables
-                s["inventory"] = inventory
-                s["payables"] = payables
-
                 # ---- distress / default ------------------------------------ #
                 liquidity = _clamp01(
-                    0.9 * float(s["liquidity"]) + 0.1 * (cash_next / max(assets_next, 1.0) / 0.10)
+                    0.9 * _state_float(s, "liquidity")
+                    + 0.1 * (float(balance["cash"]) / max(float(balance["total_assets"]), 1.0) / 0.10)
                 )
                 debt_stress = _clamp01(
-                    0.85 * float(s["debt_stress"])
+                    0.85 * _state_float(s, "debt_stress")
                     + 0.15
                     * (
-                        (debt_next / max(equity_next, 1.0)) / 2.0
-                        + max(0.0, -operating_cf) / max(revenue, 1.0) * 4.0
+                        (float(balance["debt"]) / max(float(balance["total_equity"]), 1.0)) / 2.0
+                        + max(0.0, -float(cash_flow["operating"])) / max(revenue, 1.0) * 4.0
                     )
                 )
                 s["liquidity"] = liquidity
@@ -948,9 +968,11 @@ class EconomyEngineV2:
                 # ---- earnings call, guidance, estimates, prices -------------- #
                 pending_guidance = s["guidance"]
                 guidance_met: bool | None = (
-                    gross_margin >= float(pending_guidance) * 0.98 if pending_guidance is not None else None
+                    gross_margin >= _numeric_float(pending_guidance, "guidance") * 0.98
+                    if pending_guidance is not None
+                    else None
                 )
-                next_guidance = gross_margin * (1.0 + 0.02 * (float(s["mgmt_quality"]) - 0.5))
+                next_guidance = gross_margin * (1.0 + 0.02 * (_state_float(s, "mgmt_quality") - 0.5))
                 s["guidance"] = next_guidance
 
                 earnings.append(
@@ -960,7 +982,11 @@ class EconomyEngineV2:
                         period_end=when,
                         revenue=revenue,
                         net_income=reported_ni,
-                        guidance_margin=float(pending_guidance) if pending_guidance is not None else None,
+                        guidance_margin=(
+                            _numeric_float(pending_guidance, "guidance")
+                            if pending_guidance is not None
+                            else None
+                        ),
                         guidance_met=guidance_met,
                     )
                 )
@@ -982,7 +1008,10 @@ class EconomyEngineV2:
                         at=filing_available,
                         company=ticker,
                         kind="filing",
-                        payload={"form": "10-K" if fq == 4 else "10-Q", "period_end": when.isoformat()},
+                        payload={
+                            "form": accounting_result.filing.form.value,
+                            "period_end": when.isoformat(),
+                        },
                     )
                 )
 
@@ -991,7 +1020,11 @@ class EconomyEngineV2:
                 period_label = f"{fy}Q{fq}"
                 had_prior_est = s["prior_est"] is not None
                 prior_est = s["prior_est"]
-                prior_est = float(prior_est) if had_prior_est else revenue_q * (1.0 + p.analyst_bias)
+                prior_est = (
+                    _numeric_float(prior_est, "prior_est")
+                    if had_prior_est
+                    else revenue_q * (1.0 + p.analyst_bias)
+                )
                 est_now = (
                     prior_est
                     * (1.0 + p.analyst_bias)
@@ -1027,9 +1060,10 @@ class EconomyEngineV2:
                 # Quarter-end price uses only state available at the session timestamp.
                 # Current-quarter earnings and guidance are published after this row.
                 price_rng = self._price_rngs[ticker]
+                share_count = _state_int(s, "shares")
                 drift = 0.10 * growth / 4.0
                 ret = drift + price_rng.normal("return_noise", qi) * p.price_noise
-                prev_close = float(s["prior_close"])
+                prev_close = _state_float(s, "prior_close")
                 close = max(0.5, prev_close * (1.0 + ret))
                 prices.append(
                     PriceRowV2(
@@ -1041,7 +1075,7 @@ class EconomyEngineV2:
                         close=close,
                         volume=max(
                             1.0,
-                            shares * 0.001 * price_rng.uniform_range("volume_scale", 0.5, 1.5, qi),
+                            share_count * 0.001 * price_rng.uniform_range("volume_scale", 0.5, 1.5, qi),
                         ),
                     )
                 )
@@ -1053,13 +1087,13 @@ class EconomyEngineV2:
                         date=when,
                         values={
                             "demand_index": demand_index,
-                            "pricing_power": float(s["pricing_power"]),
-                            "market_share": float(s["market_share"]),
+                            "pricing_power": _state_float(s, "pricing_power"),
+                            "market_share": _state_float(s, "market_share"),
                             "input_cost_index": input_cost_index,
                             "labor_cost_index": labor_cost_index,
                             "debt_stress": debt_stress,
                             "liquidity": liquidity,
-                            "management_quality": float(s["mgmt_quality"]),
+                            "management_quality": _state_float(s, "mgmt_quality"),
                             "fraud_propensity": fraud_prop,
                             "competitive_intensity": ist["intensity"],
                         },
@@ -1096,6 +1130,7 @@ class EconomyEngineV2:
             defaults=defaults,
             fraud_windows=fraud_windows,
             initial_shares=initial_shares,
+            accounting=accounting,
             rng_namespace=NAMESPACE_VERSION,
             rng_transform_versions=dict(TRANSFORM_VERSIONS),
             stream_registry=self._rng.manifest(),

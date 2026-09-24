@@ -3,8 +3,8 @@
 Public artifact  : what Zion would ingest (entities, financials, prices,
                    events, filings, estimates) — every row PIT-stamped and
                    carrying the synthetic world selector.
-Hidden artifact  : latent truth + causal ground truth + semantic RNG registry,
-                   sealed from the public side.
+Hidden artifacts : latent/causal truth, semantic RNG registry, and exact
+                   accounting evidence, sealed from the public side.
 Manifest         : producer metadata + sha256 of every artifact and RNG registry.
 """
 
@@ -104,38 +104,70 @@ def export_economy_v2(
     ]
 
     financials: list[dict[str, Any]] = []
+    period_by_key = {
+        (q.company, q.period_end): f"{q.fiscal_year}Q{q.fiscal_quarter}" for q in outcome.quarters
+    }
+    cash_flow_by_key = {
+        (cash_flow.company, cash_flow.period_end): cash_flow for cash_flow in outcome.cash_flows
+    }
     for q in outcome.quarters:
         prov = _provenance_with_seed(
             world, "public/financials.json", f"quarter:{q.company}:{q.fiscal_year}Q{q.fiscal_quarter}"
         )
-        period = f"{q.fiscal_year}Q{q.fiscal_quarter}"
-        rows = {
-            "revenue": (q.revenue, "USD", None),
-            "cogs": (q.cogs, "USD", None),
-            "gross_profit": (q.gross_profit, "USD", "revenue - cogs"),
-            "operating_expenses": (q.operating_expenses, "USD", None),
-            "operating_income": (q.ebit, "USD", "gross_profit - operating_expenses"),
-            "interest_expense": (q.interest_expense, "USD", None),
-            "pretax_income": (q.pretax_income, "USD", None),
-            "tax_expense": (q.tax_expense, "USD", None),
-            "net_income": (q.net_income, "USD", None),
-            "eps": (q.eps, "USD/share", "net_income / weighted_shares"),
-            "gross_margin": (q.gross_margin, "ratio", "gross_profit / revenue"),
-            "operating_margin": (q.operating_margin, "ratio", "operating_income / revenue"),
+        income_period = f"{q.fiscal_year}Q{q.fiscal_quarter}"
+        income_rows: dict[str, tuple[float, str, str]] = {
+            "revenue": (q.revenue, "USD", "pinned_fwf_kernel.income_statement.revenue"),
+            "cogs": (q.cogs, "USD", "pinned_fwf_kernel.income_statement.cogs"),
+            "gross_profit": (
+                q.gross_profit,
+                "USD",
+                "pinned_fwf_kernel.income_statement.gross_profit",
+            ),
+            "operating_expenses": (q.operating_expenses, "USD", "pinned_fwf_kernel.income_statement.sga"),
+            "depreciation": (
+                cash_flow_by_key[(q.company, q.period_end)].depreciation,
+                "USD",
+                "pinned_fwf_kernel.income_statement.depreciation",
+            ),
+            "operating_income": (
+                q.ebit,
+                "USD",
+                "pinned_fwf_kernel.income_statement.operating_income",
+            ),
+            "interest_expense": (q.interest_expense, "USD", "pinned_fwf_kernel.income_statement.interest"),
+            "pretax_income": (
+                q.pretax_income,
+                "USD",
+                "pinned_fwf_kernel.income_statement.pretax_income",
+            ),
+            "tax_expense": (q.tax_expense, "USD", "pinned_fwf_kernel.income_statement.tax_expense"),
+            "net_income": (q.net_income, "USD", "pinned_fwf_kernel.income_statement.net_income"),
+            "weighted_average_shares": (
+                q.weighted_average_shares,
+                "shares",
+                "pinned_fwf_kernel.equity.weighted_average_shares",
+            ),
+            "eps": (q.eps, "USD/share", "pinned_fwf_kernel.equity.basic_eps"),
+            "gross_margin": (q.gross_margin, "ratio", "presentation_ratio_of_ledger_values"),
+            "operating_margin": (
+                q.operating_margin,
+                "ratio",
+                "presentation_ratio_of_ledger_values",
+            ),
         }
-        for metric, (value, unit, calc) in rows.items():
+        for metric, (value, unit, income_calculation) in income_rows.items():
             financials.append(
                 {
                     "entity_id": f"synthetic:company:{q.company}",
                     "metric": metric,
                     "value": round(float(value), 12),
                     "unit": unit,
-                    "period": period,
+                    "period": income_period,
                     "period_end": _iso(q.period_end),
                     "observation_at": _iso(q.period_end),
                     "available_at": _iso(q.available_at),
                     "retrieved_at": _iso(q.available_at),
-                    "calculation": calc,
+                    "calculation": income_calculation,
                     "world": world,
                     "provenance": prov,
                     "quality": {"status": "observed", "confidence": 1.0},
@@ -143,34 +175,99 @@ def export_economy_v2(
             )
 
     # balance-sheet metric rows so downstream QC can verify the identity
-    period_by_key = {
-        (q.company, q.period_end): f"{q.fiscal_year}Q{q.fiscal_quarter}" for q in outcome.quarters
-    }
     for b in outcome.balance_sheets:
-        period = period_by_key.get((b.company, b.period_end))
-        if period is None:
+        balance_period = period_by_key.get((b.company, b.period_end))
+        if balance_period is None:
             continue
-        prov = _provenance_with_seed(world, "public/financials.json", f"balance:{b.company}:{period}")
-        rows = {
-            "assets": (b.assets, "USD", None),
-            "liabilities": (b.liabilities, "USD", None),
-            "equity": (b.equity, "USD", "assets - liabilities"),
-            "cash": (b.cash, "USD", None),
-            "debt": (b.debt, "USD", None),
+        prov = _provenance_with_seed(
+            world,
+            "public/financials.json",
+            f"balance:{b.company}:{balance_period}",
+        )
+        balance_rows: dict[str, tuple[float, str, str]] = {
+            "assets": (b.assets, "USD", "pinned_fwf_kernel.balance_sheet.total_assets"),
+            "liabilities": (b.liabilities, "USD", "pinned_fwf_kernel.balance_sheet.total_liabilities"),
+            "equity": (b.equity, "USD", "pinned_fwf_kernel.balance_sheet.total_equity"),
+            "cash": (b.cash, "USD", "pinned_fwf_kernel.balance_sheet.cash"),
+            "receivables": (b.receivables, "USD", "pinned_fwf_kernel.balance_sheet.ar"),
+            "inventory": (b.inventory, "USD", "pinned_fwf_kernel.balance_sheet.inventory"),
+            "pp_e_net": (b.pp_e_net, "USD", "pinned_fwf_kernel.balance_sheet.ppe_net"),
+            "payables": (b.payables, "USD", "pinned_fwf_kernel.balance_sheet.ap"),
+            "debt": (b.debt, "USD", "pinned_fwf_kernel.balance_sheet.debt"),
         }
-        for metric, (value, unit, calc) in rows.items():
+        for metric, (value, unit, balance_calculation) in balance_rows.items():
             financials.append(
                 {
                     "entity_id": f"synthetic:company:{b.company}",
                     "metric": metric,
                     "value": round(float(value), 12),
                     "unit": unit,
-                    "period": period,
+                    "period": balance_period,
                     "period_end": _iso(b.period_end),
                     "observation_at": _iso(b.period_end),
                     "available_at": _iso(b.available_at),
                     "retrieved_at": _iso(b.available_at),
-                    "calculation": calc,
+                    "calculation": balance_calculation,
+                    "world": world,
+                    "provenance": prov,
+                    "quality": {"status": "observed", "confidence": 1.0},
+                }
+            )
+
+    for cash_flow in outcome.cash_flows:
+        cash_flow_period = period_by_key.get((cash_flow.company, cash_flow.period_end))
+        if cash_flow_period is None:
+            continue
+        prov = _provenance_with_seed(
+            world,
+            "public/financials.json",
+            f"cash-flow:{cash_flow.company}:{cash_flow_period}",
+        )
+        cash_flow_rows: dict[str, tuple[float, str, str]] = {
+            "operating_cash_flow": (
+                cash_flow.operating_cf,
+                "USD",
+                "pinned_fwf_kernel.cash_flow_direct.operating",
+            ),
+            "investing_cash_flow": (
+                cash_flow.investing_cf,
+                "USD",
+                "pinned_fwf_kernel.cash_flow_direct.investing",
+            ),
+            "financing_cash_flow": (
+                cash_flow.financing_cf,
+                "USD",
+                "pinned_fwf_kernel.cash_flow_direct.financing",
+            ),
+            "capex": (
+                cash_flow.capex,
+                "USD",
+                "pinned_fwf_kernel.subledgers.ppe_acquired_gross_cost",
+            ),
+            "dividends": (
+                cash_flow.dividends,
+                "USD",
+                "pinned_fwf_kernel.ledger.is_dividends",
+            ),
+            "net_change_in_cash": (
+                cash_flow.net_change_in_cash,
+                "USD",
+                "pinned_fwf_kernel.cash_flow_direct",
+            ),
+        }
+        for metric, (value, unit, cash_flow_calculation) in cash_flow_rows.items():
+            financials.append(
+                {
+                    "entity_id": f"synthetic:company:{cash_flow.company}",
+                    "metric": metric,
+                    "value": round(float(value), 12),
+                    "unit": unit,
+                    "period": cash_flow_period,
+                    "period_end": _iso(cash_flow.period_end),
+                    "observation_at": _iso(cash_flow.period_end),
+                    "available_at": _iso(cash_flow.available_at),
+                    "retrieved_at": _iso(cash_flow.available_at),
+                    "calculation": cash_flow_calculation,
                     "world": world,
                     "provenance": prov,
                     "quality": {"status": "observed", "confidence": 1.0},
@@ -205,6 +302,10 @@ def export_economy_v2(
             "filed_at": _iso(f.filed_at),
             "available_at": _iso(f.available_at),
             "period_end": _iso(f.period_end),
+            "filing_id": f.filing_id,
+            "version_id": f.version_id,
+            "version": f.version,
+            "payload_sha256": f.payload_sha256,
             "world": world,
             "provenance": _provenance_with_seed(
                 world, "public/filings.json", f"filing:{f.company}:{_iso(f.filed_at)}"
@@ -293,13 +394,17 @@ def export_economy_v2(
         "rng_namespace": outcome.rng_namespace,
         "rng_transform_versions": dict(outcome.rng_transform_versions),
         "stream_registry": [dict(entry) for entry in outcome.stream_registry],
-        "balance_identity": "assets = liabilities + equity (exact; emitted residual ~ 0)",
-        "plug_definition": (
-            "financing gap absorbed when cash would go negative; balance identity "
-            "still exact because equity absorbs the plug"
-        ),
+        "accounting_artifact": "hidden/accounting.json",
+        "balance_identity": "exact Decimal identity derived by the pinned accounting kernel",
     }
     _write_json(output / "hidden" / "world_state.json", hidden)
+    accounting_evidence = {
+        "schema": "fwf-accounting-evidence-v1",
+        "world": world,
+        "precision": "exact decimal strings",
+        "companies": {ticker: outcome.accounting[ticker].evidence() for ticker in sorted(outcome.accounting)},
+    }
+    _write_json(output / "hidden" / "accounting.json", accounting_evidence)
 
     # ---------------- manifest ---------------- #
     artifact_files = [
@@ -310,6 +415,7 @@ def export_economy_v2(
         "public/estimates.json",
         "public/events.json",
         "hidden/world_state.json",
+        "hidden/accounting.json",
     ]
     artifacts: dict[str, Any] = {}
     for rel in artifact_files:
@@ -347,7 +453,7 @@ def export_economy_v2(
                 "public/estimates.json",
                 "public/events.json",
             ],
-            "hidden": ["hidden/world_state.json"],
+            "hidden": ["hidden/world_state.json", "hidden/accounting.json"],
         },
         "public_artifacts": [
             "public/entities.json",
@@ -357,7 +463,7 @@ def export_economy_v2(
             "public/estimates.json",
             "public/events.json",
         ],
-        "hidden_artifacts": ["hidden/world_state.json"],
+        "hidden_artifacts": ["hidden/world_state.json", "hidden/accounting.json"],
         "company_count": len(outcome.companies),
         "quarter_count": len(outcome.quarters),
         "rng_namespace": outcome.rng_namespace,
