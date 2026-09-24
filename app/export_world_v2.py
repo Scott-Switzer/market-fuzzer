@@ -98,7 +98,9 @@ def export_economy_v2(
 
     financials: list[dict[str, Any]] = []
     for q in outcome.quarters:
-        prov = _provenance_with_seed(world, "public/financials.json", f"quarter:{q.company}:{q.fiscal_year}Q{q.fiscal_quarter}")
+        prov = _provenance_with_seed(
+            world, "public/financials.json", f"quarter:{q.company}:{q.fiscal_year}Q{q.fiscal_quarter}"
+        )
         period = f"{q.fiscal_year}Q{q.fiscal_quarter}"
         rows = {
             "revenue": (q.revenue, "USD", None),
@@ -182,7 +184,9 @@ def export_economy_v2(
             "unit": "USD/share",
             "volume": round(p.volume, 0),
             "world": world,
-            "provenance": _provenance_with_seed(world, "public/prices.json", f"bar:{p.company}:{_iso(p.session)}"),
+            "provenance": _provenance_with_seed(
+                world, "public/prices.json", f"bar:{p.company}:{_iso(p.session)}"
+            ),
         }
         for p in outcome.prices
     ]
@@ -195,7 +199,9 @@ def export_economy_v2(
             "available_at": _iso(f.available_at),
             "period_end": _iso(f.period_end),
             "world": world,
-            "provenance": _provenance_with_seed(world, "public/filings.json", f"filing:{f.company}:{_iso(f.filed_at)}"),
+            "provenance": _provenance_with_seed(
+                world, "public/filings.json", f"filing:{f.company}:{_iso(f.filed_at)}"
+            ),
         }
         for f in outcome.filings
     ]
@@ -210,7 +216,9 @@ def export_economy_v2(
             "issued_at": _iso(e.issued_at),
             "revised_at": _iso(e.revised_at),
             "world": world,
-            "provenance": _provenance_with_seed(world, "public/estimates.json", f"estimate:{e.company}:{e.period}"),
+            "provenance": _provenance_with_seed(
+                world, "public/estimates.json", f"estimate:{e.company}:{e.period}"
+            ),
         }
         for e in outcome.estimates
     ]
@@ -222,7 +230,9 @@ def export_economy_v2(
             "kind": ev.kind,
             "payload": ev.payload,
             "world": world,
-            "provenance": _provenance_with_seed(world, "public/events.json", f"event:{ev.kind}:{ev.company}:{_iso(ev.at)}"),
+            "provenance": _provenance_with_seed(
+                world, "public/events.json", f"event:{ev.kind}:{ev.company}:{_iso(ev.at)}"
+            ),
         }
         for ev in outcome.events
     ]
@@ -257,10 +267,7 @@ def export_economy_v2(
             for m in outcome.macro
         ],
         "latents": {
-            ticker: [
-                {"date": _iso(snap.date), "values": snap.values}
-                for snap in snaps
-            ]
+            ticker: [{"date": _iso(snap.date), "values": snap.values} for snap in snaps]
             for ticker, snaps in outcome.latents.items()
         },
         "defaults": outcome.defaults,
