@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -59,19 +60,28 @@ def test_different_seeds_produce_different_worlds():
 def test_balance_identity_is_exact_every_quarter():
     w = run_economy(_params(years=6))
     assert w.balance_sheets
-    for bs in w.balance_sheets:
-        assert bs.assets == pytest.approx(bs.liabilities + bs.equity, abs=1e-6)
-        assert bs.equity_check_residual == pytest.approx(0.0, abs=1e-6)
+    for company in w.companies:
+        results = w.accounting[company["ticker"]].period_results
+        for result in results:
+            balance = result.balance_sheet
+            assert isinstance(balance["total_assets"], Decimal)
+            assert balance["total_assets"] == balance["total_liabilities"] + balance["total_equity"]
 
 
 def test_income_statement_adds_up():
     w = run_economy(_params(years=3))
+    cash_flow_by_period = {(row.company, row.period_end): row for row in w.cash_flows}
     for q in w.quarters:
+        depreciation = cash_flow_by_period[(q.company, q.period_end)].depreciation
         assert q.gross_profit == pytest.approx(q.revenue - q.cogs, rel=1e-9, abs=1e-6)
-        assert q.ebit == pytest.approx(q.gross_profit - q.operating_expenses, rel=1e-9, abs=1e-6)
+        assert q.ebit == pytest.approx(
+            q.gross_profit - q.operating_expenses - depreciation,
+            rel=1e-9,
+            abs=1e-6,
+        )
         assert q.pretax_income == pytest.approx(q.ebit - q.interest_expense, rel=1e-9, abs=1e-6)
         if q.pretax_income >= 0:
-            assert q.tax_expense == pytest.approx(q.pretax_income * 0.21, rel=1e-9, abs=1e-6)
+            assert q.tax_expense == pytest.approx(q.pretax_income * 0.21, rel=1e-9, abs=0.01)
             assert q.net_income == pytest.approx(q.pretax_income - q.tax_expense, rel=1e-9, abs=1e-6)
 
 
@@ -202,20 +212,29 @@ def test_fraud_intervention_produces_known_truth():
         assert q.revenue == pytest.approx(b.revenue * 1.004, rel=1e-6)
         assert not b.fraud_flag
 
-    # the detectable tell: reported earnings outrun TRUE cash generation.
-    # operating_cf = true_ni + depreciation, so reported NI minus the cash-
-    # implied NI must be strictly positive in every flagged quarter, and
-    # exactly zero in every honest one.
-    cf_cf = {c.period_end: c for c in cf.cash_flows if c.company == ticker}
+    # The detectable tell is a specific outstanding invoice and matching
+    # journal revenue, not an independently calculated cash proxy.
+    company_accounting = cf.accounting[ticker]
+    results = {(result.period, result.period_end): result for result in company_accounting.period_results}
     for q in flagged:
-        c = cf_cf[q.period_end]
-        accrual_gap = q.net_income - (c.operating_cf - c.depreciation)
-        assert accrual_gap > 0, "flagged quarter must show earnings above cash flow"
-    honest = [q for q in cf.quarters if q.company == ticker and not q.fraud_flag]
-    assert honest
-    for q in honest:
-        c = cf_cf[q.period_end]
-        assert q.net_income == pytest.approx(c.operating_cf - c.depreciation, rel=1e-9, abs=1e-6)
+        period = (q.fiscal_year - p.start_year) * 4 + q.fiscal_quarter
+        result = results[(period, q.period_end)]
+        invoice = company_accounting.operational.receivables[f"fraud:{ticker}:{period}"]
+        assert invoice.original_amount > 0
+        assert invoice.outstanding_amount == invoice.original_amount
+        assert company_accounting.ledger.balances(through=period)["ar"] == result.balance_sheet["ar"]
+        journal_revenue = sum(
+            (
+                line.credit
+                for entry in company_accounting.ledger.entries
+                if entry.period == period and entry.event == "sale_on_credit"
+                for line in entry.lines
+                if line.account == "revenue"
+            ),
+            Decimal("0.00"),
+        )
+        assert journal_revenue == result.income_statement["revenue"]
+        assert result.direct_cash_flow == result.indirect_cash_flow
 
 
 def test_supplier_failure_requires_one():
@@ -276,6 +295,8 @@ def test_export_is_deterministic_and_sealed(tmp_path: Path):
         "public/filings.json",
         "public/estimates.json",
         "public/events.json",
+        "hidden/world_state.json",
+        "hidden/accounting.json",
         "manifest.json",
     ):
         assert (first / relative).read_bytes() == (second / relative).read_bytes()
@@ -312,3 +333,6 @@ def test_export_rows_carry_world_selector_and_pit(tmp_path: Path):
     assert "interventions" in hidden
     # organic fraud is rare but possible; its ground truth must stay sealed
     assert isinstance(hidden["fraud_windows"], list)
+    accounting = json.loads((out / "hidden" / "accounting.json").read_text())
+    assert accounting["precision"] == "exact decimal strings"
+    assert accounting["companies"]

@@ -176,6 +176,7 @@ def _entity_trace(world: WorldOutcomeV2, ticker: str) -> dict[str, object]:
         "latents": world.latents[ticker],
         "defaults": [row for row in world.defaults if row["company"] == ticker],
         "fraud_windows": [row for row in world.fraud_windows if row["company"] == ticker],
+        "accounting": world.accounting[ticker].evidence(),
     }
 
 
@@ -222,7 +223,7 @@ def test_initial_shares_use_one_explicit_semantic_coordinate() -> None:
 
     size = math.exp(params.size_dispersion * stream.normal("size", 0))
     base_revenue = 250e6 * size
-    expected = max(1.0, round((base_revenue / 25.0) * stream.uniform_range("initial_shares", 0.7, 1.3, 0)))
+    expected = max(1, int(round((base_revenue / 25.0) * stream.uniform_range("initial_shares", 0.7, 1.3, 0))))
 
     assert world.initial_shares == {ticker: expected}
 
@@ -255,11 +256,13 @@ def test_hidden_registry_and_manifest_hash_preserve_public_sealing(tmp_path: Pat
     )
     output = export_economy_v2(world, tmp_path / "release")
     hidden = json.loads((output / "hidden" / "world_state.json").read_text())
+    accounting = json.loads((output / "hidden" / "accounting.json").read_text())
     manifest = json.loads((output / "manifest.json").read_text())
 
     assert hidden["rng_namespace"] == NAMESPACE_VERSION
     assert hidden["rng_transform_versions"] == TRANSFORM_VERSIONS
     assert hidden["stream_registry"] == world.stream_registry
+    assert set(accounting["companies"]) == set(world.accounting)
     assert manifest["rng_namespace"] == NAMESPACE_VERSION
     assert manifest["rng_transform_versions"] == TRANSFORM_VERSIONS
     assert "stream_registry" not in manifest
@@ -275,7 +278,15 @@ def test_hidden_registry_and_manifest_hash_preserve_public_sealing(tmp_path: Pat
 
     public_paths = sorted((output / "public").glob("*.json")) + [output / "manifest.json"]
     public_text = "\n".join(path.read_text() for path in public_paths)
-    for forbidden in ("stream_registry", "latents", "fraud_windows", "rng_world_id"):
+    for forbidden in (
+        "stream_registry",
+        "latents",
+        "fraud",
+        "fraud_windows",
+        "rng_world_id",
+        "journal_entries",
+        "opening_targets",
+    ):
         assert forbidden not in public_text
     for hidden_detail in ("ROSTER:", "COMPANY:", "SECTOR:", world.rng_world_id):
         assert hidden_detail not in public_text
