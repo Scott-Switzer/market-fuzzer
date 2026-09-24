@@ -15,6 +15,7 @@ import hashlib
 import json
 import subprocess
 from datetime import date
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+@cache
 def _git_sha() -> str:
     try:
         return subprocess.check_output(
