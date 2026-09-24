@@ -20,6 +20,30 @@ explicit spread, depth, and signed-flow proxies. It hashes the source file,
 retains aggregate train/validation/test windows, and never persists source
 rows. It must not be described as queue-level calibration.
 
+## World V2 semantic randomness
+
+World V2 uses the standalone `SEMANTIC_RNG_V3` adapter in `app.world.rng`; it
+does not import the private `financial-system-core` package at runtime. Each
+draw is keyed by the canonical tuple `(namespace_version, world_id, entity_id,
+mechanism_id, variable, distribution_id)`. Canonical JSON is hashed with
+SHA-256, the first 128 bits become a little-endian NumPy Philox `2x64` key, and
+the counter is `[0, period_ordinal, draw_index, 0]`. The engine consumes only
+raw Philox output before applying the versioned 53-bit uniform or Box-Muller
+normal transform.
+
+The public `world_id` and `seed` remain unchanged. For address construction
+only, they are encoded as the canonical JSON array `[world_id, seed]`; this is a
+migration bridge, not a V3 seed field or a new namespace. Roster draws use
+`ROSTER:<three-digit slot>` identities, while later draws use stable
+`COMPANY:<ticker>`, `SECTOR:<sector>`, and `WORLD` identities. Static draws use
+period zero, quarterly draws use the quarter index, and no mutable draw counter
+is carried between calls.
+
+The full address registry is hidden state. Public artifacts receive no registry
+entries or internal world identity; the release manifest carries only the
+namespace, transform-version map, and a deterministic canonical-JSON SHA-256
+of the registry.
+
 ## Local data path
 
 Build an inspectable aggregate pack from a local intraday source:

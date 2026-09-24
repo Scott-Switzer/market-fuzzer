@@ -1,5 +1,12 @@
 name: verify
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 # Least-privilege default (security hardening, reset brief section 14).
 permissions:
@@ -7,7 +14,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -38,7 +45,7 @@ jobs:
   # This proves reproducibility + pyproject/lock consistency WITHOUT a flaky
   # `pip-compile | git diff` that races transient upstream releases.
   lockfile:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -53,7 +60,7 @@ jobs:
   # unit tests are not sufficient; migrations + constraints must be proven on
   # real Postgres. Pinned by exact image tag.
   postgres:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16.4
@@ -80,7 +87,7 @@ jobs:
       - run: python -m pytest tests/integration/test_postgres_persistence.py tests/integration/test_migrations.py tests/integration/test_postgres_datasets.py tests/integration/test_postgres_disjoint_evidence.py -q -p no:cacheprovider
 
   docker:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
