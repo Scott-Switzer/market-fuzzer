@@ -3,9 +3,9 @@
 Public artifact  : what Zion would ingest (entities, financials, prices,
                    events, filings, estimates) — every row PIT-stamped and
                    carrying the synthetic world selector.
-Hidden artifact  : latent truth + causal ground truth (interventions,
-                   counterfactual-ready state), sealed from the public side.
-Manifest         : producer metadata + sha256 of every artifact.
+Hidden artifact  : latent truth + causal ground truth + semantic RNG registry,
+                   sealed from the public side.
+Manifest         : producer metadata + sha256 of every artifact and RNG registry.
 """
 
 from __future__ import annotations
@@ -26,6 +26,11 @@ EXPORT_SCHEMA = "financial-world-release/v2"
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _canonical_json_sha256(value: Any) -> str:
+    payload = json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode()
+    return hashlib.sha256(payload).hexdigest()
 
 
 @cache
@@ -285,6 +290,9 @@ def export_economy_v2(
             for iv in outcome.interventions
         ],
         "causal_notes": list(interventions_text),
+        "rng_namespace": outcome.rng_namespace,
+        "rng_transform_versions": dict(outcome.rng_transform_versions),
+        "stream_registry": [dict(entry) for entry in outcome.stream_registry],
         "balance_identity": "assets = liabilities + equity (exact; emitted residual ~ 0)",
         "plug_definition": (
             "financing gap absorbed when cash would go negative; balance identity "
@@ -352,6 +360,9 @@ def export_economy_v2(
         "hidden_artifacts": ["hidden/world_state.json"],
         "company_count": len(outcome.companies),
         "quarter_count": len(outcome.quarters),
+        "rng_namespace": outcome.rng_namespace,
+        "rng_transform_versions": dict(outcome.rng_transform_versions),
+        "rng_registry_sha256": _canonical_json_sha256(outcome.stream_registry),
         "artifact_hashes": artifacts,
         "release_status": "world-v2-exported",
     }

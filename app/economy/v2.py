@@ -30,9 +30,11 @@ from datetime import date, timedelta
 from math import pi as _pi
 from math import sin as _sin
 
-from app.world.rng import derive_stream
+from app.world.rng import NAMESPACE_VERSION, TRANSFORM_VERSIONS, SemanticRNG, SemanticStream
 
 WORLD = "WORLD"
+COMPANY_ENTITY_PREFIX = "COMPANY:"
+SECTOR_ENTITY_PREFIX = "SECTOR:"
 
 # --------------------------------------------------------------------------- #
 # Parameters and interventions
@@ -279,6 +281,11 @@ class WorldOutcomeV2:
     events: list[EventV2]
     defaults: list[dict[str, str | float]] = field(default_factory=list)
     fraud_windows: list[dict[str, str | bool]] = field(default_factory=list)
+    initial_shares: dict[str, float] = field(default_factory=dict)
+    rng_namespace: str = NAMESPACE_VERSION
+    rng_transform_versions: dict[str, str] = field(default_factory=lambda: dict(TRANSFORM_VERSIONS))
+    stream_registry: list[dict[str, str]] = field(default_factory=list)
+    rng_world_id: str = ""
 
 
 # --------------------------------------------------------------------------- #
@@ -368,24 +375,92 @@ def _sector_params(sector: str) -> dict[str, float]:
 # --------------------------------------------------------------------------- #
 
 
-def build_economy(params: EconomyParamsV2) -> tuple[int, list[dict[str, str]]]:
-    """Deterministically derive the company roster from the seed."""
-    params.validate()
+def _company_entity_id(ticker: str) -> str:
+    """Return the stable post-construction identity used by company streams."""
+    return f"{COMPANY_ENTITY_PREFIX}{ticker}"
+
+
+def _roster_stream(context: SemanticRNG, slot: int) -> SemanticStream:
+    return context.stream(f"ROSTER:{slot:03d}", "roster")
+
+
+def _ticker_candidate(stream: SemanticStream, attempt: int, letters: str) -> str:
+    """Build one four-letter candidate from stable retry coordinates."""
+    return "".join(
+        letters[stream.randint("ticker_letter", 0, len(letters) - 1, 0, attempt * 4 + offset)]
+        for offset in range(4)
+    )
+
+
+def _validate_company_count(company_count: int) -> None:
+    if not 1 <= company_count <= 10_000:
+        raise ValueError("company_count must be in [1, 10000]")
+
+
+def _validated_roster(roster: list[dict[str, str]], company_count: int | None) -> list[dict[str, str]]:
+    if not roster:
+        raise ValueError("company roster must not be empty")
+    if len(roster) > 10_000:
+        raise ValueError("company roster must contain at most 10000 companies")
+    if company_count is not None and len(roster) != company_count:
+        raise ValueError("company_count does not match the supplied roster")
+
+    validated: list[dict[str, str]] = []
+    seen_tickers: set[str] = set()
+    for position, company in enumerate(roster):
+        if not isinstance(company, dict):
+            raise ValueError(f"roster entry {position} must be an object")
+        missing = {"ticker", "name", "sector"} - company.keys()
+        if missing:
+            raise ValueError(f"roster entry {position} is missing fields: {sorted(missing)}")
+        normalized = {key: company[key] for key in ("ticker", "name", "sector")}
+        if any(not isinstance(value, str) or not value.strip() for value in normalized.values()):
+            raise ValueError(f"roster entry {position} fields must be non-empty strings")
+        ticker = normalized["ticker"]
+        if ticker in seen_tickers:
+            raise ValueError(f"company roster ticker is duplicated: {ticker}")
+        _sector_params(normalized["sector"])
+        seen_tickers.add(ticker)
+        validated.append(normalized)
+    return validated
+
+
+def _generate_roster(context: SemanticRNG, company_count: int) -> list[dict[str, str]]:
+    _validate_company_count(company_count)
     roster: list[dict[str, str]] = []
+    used_tickers: set[str] = set()
     sector_names = sorted(_SECTORS)
     name_roots = ("Aurora", "Borealis", "Cinder", "Dynamo", "Ember", "Fathom", "Halcyon", "Ionix")
     name_suffixes = ("Systems", "Industries", "Group", "Corp", "Labs", "Works")
     letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    for i in range(24):
-        stream = derive_stream(params.seed, f"company:{i}")
-        sector = sector_names[stream.randint(0, len(sector_names) - 1)]
-        ticker = "".join(letters[stream.randint(0, 25)] for _ in range(4))
-        name = (
-            f"{name_roots[stream.randint(0, len(name_roots) - 1)]} "
-            f"{name_suffixes[stream.randint(0, len(name_suffixes) - 1)]}"
-        )
+    for slot in range(company_count):
+        stream = _roster_stream(context, slot)
+        sector = stream.pick("sector", sector_names, 0)
+        attempt = 0
+        while True:
+            ticker = _ticker_candidate(stream, attempt, letters)
+            if ticker not in used_tickers:
+                break
+            attempt += 1
+            if attempt > 10_000:
+                raise RuntimeError(f"could not find a unique ticker for roster slot {slot:03d}")
+        used_tickers.add(ticker)
+        name = f"{stream.pick('name_root', name_roots, 0)} {stream.pick('name_suffix', name_suffixes, 0)}"
         roster.append({"ticker": ticker, "name": name, "sector": sector})
-    return params.seed, roster
+    return roster
+
+
+def build_economy(
+    params: EconomyParamsV2,
+    world_id: str = "fuzzer-000000",
+    company_count: int = 24,
+    *,
+    semantic_rng: SemanticRNG | None = None,
+) -> tuple[int, list[dict[str, str]]]:
+    """Deterministically derive a roster using stable ``ROSTER:<slot>`` identities."""
+    params.validate()
+    context = semantic_rng or SemanticRNG(world_id, params.seed)
+    return params.seed, _generate_roster(context, company_count)
 
 
 # --------------------------------------------------------------------------- #
@@ -401,20 +476,45 @@ class EconomyEngineV2:
         params: EconomyParamsV2,
         interventions: tuple[InterventionV2, ...] = (),
         world_id: str = "fuzzer-000000",
+        *,
+        roster: list[dict[str, str]] | None = None,
+        company_count: int | None = None,
     ) -> None:
         self.params = params.validate()
         self.interventions = tuple(sorted(interventions, key=lambda iv: (iv.company, iv.variable, iv.start)))
         self.world_id = world_id
-        _, roster = build_economy(params)
-        self.roster = roster
-        self._macro_rng = derive_stream(params.seed, "macro")
-        self._industry_rng = derive_stream(params.seed, "industry")
-        self._news_rng = derive_stream(params.seed, "news")
-        self._company_rngs = {
-            c["ticker"]: derive_stream(params.seed, f"latent:{c['ticker']}") for c in roster
+        self._rng = SemanticRNG(world_id, self.params.seed)
+        if roster is None:
+            _, self.roster = build_economy(
+                self.params,
+                world_id=self.world_id,
+                company_count=24 if company_count is None else company_count,
+                semantic_rng=self._rng,
+            )
+        else:
+            self.roster = _validated_roster(roster, company_count)
+        self._entity_ids = {
+            company["ticker"]: _company_entity_id(company["ticker"]) for company in self.roster
         }
-        self._est_rngs = {c["ticker"]: derive_stream(params.seed, f"est:{c['ticker']}") for c in roster}
-        self._price_rngs = {c["ticker"]: derive_stream(params.seed, f"price:{c['ticker']}") for c in roster}
+        self._initial_rngs = {
+            ticker: self._rng.stream(entity_id, "initial_state")
+            for ticker, entity_id in self._entity_ids.items()
+        }
+        self._company_rngs = {
+            ticker: self._rng.stream(entity_id, "operations")
+            for ticker, entity_id in self._entity_ids.items()
+        }
+        self._est_rngs = {
+            ticker: self._rng.stream(entity_id, "estimates") for ticker, entity_id in self._entity_ids.items()
+        }
+        self._price_rngs = {
+            ticker: self._rng.stream(entity_id, "price") for ticker, entity_id in self._entity_ids.items()
+        }
+        self._macro_rng = self._rng.stream(WORLD, "macro")
+        self._industry_rngs = {
+            sector: self._rng.stream(f"{SECTOR_ENTITY_PREFIX}{sector}", "industry")
+            for sector in sorted({company["sector"] for company in self.roster})
+        }
 
     # ------------------------------------------------------------------ #
     # interventions
@@ -454,9 +554,11 @@ class EconomyEngineV2:
             inflation = p.inflation_trend + p.inflation_amplitude * _sin(
                 2.0 * _pi * year_float / p.inflation_period_years
             )
-            if q > 0 and rng.uniform() < 1.0 / max(p.regime_persistence_years * 4.0, 1.0):
+            if q > 0 and rng.uniform("regime_transition_probability", q) < 1.0 / max(
+                p.regime_persistence_years * 4.0, 1.0
+            ):
                 others = [s for s in p.regime_states if s != regime]
-                regime = others[rng.randint(0, len(others) - 1)]
+                regime = rng.pick("regime_transition", others, q)
             gdp += _REGIME_DEMAND[regime]
             rate_shock_bps = self._clamp(WORLD, "rate_shock_bps", when_q)
             rate_delta = rate_shock_bps / 10_000.0 if rate_shock_bps is not None else 0.0
@@ -502,16 +604,17 @@ class EconomyEngineV2:
 
         # per-company dynamic state
         st: dict[str, dict[str, float | object]] = {}
+        initial_shares: dict[str, float] = {}
         for company in self.roster:
             ticker = company["ticker"]
             sector = company["sector"]
             sp = _sector_params(sector)
-            rng = self._company_rngs[ticker]
+            rng = self._initial_rngs[ticker]
 
-            size = rng.lognormal(0.0, p.size_dispersion)
+            size = rng.lognormal("size", 0.0, p.size_dispersion, 0)
             base_revenue = 250e6 * size
-            equity0 = base_revenue * (0.8 + 0.4 * rng.uniform())
-            leverage0 = max(0.05, 0.35 + p.leverage_dispersion * rng.normal())
+            equity0 = base_revenue * (0.8 + 0.4 * rng.uniform("equity_fraction", 0))
+            leverage0 = max(0.05, 0.35 + p.leverage_dispersion * rng.normal("leverage", 0))
             revenue_q = base_revenue / 4.0
             debt = max(0.0, equity0 * leverage0)
             cash = equity0 * 0.10
@@ -523,14 +626,15 @@ class EconomyEngineV2:
                 equity0 * 0.05,
                 equity0 - (debt - cash) - pp_e_net - receivables - inventory + payables,
             )
-            shares = max(1.0, round((base_revenue / 25.0) * rng.uniform_range(0.7, 1.3)))
+            shares = max(1.0, round((base_revenue / 25.0) * rng.uniform_range("initial_shares", 0.7, 1.3, 0)))
+            initial_shares[ticker] = shares
             st[ticker] = {
                 "revenue_q": revenue_q,
-                "growth": 0.06 + p.growth_dispersion * rng.normal(),
-                "growth0": 0.06 + p.growth_dispersion * rng.normal(),
-                "gross_margin0": sp["gross_margin"] + p.margin_dispersion * rng.normal(),
-                "gross_margin": sp["gross_margin"] + p.margin_dispersion * rng.normal(),
-                "shares": max(1.0, round((base_revenue / 25.0) * rng.uniform_range(0.7, 1.3))),
+                "growth": 0.06 + p.growth_dispersion * rng.normal("growth", 0),
+                "growth0": 0.06 + p.growth_dispersion * rng.normal("growth0", 0),
+                "gross_margin0": sp["gross_margin"] + p.margin_dispersion * rng.normal("gross_margin0", 0),
+                "gross_margin": sp["gross_margin"] + p.margin_dispersion * rng.normal("gross_margin", 0),
+                "shares": shares,
                 "debt": debt,
                 "cash": cash,
                 "pp_e_net": pp_e_net,
@@ -541,11 +645,11 @@ class EconomyEngineV2:
                 "demand_index": 1.0,
                 "input_cost_index": 1.0,
                 "labor_cost_index": 1.0,
-                "pricing_power": _clamp01(0.5 + 0.3 * rng.normal()),
-                "market_share": _clamp01(0.02 + 0.08 * abs(rng.normal())),
-                "mgmt_quality": _clamp01(0.5 + 0.25 * rng.normal()),
+                "pricing_power": _clamp01(0.5 + 0.3 * rng.normal("pricing_power", 0)),
+                "market_share": _clamp01(0.02 + 0.08 * abs(rng.normal("market_share", 0))),
+                "mgmt_quality": _clamp01(0.5 + 0.25 * rng.normal("management_quality", 0)),
                 "debt_stress": 0.2,
-                "liquidity": _clamp01(0.5 + 0.2 * rng.normal()),
+                "liquidity": _clamp01(0.5 + 0.2 * rng.normal("liquidity", 0)),
                 "fraud_open": False,
                 "fraud_start": None,
                 "active": True,
@@ -560,14 +664,19 @@ class EconomyEngineV2:
             fq = (qi % 4) + 1
 
             # ---- industry dynamics (once per sector per quarter) -------- #
-            irng = self._industry_rng
             for sector in sorted({c["sector"] for c in self.roster}):
+                irng = self._industry_rngs[sector]
                 ist = sector_state.setdefault(sector, {"momentum": 0.0, "shock": 0.0, "intensity": 0.5})
-                ist["momentum"] = 0.7 * ist["momentum"] + 0.3 * irng.normal() * p.industry_growth_dispersion
+                ist["momentum"] = (
+                    0.7 * ist["momentum"]
+                    + 0.3 * irng.normal("momentum_shock", qi) * p.industry_growth_dispersion
+                )
                 ist["shock"] = max(0.0, ist["shock"] * 0.5)
-                if irng.uniform() < 0.04 * p.shock_intensity:
-                    ist["shock"] = abs(irng.normal()) * 0.5
-                ist["intensity"] = _clamp01(0.9 * ist["intensity"] + 0.1 * (0.5 + 0.2 * irng.normal()))
+                if irng.uniform("shock_event", qi) < 0.04 * p.shock_intensity:
+                    ist["shock"] = abs(irng.normal("shock_magnitude", qi)) * 0.5
+                ist["intensity"] = _clamp01(
+                    0.9 * ist["intensity"] + 0.1 * (0.5 + 0.2 * irng.normal("competitive_intensity", qi))
+                )
 
             # ---- companies ---------------------------------------------- #
             for company in self.roster:
@@ -588,7 +697,7 @@ class EconomyEngineV2:
 
                 # ---- macro -> company ------------------------------------ #
                 prior_demand = float(s["demand_index"])
-                demand_noise = rng.normal() * 0.04
+                demand_noise = rng.normal("demand_noise", qi) * 0.04
                 if demand_clamp is not None:
                     demand_index = demand_clamp
                 else:
@@ -605,12 +714,20 @@ class EconomyEngineV2:
                 input_cost_index = max(
                     0.2,
                     float(s["input_cost_index"])
-                    * (1.0 + 0.55 * (macro.inflation - p.inflation_trend) + rng.normal() * 0.015),
+                    * (
+                        1.0
+                        + 0.55 * (macro.inflation - p.inflation_trend)
+                        + rng.normal("input_cost_noise", qi) * 0.015
+                    ),
                 )
                 labor_cost_index = max(
                     0.2,
                     float(s["labor_cost_index"])
-                    * (1.0 + 0.45 * (macro.inflation - p.inflation_trend) + rng.normal() * 0.010),
+                    * (
+                        1.0
+                        + 0.45 * (macro.inflation - p.inflation_trend)
+                        + rng.normal("labor_cost_noise", qi) * 0.010
+                    ),
                 )
                 s["input_cost_index"] = input_cost_index
                 s["labor_cost_index"] = labor_cost_index
@@ -621,7 +738,7 @@ class EconomyEngineV2:
                     float(s["growth0"]) * (0.6 + 0.8 * float(s["mgmt_quality"]))
                     + 0.35 * (macro.gdp_growth - p.gdp_trend) * sp["demand_beta"]
                     - 0.30 * (ist["intensity"] - 0.5)
-                    + rng.normal() * 0.05
+                    + rng.normal("growth_noise", qi) * 0.05
                 )
                 growth = max(-0.45, min(0.60, growth))
                 s["growth"] = growth
@@ -632,7 +749,7 @@ class EconomyEngineV2:
                 # ---- fraud bookkeeping ------------------------------------ #
                 # always draw, then clamp: interventions must not perturb the
                 # random draw sequence, only the state they intervene on
-                fraud_draw = _clamp01(0.5 + 0.15 * rng.normal())
+                fraud_draw = _clamp01(0.5 + 0.15 * rng.normal("fraud_propensity", qi))
                 fraud_prop = fraud_clamp if fraud_clamp is not None else fraud_draw
                 distress_proxy = float(s["debt_stress"]) * 0.6 + (1.0 - float(s["liquidity"])) * 0.4
                 # organic fraud is RARE: either an extreme latent propensity,
@@ -663,7 +780,7 @@ class EconomyEngineV2:
                     float(s["gross_margin0"]) * (price_realization / max(cost_push, 0.5))
                     - 0.10 * (ist["intensity"] - 0.5)
                     + 0.02 * (float(s["mgmt_quality"]) - 0.5)
-                    + rng.normal() * 0.008
+                    + rng.normal("gross_margin_noise", qi) * 0.008
                 )
                 s["gross_margin"] = gross_margin
 
@@ -875,7 +992,11 @@ class EconomyEngineV2:
                 had_prior_est = s["prior_est"] is not None
                 prior_est = s["prior_est"]
                 prior_est = float(prior_est) if had_prior_est else revenue_q * (1.0 + p.analyst_bias)
-                est_now = prior_est * (1.0 + p.analyst_bias) * (1.0 + est_rng.normal() * p.analyst_noise)
+                est_now = (
+                    prior_est
+                    * (1.0 + p.analyst_bias)
+                    * (1.0 + est_rng.normal("revenue_error", qi) * p.analyst_noise)
+                )
                 issued_at = when - timedelta(days=45)
                 estimates.append(
                     EstimateRowV2(
@@ -907,7 +1028,7 @@ class EconomyEngineV2:
                 # Current-quarter earnings and guidance are published after this row.
                 price_rng = self._price_rngs[ticker]
                 drift = 0.10 * growth / 4.0
-                ret = drift + price_rng.normal() * p.price_noise
+                ret = drift + price_rng.normal("return_noise", qi) * p.price_noise
                 prev_close = float(s["prior_close"])
                 close = max(0.5, prev_close * (1.0 + ret))
                 prices.append(
@@ -918,7 +1039,10 @@ class EconomyEngineV2:
                         high=max(prev_close, close) * 1.005,
                         low=min(prev_close, close) * 0.995,
                         close=close,
-                        volume=max(1.0, shares * 0.001 * price_rng.uniform_range(0.5, 1.5)),
+                        volume=max(
+                            1.0,
+                            shares * 0.001 * price_rng.uniform_range("volume_scale", 0.5, 1.5, qi),
+                        ),
                     )
                 )
                 s["prior_close"] = close
@@ -971,6 +1095,11 @@ class EconomyEngineV2:
             events=events,
             defaults=defaults,
             fraud_windows=fraud_windows,
+            initial_shares=initial_shares,
+            rng_namespace=NAMESPACE_VERSION,
+            rng_transform_versions=dict(TRANSFORM_VERSIONS),
+            stream_registry=self._rng.manifest(),
+            rng_world_id=self._rng.rng_world_id,
         )
 
 
@@ -978,6 +1107,15 @@ def run_economy(
     params: EconomyParamsV2,
     interventions: tuple[InterventionV2, ...] = (),
     world_id: str = "fuzzer-000000",
+    *,
+    roster: list[dict[str, str]] | None = None,
+    company_count: int | None = None,
 ) -> WorldOutcomeV2:
     """Build and run a deterministic V2 world in one call."""
-    return EconomyEngineV2(params, interventions, world_id).run()
+    return EconomyEngineV2(
+        params,
+        interventions,
+        world_id,
+        roster=roster,
+        company_count=company_count,
+    ).run()
