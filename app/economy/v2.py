@@ -880,7 +880,9 @@ class EconomyEngineV2:
                         revenue=revenue,
                         cogs=cogs,
                         gross_profit=gross_profit,
-                        operating_expenses=float(income["sga"]),
+                        # total operating expenses as filed: SG&A plus depreciation, so that
+                        # gross_profit - operating_expenses == operating_income
+                        operating_expenses=float(income["sga"]) + float(income["depreciation"]),
                         ebit=ebit,
                         interest_expense=interest_expense,
                         pretax_income=pretax,
@@ -966,13 +968,16 @@ class EconomyEngineV2:
                     continue
 
                 # ---- earnings call, guidance, estimates, prices -------------- #
+                # Public events are publications: they carry the margin implied by the filed
+                # statements (gross_margin_pub), never the latent true margin. Under fraud the two
+                # differ, and a real management team guides and reports on filed numbers.
                 pending_guidance = s["guidance"]
                 guidance_met: bool | None = (
-                    gross_margin >= _numeric_float(pending_guidance, "guidance") * 0.98
+                    gross_margin_pub >= _numeric_float(pending_guidance, "guidance") * 0.98
                     if pending_guidance is not None
                     else None
                 )
-                next_guidance = gross_margin * (1.0 + 0.02 * (_state_float(s, "mgmt_quality") - 0.5))
+                next_guidance = gross_margin_pub * (1.0 + 0.02 * (_state_float(s, "mgmt_quality") - 0.5))
                 s["guidance"] = next_guidance
 
                 earnings.append(
@@ -998,7 +1003,7 @@ class EconomyEngineV2:
                         payload={
                             "revenue": round(revenue, 2),
                             "net_income": round(reported_ni, 2),
-                            "gross_margin": round(gross_margin, 6),
+                            "gross_margin": round(gross_margin_pub, 6),
                             "guidance_met": bool(guidance_met) if guidance_met is not None else False,
                         },
                     )

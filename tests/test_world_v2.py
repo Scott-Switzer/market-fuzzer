@@ -74,11 +74,10 @@ def test_income_statement_adds_up():
     for q in w.quarters:
         depreciation = cash_flow_by_period[(q.company, q.period_end)].depreciation
         assert q.gross_profit == pytest.approx(q.revenue - q.cogs, rel=1e-9, abs=1e-6)
-        assert q.ebit == pytest.approx(
-            q.gross_profit - q.operating_expenses - depreciation,
-            rel=1e-9,
-            abs=1e-6,
-        )
+        # M7 semantics: operating_expenses is the filed total (SG&A + depreciation), so the
+        # statement foots the way a 10-K does: gross profit - total operating expenses = EBIT.
+        assert q.ebit == pytest.approx(q.gross_profit - q.operating_expenses, rel=1e-9, abs=1e-6)
+        assert q.operating_expenses >= depreciation
         assert q.pretax_income == pytest.approx(q.ebit - q.interest_expense, rel=1e-9, abs=1e-6)
         if q.pretax_income >= 0:
             assert q.tax_expense == pytest.approx(q.pretax_income * 0.21, rel=1e-9, abs=0.01)

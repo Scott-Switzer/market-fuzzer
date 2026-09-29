@@ -363,7 +363,7 @@ def build_world_v2_registry() -> MechanismRegistry:
         "company.earnings",
         "company",
         (
-            "margin.gross_true",
+            "quarters.gross_margin",
             "quarters.revenue",
             "quarters.net_income",
             "management_quality",
@@ -376,7 +376,7 @@ def build_world_v2_registry() -> MechanismRegistry:
         "company.earnings_call_event",
         "company",
         (
-            "margin.gross_true",
+            "quarters.gross_margin",
             "quarters.revenue",
             "quarters.net_income",
             "earnings.guidance_met",
