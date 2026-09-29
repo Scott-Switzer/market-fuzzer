@@ -303,7 +303,10 @@ class PPEAsset:
         if elapsed == self.useful_life_periods:
             return self.depreciable_amount
         regular = money(self.depreciable_amount / Decimal(self.useful_life_periods))
-        return regular * Decimal(elapsed)
+        # Cent rounding of the periodic amount must never schedule accumulation
+        # beyond the depreciable base (e.g. 0.03 over 5 periods rounds to 0.01
+        # per period, which would over-accumulate by period 4).
+        return min(regular * Decimal(elapsed), self.depreciable_amount)
 
 
 @dataclass(frozen=True, slots=True)

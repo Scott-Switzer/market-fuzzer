@@ -1,0 +1,23 @@
+{
+  "source_repository": "https://github.com/Scott-Switzer/financial-system-core",
+  "source_commit": "d9df2d41ac797df14df3deec654d844af4ff8ee9",
+  "license": "MIT",
+  "purpose": "Canonical FWF kernel stateful/mutation test surface, vendored byte-for-byte for the M5 nightly. These are not a Market Fuzzer-authored copy and must never be edited here; regenerate from the canonical repository instead.",
+  "note": "tests/m5/kernel_stateful/ is a second, separate vendor group. The kernel source snapshot itself is pinned in app/_vendor/fwf_kernel/SOURCE.json; M5 extended that manifest from six to eight files (adding qc.py and semantic_rng.py). Both groups record the same source_commit: the canonical commit that contains every pinned byte (this group's test surface includes the M5 machine_settings budget helper and the three machines routed through it). This commit also carries the M5.2 stateful finding fix: PPE straight-line schedules now cap accumulation at the depreciable base, with a regression test in kernel/tests/test_subledgers.py.",
+  "source_paths": [
+    "kernel/tests/machine_settings.py",
+    "kernel/tests/test_kernel.py",
+    "kernel/tests/test_subledgers.py",
+    "kernel/tests/test_equity.py",
+    "kernel/tests/test_filings.py",
+    "kernel/tests/golden/rng_v3.json"
+  ],
+  "sha256": {
+    "kernel/tests/machine_settings.py": "3d4dfba13826a62cfd8214075937286b72e3c6db4446d9b33856ff86d1f4fd33",
+    "kernel/tests/test_kernel.py": "bc72841f8bed0ce5359816dbf9a183ce5fbcddac419560a3a50d2807fba24337",
+    "kernel/tests/test_subledgers.py": "31b3b970f139cd7a0135324902071df1ee3cca43cf4df77f2fe2afe36fa442d1",
+    "kernel/tests/test_equity.py": "f2acabc0db038418f5868089d108101329c72c42704fe59ccbb6cdf56a88be21",
+    "kernel/tests/test_filings.py": "3920ca4348fe49904d70f5d01341643f36c4082999c5ddaba9db246dc8197fa9",
+    "kernel/tests/golden/rng_v3.json": "76333e98dc97eeb65097003e6d14afad0ab08d441f17697c5308d5c3ac1ef62e"
+  }
+}

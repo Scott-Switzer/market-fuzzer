@@ -1,0 +1,28 @@
+# M5 accounting-hardening tooling — TEST/VALIDATION ONLY.
+#
+# These packages are verification infrastructure for the vendored FWF accounting
+# kernel. They are deliberately NOT in requirements.txt / requirements.lock and
+# must never become a Market Fuzzer runtime or FWF kernel runtime dependency.
+#
+# Install into an isolated environment, e.g.:
+#   uv venv --python 3.12 .venv-m5
+#   uv pip install --python .venv-m5 -r requirements-m5.txt
+#
+# python-accounting declares hard dependencies on `mysqlclient` and `psycopg2`,
+# neither of which builds without a system MySQL/libpq toolchain and neither of
+# which the oracle needs: the M5 oracle is SQLite-only. Install it with
+# `--no-deps` plus the explicit runtime dependencies it actually imports:
+#
+#   uv pip install --python .venv-m5 --no-deps python-accounting==1.0.1
+#   uv pip install --python .venv-m5 'sqlalchemy>=2.0.23,<3' \
+#       'python-dateutil>=2.8.2,<3' 'strenum>=0.4.15,<0.5' 'toml>=0.10.2,<0.11'
+#
+# `mutmut` below is the only other M5 addition. `hypothesis` and `numpy` are
+# already Market Fuzzer dev/runtime dependencies at the versions pinned here; the
+# isolated env needs its own copies because it is built without the application
+# graph.
+
+python-accounting==1.0.1
+mutmut==3.8.0
+hypothesis>=6.130,<7
+numpy>=2,<3
