@@ -1,0 +1,21 @@
+{
+  "_note": "SEMANTIC_RNG_V3 vectors generated once with NumPy Philox counter [0, period, draw, 0]. The unchanged V2 file is retained as historical evidence; never regenerate either file to make a test pass.",
+  "namespace_version": "SEMANTIC_RNG_V3",
+  "raw_A_p3_d0_n4": [
+    17808481158497600400,
+    12907484391326523584,
+    11772879509484593154,
+    1275222375816255461
+  ],
+  "uniform_A_p3_d0_n4": [
+    0.9653996980355135,
+    0.6997161309199478,
+    0.6382090770296638,
+    0.06912994351310542
+  ],
+  "normal_N_p0_d0_n3": [
+    -0.028834719748263446,
+    -1.1949102813352988,
+    0.9563500928831609
+  ]
+}

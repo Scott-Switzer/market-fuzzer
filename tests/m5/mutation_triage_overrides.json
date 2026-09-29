@@ -1,0 +1,246 @@
+{
+  "schema_version": 1,
+  "note": "Reviewed per-mutant verdicts for survivors whose unobservability needs a proof specific to the site, rather than one of the structural rules in scripts/m5_triage.py. Every rationale below is an argument about a particular line of the vendored kernel; none of them is a blanket dismissal. Mutant names use mutmut's own separator (U+01C1) between module, class and function.",
+  "mutants": {
+    "fwf_kernel.ledger.xǁLedgerǁclose__mutmut_30": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "guarded-strict-comparison",
+      "rationale": "The mutated test is 'v < 0' widened to 'v <= 0'. The three lines immediately above it are 'if v == 0: continue', so v is provably non-zero by the time the comparison runs; for a non-zero Decimal, 'v <= 0' and 'v < 0' select the same arm. The equality case the mutant adds cannot be reached, so the widened comparison is the same function on the whole reachable domain."
+    },
+    "fwf_kernel.ledger.xǁLedgerǁclose__mutmut_38": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "lookup-key-not-assignment-target",
+      "rationale": "The mutation changes the key of a dict.get on the right-hand side, not the assignment target, which stays 'side[a]'. 'side' is populated only with names drawn from CHART plus 'retained_earnings', so None is never one of its keys and side.get(None, ZERO) is always the ZERO default. The loop body iterates the distinct keys of the balances mapping, so 'a' is a fresh key on every iteration and the original side.get(a, ZERO) also reads the default. Both forms therefore evaluate to side[a] = ZERO + abs(v)."
+    },
+    "fwf_kernel.ledger.xǁLedgerǁclose__mutmut_64": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "both-sides-always-populated-together",
+      "rationale": "The mutation requires both side mappings to be non-empty where the original requires either. Every swept account contributes to exactly one side, and the retained-earnings leg is then added to the side implied by the sign of net. If net is non-zero that leg fills whichever side was empty, so both are non-empty; if net is zero, non-empty dr implies non-empty cr because the debit and credit totals agree at the same value, and symmetrically. The two conditions therefore hold on exactly the same reachable states, and any state where they differ is one the JournalEntry balance check would reject anyway."
+    },
+    "fwf_kernel.ledger.x_cash_flow_direct__mutmut_24": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "excluded-cash-literal-is-a-no-op",
+      "rationale": "The mutation missells the 'cash' account name in the exclusion, so the cash line joins the set of counterparty cf_class values being classified. CHART['cash'].cf_class is CF.cash, a member distinct from CF.investing and CF.financing, and the classifier only ever tests membership of those two before defaulting to CF.operating. Adding a CF.cash element to the set therefore cannot change which arm is taken. The same holds for the uppercase variant."
+    },
+    "fwf_kernel.ledger.x_cash_flow_direct__mutmut_25": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "excluded-cash-literal-is-a-no-op",
+      "rationale": "The uppercase counterpart of mutant 24: it missells 'cash' as 'CASH', so the cash line is no longer excluded from the counterparty class set. CHART['cash'].cf_class is CF.cash, which is neither CF.investing nor CF.financing, so adding it to the set leaves the classifier's chosen arm unchanged."
+    },
+    "fwf_kernel.ledger.xǁLedgerǁpost__mutmut_4": {
+      "classification": "UNREACHABLE_DEFENSIVE_CODE",
+      "rule": "pre-validated-frozen-argument",
+      "rationale": "'if e.period < 0' cannot be true when post is called, because post's argument is a JournalEntry and JournalEntry.__post_init__ rejects a negative period while constructing one. The record is frozen and slotted, so its period cannot be changed after construction either. The guard is defence in depth against a caller that bypasses the constructor, which no reachable path does; the line is unreachable, so no change to its text is observable. Note this is a stronger claim than 'the message is not accounting data': the line itself cannot run."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁpay_accrued_interest__mutmut_24": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "conjunction-rearrangement-equivalent",
+      "rationale": "The mutation rearranges a conjunction in the pay_accrued_interest schedule filter or the validate_reconciliations contiguity ternary. In every surviving case the rearranged form is provably equivalent on the reachable domain: the filter's three conjuncts run over schedules whose unpaid_amount is > ZERO, whose period is <= the payment period, and whose tranche matches; the contiguity clause's `prior is not None` is pinned by the schedule set (a schedule at issued_period+1 has no prior because accrue_interest forbids pre-issue periods, so the `or` and widened forms of `period > issued_period + 1` only differ where `prior` is None and the branch outcome is unchanged; narrowing `> issued_period + 1` to `>= issued_period + 1` only differs at period == issued_period + 1 where prior is None and both arms agree). The or/and rewrite therefore selects the same arm on every constructible book."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁvalidate_reconciliations__mutmut_275": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "conjunction-rearrangement-equivalent",
+      "rationale": "The mutation rewrites the conjunction in the interest-schedule contiguity ternary. Its differing states all require an accrued-interest schedule dated at or before the tranche's issue period (period <= issued_period): at period == issued_period + 1 the prior entry would have to be a schedule at issued_period, and the widened/narrowed period forms only differ where the schedule sits at or before issued_period + 1 with prior present. Such a schedule can never influence the validator's outcome: the guard two comparisons earlier (`schedule.period <= tranche.issued_period`) rejects it, and even under a mutation of that guard the contiguity branch still evaluates expected_opening to None for a pre-issue period (period == issued_period + 1 is false and prior is absent or itself pre-issue) and raises 'non-contiguous interest schedule'. Either way the ACCT-DEBT-SCHEDULE rule fires identically, so the set of reported failures is unchanged for every constructible book."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁvalidate_reconciliations__mutmut_276": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "conjunction-rearrangement-equivalent",
+      "rationale": "The mutation rewrites the conjunction in the interest-schedule contiguity ternary. Its differing states all require an accrued-interest schedule dated at or before the tranche's issue period (period <= issued_period): at period == issued_period + 1 the prior entry would have to be a schedule at issued_period, and the widened/narrowed period forms only differ where the schedule sits at or before issued_period + 1 with prior present. Such a schedule can never influence the validator's outcome: the guard two comparisons earlier (`schedule.period <= tranche.issued_period`) rejects it, and even under a mutation of that guard the contiguity branch still evaluates expected_opening to None for a pre-issue period (period == issued_period + 1 is false and prior is absent or itself pre-issue) and raises 'non-contiguous interest schedule'. Either way the ACCT-DEBT-SCHEDULE rule fires identically, so the set of reported failures is unchanged for every constructible book."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁvalidate_reconciliations__mutmut_278": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "conjunction-rearrangement-equivalent",
+      "rationale": "The mutation rewrites the conjunction in the interest-schedule contiguity ternary. Its differing states all require an accrued-interest schedule dated at or before the tranche's issue period (period <= issued_period): at period == issued_period + 1 the prior entry would have to be a schedule at issued_period, and the widened/narrowed period forms only differ where the schedule sits at or before issued_period + 1 with prior present. Such a schedule can never influence the validator's outcome: the guard two comparisons earlier (`schedule.period <= tranche.issued_period`) rejects it, and even under a mutation of that guard the contiguity branch still evaluates expected_opening to None for a pre-issue period (period == issued_period + 1 is false and prior is absent or itself pre-issue) and raises 'non-contiguous interest schedule'. Either way the ACCT-DEBT-SCHEDULE rule fires identically, so the set of reported failures is unchanged for every constructible book."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁvalidate_reconciliations__mutmut_279": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "conjunction-rearrangement-equivalent",
+      "rationale": "The mutation rewrites the conjunction in the interest-schedule contiguity ternary. Its differing states all require an accrued-interest schedule dated at or before the tranche's issue period (period <= issued_period): at period == issued_period + 1 the prior entry would have to be a schedule at issued_period, and the widened/narrowed period forms only differ where the schedule sits at or before issued_period + 1 with prior present. Such a schedule can never influence the validator's outcome: the guard two comparisons earlier (`schedule.period <= tranche.issued_period`) rejects it, and even under a mutation of that guard the contiguity branch still evaluates expected_opening to None for a pre-issue period (period == issued_period + 1 is false and prior is absent or itself pre-issue) and raises 'non-contiguous interest schedule'. Either way the ACCT-DEBT-SCHEDULE rule fires identically, so the set of reported failures is unchanged for every constructible book."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁ_fifo_plan__mutmut_16": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "strict-inequality-on-provably-positive",
+      "rationale": "The mutation widens `> ZERO` to `>= ZERO` on a variable that is provably strictly positive at that point. _fifo_plan's consumed is min(layer.remaining_cost, remaining) with remaining > 0 (the caller's allow_zero=False guard rejects zero amounts) and every layer's remaining_cost <= original_cost with original_cost > 0 enforced by InventoryLayer.__post_init__; depreciate_ppe's allocation is guarded non-negative two lines above (a negative allocation raises) and an allocation of exactly ZERO only skips the allocations list when the total is zero, which the total==0 early return already handles; pay_accrued_interest's paid is min(schedule.unpaid_amount, remaining) where the schedule filter required unpaid_amount > ZERO and remaining is the positive payment remainder. The plan set and posted amounts are identical on the reachable domain."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁdepreciate_ppe__mutmut_18": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "strict-inequality-on-provably-positive",
+      "rationale": "The mutation widens `> ZERO` to `>= ZERO` on a variable that is provably strictly positive at that point. _fifo_plan's consumed is min(layer.remaining_cost, remaining) with remaining > 0 (the caller's allow_zero=False guard rejects zero amounts) and every layer's remaining_cost <= original_cost with original_cost > 0 enforced by InventoryLayer.__post_init__; depreciate_ppe's allocation is guarded non-negative two lines above (a negative allocation raises) and an allocation of exactly ZERO only skips the allocations list when the total is zero, which the total==0 early return already handles; pay_accrued_interest's paid is min(schedule.unpaid_amount, remaining) where the schedule filter required unpaid_amount > ZERO and remaining is the positive payment remainder. The plan set and posted amounts are identical on the reachable domain."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁpay_accrued_interest__mutmut_43": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "strict-inequality-on-provably-positive",
+      "rationale": "The mutation widens `> ZERO` to `>= ZERO` on a variable that is provably strictly positive at that point. _fifo_plan's consumed is min(layer.remaining_cost, remaining) with remaining > 0 (the caller's allow_zero=False guard rejects zero amounts) and every layer's remaining_cost <= original_cost with original_cost > 0 enforced by InventoryLayer.__post_init__; depreciate_ppe's allocation is guarded non-negative two lines above (a negative allocation raises) and an allocation of exactly ZERO only skips the allocations list when the total is zero, which the total==0 early return already handles; pay_accrued_interest's paid is min(schedule.unpaid_amount, remaining) where the schedule filter required unpaid_amount > ZERO and remaining is the positive payment remainder. The plan set and posted amounts are identical on the reachable domain."
+    },
+    "fwf_kernel.equity.xǁEquityBookǁissue_common_shares__mutmut_58": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "implied-conjunct-guard",
+      "rationale": "The mutated guard fires exactly when apic < ZERO because apic = proceeds - par_capital on the cent grid makes par_capital > proceeds implied by apic < 0, and apic == 0 implies proceeds == par_capital exactly, so the added conjunct never fires in a state the first disjunct missed. Equivalent."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁvalidate_reconciliations__mutmut_269": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "conjunction-rearrangement-equivalent",
+      "rationale": "The mutation rewrites the conjunction in the interest-schedule contiguity ternary. Its differing states all require an accrued-interest schedule dated at or before the tranche's issue period (period <= issued_period): at period == issued_period + 1 the prior entry would have to be a schedule at issued_period, and the widened/narrowed period forms only differ where the schedule sits at or before issued_period + 1 with prior present. Such a schedule can never influence the validator's outcome: the guard two comparisons earlier (`schedule.period <= tranche.issued_period`) rejects it, and even under a mutation of that guard the contiguity branch still evaluates expected_opening to None for a pre-issue period (period == issued_period + 1 is false and prior is absent or itself pre-issue) and raises 'non-contiguous interest schedule'. Either way the ACCT-DEBT-SCHEDULE rule fires identically, so the set of reported failures is unchanged for every constructible book."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁvalidate_reconciliations__mutmut_247": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "shadowed-guard-equivalent",
+      "rationale": "The mutation narrows `schedule.period <= tranche.issued_period` to `<`, admitting schedules dated exactly at the issue period. Any such schedule is still rejected later in the same loop: for period == issued_period the contiguity ternary evaluates `period == tranche.issued_period + 1` to false and prior is either absent or itself pre-issue, so expected_opening is None and 'non-contiguous interest schedule' raises. For periods before the issue period the same ternary also yields None. The ACCT-DEBT-SCHEDULE rule therefore fires for exactly the same books under mutant and original; the test test_an_interest_schedule_may_not_sit_at_the_issue_period is a positive control that documents the rejection, and survives under the mutant because the reported rule set is identical."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁvalidate_reconciliations__mutmut_27": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "construction-guaranteed-bound",
+      "rationale": "The mutation narrows a validator `<=`/`>=` to a strict comparison, so only the boundary value (zero, or equality with a cap) is newly accepted. Every record reaching these checks passes through a frozen dataclass __post_init__ that enforces exactly that bound: ReceivableInvoice/PayableInvoice reject original_amount == 0 via money(..., allow_zero=False), InventoryLayer rejects original_cost == 0, PPEAsset rejects gross_cost == 0, residual_value >= gross_cost, and useful_life_periods <= 0, DebtTranche rejects maturity_period <= issued_period and original_principal == 0. The records are frozen=True/slots=True, the kernel never writes record attributes outside __post_init__ (the only object.__setattr__ sites), and OperationalBook.__init__ re-constructs every record through _copy_records/_copy_interest_schedules, so __post_init__ runs on every path into the book. The boundary states the mutated validator would admit are exactly the ones __post_init__ rejects, so the validator accepts and rejects the same set of constructible books: equivalent."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁvalidate_reconciliations__mutmut_69": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "construction-guaranteed-bound",
+      "rationale": "The mutation narrows a validator `<=`/`>=` to a strict comparison, so only the boundary value (zero, or equality with a cap) is newly accepted. Every record reaching these checks passes through a frozen dataclass __post_init__ that enforces exactly that bound: ReceivableInvoice/PayableInvoice reject original_amount == 0 via money(..., allow_zero=False), InventoryLayer rejects original_cost == 0, PPEAsset rejects gross_cost == 0, residual_value >= gross_cost, and useful_life_periods <= 0, DebtTranche rejects maturity_period <= issued_period and original_principal == 0. The records are frozen=True/slots=True, the kernel never writes record attributes outside __post_init__ (the only object.__setattr__ sites), and OperationalBook.__init__ re-constructs every record through _copy_records/_copy_interest_schedules, so __post_init__ runs on every path into the book. The boundary states the mutated validator would admit are exactly the ones __post_init__ rejects, so the validator accepts and rejects the same set of constructible books: equivalent."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁvalidate_reconciliations__mutmut_104": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "construction-guaranteed-bound",
+      "rationale": "The mutation narrows a validator `<=`/`>=` to a strict comparison, so only the boundary value (zero, or equality with a cap) is newly accepted. Every record reaching these checks passes through a frozen dataclass __post_init__ that enforces exactly that bound: ReceivableInvoice/PayableInvoice reject original_amount == 0 via money(..., allow_zero=False), InventoryLayer rejects original_cost == 0, PPEAsset rejects gross_cost == 0, residual_value >= gross_cost, and useful_life_periods <= 0, DebtTranche rejects maturity_period <= issued_period and original_principal == 0. The records are frozen=True/slots=True, the kernel never writes record attributes outside __post_init__ (the only object.__setattr__ sites), and OperationalBook.__init__ re-constructs every record through _copy_records/_copy_interest_schedules, so __post_init__ runs on every path into the book. The boundary states the mutated validator would admit are exactly the ones __post_init__ rejects, so the validator accepts and rejects the same set of constructible books: equivalent."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁvalidate_reconciliations__mutmut_146": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "construction-guaranteed-bound",
+      "rationale": "The mutation narrows a validator `<=`/`>=` to a strict comparison, so only the boundary value (zero, or equality with a cap) is newly accepted. Every record reaching these checks passes through a frozen dataclass __post_init__ that enforces exactly that bound: ReceivableInvoice/PayableInvoice reject original_amount == 0 via money(..., allow_zero=False), InventoryLayer rejects original_cost == 0, PPEAsset rejects gross_cost == 0, residual_value >= gross_cost, and useful_life_periods <= 0, DebtTranche rejects maturity_period <= issued_period and original_principal == 0. The records are frozen=True/slots=True, the kernel never writes record attributes outside __post_init__ (the only object.__setattr__ sites), and OperationalBook.__init__ re-constructs every record through _copy_records/_copy_interest_schedules, so __post_init__ runs on every path into the book. The boundary states the mutated validator would admit are exactly the ones __post_init__ rejects, so the validator accepts and rejects the same set of constructible books: equivalent."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁvalidate_reconciliations__mutmut_148": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "construction-guaranteed-bound",
+      "rationale": "The mutation narrows a validator `<=`/`>=` to a strict comparison, so only the boundary value (zero, or equality with a cap) is newly accepted. Every record reaching these checks passes through a frozen dataclass __post_init__ that enforces exactly that bound: ReceivableInvoice/PayableInvoice reject original_amount == 0 via money(..., allow_zero=False), InventoryLayer rejects original_cost == 0, PPEAsset rejects gross_cost == 0, residual_value >= gross_cost, and useful_life_periods <= 0, DebtTranche rejects maturity_period <= issued_period and original_principal == 0. The records are frozen=True/slots=True, the kernel never writes record attributes outside __post_init__ (the only object.__setattr__ sites), and OperationalBook.__init__ re-constructs every record through _copy_records/_copy_interest_schedules, so __post_init__ runs on every path into the book. The boundary states the mutated validator would admit are exactly the ones __post_init__ rejects, so the validator accepts and rejects the same set of constructible books: equivalent."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁvalidate_reconciliations__mutmut_150": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "construction-guaranteed-bound",
+      "rationale": "The mutation narrows a validator `<=`/`>=` to a strict comparison, so only the boundary value (zero, or equality with a cap) is newly accepted. Every record reaching these checks passes through a frozen dataclass __post_init__ that enforces exactly that bound: ReceivableInvoice/PayableInvoice reject original_amount == 0 via money(..., allow_zero=False), InventoryLayer rejects original_cost == 0, PPEAsset rejects gross_cost == 0, residual_value >= gross_cost, and useful_life_periods <= 0, DebtTranche rejects maturity_period <= issued_period and original_principal == 0. The records are frozen=True/slots=True, the kernel never writes record attributes outside __post_init__ (the only object.__setattr__ sites), and OperationalBook.__init__ re-constructs every record through _copy_records/_copy_interest_schedules, so __post_init__ runs on every path into the book. The boundary states the mutated validator would admit are exactly the ones __post_init__ rejects, so the validator accepts and rejects the same set of constructible books: equivalent."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁvalidate_reconciliations__mutmut_209": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "construction-guaranteed-bound",
+      "rationale": "The mutation narrows a validator `<=`/`>=` to a strict comparison, so only the boundary value (zero, or equality with a cap) is newly accepted. Every record reaching these checks passes through a frozen dataclass __post_init__ that enforces exactly that bound: ReceivableInvoice/PayableInvoice reject original_amount == 0 via money(..., allow_zero=False), InventoryLayer rejects original_cost == 0, PPEAsset rejects gross_cost == 0, residual_value >= gross_cost, and useful_life_periods <= 0, DebtTranche rejects maturity_period <= issued_period and original_principal == 0. The records are frozen=True/slots=True, the kernel never writes record attributes outside __post_init__ (the only object.__setattr__ sites), and OperationalBook.__init__ re-constructs every record through _copy_records/_copy_interest_schedules, so __post_init__ runs on every path into the book. The boundary states the mutated validator would admit are exactly the ones __post_init__ rejects, so the validator accepts and rejects the same set of constructible books: equivalent."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁvalidate_reconciliations__mutmut_210": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "construction-guaranteed-bound",
+      "rationale": "The mutation narrows a validator `<=`/`>=` to a strict comparison, so only the boundary value (zero, or equality with a cap) is newly accepted. Every record reaching these checks passes through a frozen dataclass __post_init__ that enforces exactly that bound: ReceivableInvoice/PayableInvoice reject original_amount == 0 via money(..., allow_zero=False), InventoryLayer rejects original_cost == 0, PPEAsset rejects gross_cost == 0, residual_value >= gross_cost, and useful_life_periods <= 0, DebtTranche rejects maturity_period <= issued_period and original_principal == 0. The records are frozen=True/slots=True, the kernel never writes record attributes outside __post_init__ (the only object.__setattr__ sites), and OperationalBook.__init__ re-constructs every record through _copy_records/_copy_interest_schedules, so __post_init__ runs on every path into the book. The boundary states the mutated validator would admit are exactly the ones __post_init__ rejects, so the validator accepts and rejects the same set of constructible books: equivalent."
+    },
+    "fwf_kernel.subledgers.xǁPPEAssetǁ_target_accumulation__mutmut_19": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "post-maturity-exactness",
+      "rationale": "The mutation raises the floor in `max(period - first_operating_period + 1, 0)` from 0 to 1. The floor is only reached when the asset is not yet in service (period < placed_in_service_period), and depreciate_ppe skips such assets entirely (`if period < asset.placed_in_service_period: continue`), so _target_accumulation is never called with a negative elapsed term through any public path. The floor value is therefore dead for every reachable call: equivalent."
+    },
+    "fwf_kernel.filings.xǁFilingBookǁversion_status__mutmut_38": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "dict-get-always-hit",
+      "rationale": "The mutation changes dict.get(version.filing_id, ()) to a None default. version always comes from self._versions, and every version registered in _append_version is also appended to _by_filing[filing_id], so the key is always present and the default is never returned: equivalent."
+    },
+    "fwf_kernel.filings.xǁFilingBookǁversion_status__mutmut_40": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "dict-get-always-hit",
+      "rationale": "The mutation changes dict.get(version.filing_id, ()) to a None default. version always comes from self._versions, and every version registered in _append_version is also appended to _by_filing[filing_id], so the key is always present and the default is never returned: equivalent."
+    },
+    "fwf_kernel.filings.xǁFilingBookǁ_validate_version_append__mutmut_5": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "dict-get-empty-default",
+      "rationale": "The mutation changes the empty-list default of _by_filing.get to None (or drops it). The result is read only in truthiness positions (`if series:`, `if not series:`) in _validate_version_append, and in version_status the key is always present (see get-always-hit). None and [] are both falsy and never iterated on the falsy path, so every branch is identical: equivalent."
+    },
+    "fwf_kernel.filings.xǁFilingBookǁ_validate_version_append__mutmut_7": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "dict-get-empty-default",
+      "rationale": "The mutation changes the empty-list default of _by_filing.get to None (or drops it). The result is read only in truthiness positions (`if series:`, `if not series:`) in _validate_version_append, and in version_status the key is always present (see get-always-hit). None and [] are both falsy and never iterated on the falsy path, so every branch is identical: equivalent."
+    },
+    "fwf_kernel.equity.xǁEquityBookǁissue_common_shares__mutmut_28": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "shadowed-mutator-guard",
+      "rationale": "The mutated flag reaches _validate_effective_event_timing, but the ShareEvent the mutator constructs is validated again by its own frozen __post_init__, which recomputes timestamps_required=self.kind is not SPLIT from the immutable kind and raises the same ValueError message for an issuance/repurchase without timestamps. The mutator's call therefore cannot accept any event the record constructor rejects: the pair (mutator guard, record guard) produces the same exception either way, no event is appended, no entry is posted, and the book state is unchanged. Equivalent on every call."
+    },
+    "fwf_kernel.equity.xǁEquityBookǁissue_common_shares__mutmut_33": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "shadowed-mutator-guard",
+      "rationale": "The mutated flag reaches _validate_effective_event_timing, but the ShareEvent the mutator constructs is validated again by its own frozen __post_init__, which recomputes timestamps_required=self.kind is not SPLIT from the immutable kind and raises the same ValueError message for an issuance/repurchase without timestamps. The mutator's call therefore cannot accept any event the record constructor rejects: the pair (mutator guard, record guard) produces the same exception either way, no event is appended, no entry is posted, and the book state is unchanged. Equivalent on every call."
+    },
+    "fwf_kernel.equity.xǁEquityBookǁrepurchase_common_shares__mutmut_28": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "shadowed-mutator-guard",
+      "rationale": "The mutated flag reaches _validate_effective_event_timing, but the ShareEvent the mutator constructs is validated again by its own frozen __post_init__, which recomputes timestamps_required=self.kind is not SPLIT from the immutable kind and raises the same ValueError message for an issuance/repurchase without timestamps. The mutator's call therefore cannot accept any event the record constructor rejects: the pair (mutator guard, record guard) produces the same exception either way, no event is appended, no entry is posted, and the book state is unchanged. Equivalent on every call."
+    },
+    "fwf_kernel.equity.xǁEquityBookǁrepurchase_common_shares__mutmut_33": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "shadowed-mutator-guard",
+      "rationale": "The mutated flag reaches _validate_effective_event_timing, but the ShareEvent the mutator constructs is validated again by its own frozen __post_init__, which recomputes timestamps_required=self.kind is not SPLIT from the immutable kind and raises the same ValueError message for an issuance/repurchase without timestamps. The mutator's call therefore cannot accept any event the record constructor rejects: the pair (mutator guard, record guard) produces the same exception either way, no event is appended, no entry is posted, and the book state is unchanged. Equivalent on every call."
+    },
+    "fwf_kernel.equity.xǁEquityBookǁ_ordered_events__mutmut_4": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "order-priority-spacing",
+      "rationale": "The mutation raises REPURCHASE's priority from 2 to 3. The sort only ever compares (effective_date, priority, index) tuples of events whose kinds are drawn from {SPLIT: 0, ISSUANCE: 1, REPURCHASE: 2}; no event kind carries priority 3, so REPURCHASE events still sort after ISSUANCE and after SPLIT exactly as before, and same-kind comparisons fall through to the index tiebreaker unchanged. The ordering is identical for every event list: equivalent."
+    },
+    "fwf_kernel.equity.xǁEquityBookǁvalidate_reconciliations__mutmut_49": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "window-pairing-reachable-agreement",
+      "rationale": "The elif is only reached when the pairing check `(period_start is None) != (period_end is None)` is False, i.e. both bounds are None or both are set. On both-set states `and` and `or` are equal; on both-None states both forms are False and no WASO/EPS validation runs. There is no reachable state where the two forms differ, because the one-None state is consumed by the pairing check above. Equivalent."
+    },
+    "fwf_kernel.subledgers.x__copy_records__mutmut_10": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "record-id-prevalidated",
+      "rationale": "The mutation narrows the id guard `not isinstance(str) or not record_id` to `and`. The disjunction can only differ for a record_id that is a non-string with falsy value or a non-string with truthy value; every record flowing through _copy_records is a frozen kernel record whose id field is validated by its own __post_init__ (via _text) to be a non-empty string, so `isinstance(record_id, str)` is always True and the `or`/`and` forms coincide (both evaluate `not record_id`). Equivalent on every constructible book."
+    },
+    "fwf_kernel.subledgers.x__unique_ids__mutmut_13": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "zip-equal-length-by-construction",
+      "rationale": "zip() is called with two lists built from the same mapping in the same iteration order: actual_ids has exactly one entry per key, so the sequences always have equal length and strict=True never raises; strict=False and dropping the keyword behave identically on equal-length inputs. The mismatch guard below the zip is the real check and is unaffected. Equivalent."
+    },
+    "fwf_kernel.subledgers.x__unique_ids__mutmut_16": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "zip-equal-length-by-construction",
+      "rationale": "zip() is called with two lists built from the same mapping in the same iteration order: actual_ids has exactly one entry per key, so the sequences always have equal length and strict=True never raises; strict=False and dropping the keyword behave identically on equal-length inputs. The mismatch guard below the zip is the real check and is unaffected. Equivalent."
+    },
+    "fwf_kernel.subledgers.x__unique_ids__mutmut_17": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "zip-equal-length-by-construction",
+      "rationale": "zip() is called with two lists built from the same mapping in the same iteration order: actual_ids has exactly one entry per key, so the sequences always have equal length and strict=True never raises; strict=False and dropping the keyword behave identically on equal-length inputs. The mismatch guard below the zip is the real check and is unaffected. Equivalent."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁacquire_ppe_asset__mutmut_14": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "record-shadows-mutator-zero-guard",
+      "rationale": "The mutated mutator accepts a zero amount, but the frozen record it then constructs re-enforces the identical bound in its own __post_init__ (money(original/gross/principal, allow_zero=False)) and raises the same ValueError message 'amount must be positive' before the mutator posts anything or writes any dict. The mutators pass their amount as both the original and the outstanding/opening field of the record, so the record constructor sees exactly the zero the mutated money() admitted, and the call's observable outcome (exception type, message, no ledger entry, no record stored, entry sequence unchanged) is identical to the original's rejection. Equivalent on every call."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁacquire_ppe_asset__mutmut_15": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "record-shadows-mutator-zero-guard",
+      "rationale": "The mutated mutator accepts a zero amount, but the frozen record it then constructs re-enforces the identical bound in its own __post_init__ (money(original/gross/principal, allow_zero=False)) and raises the same ValueError message 'amount must be positive' before the mutator posts anything or writes any dict. The mutators pass their amount as both the original and the outstanding/opening field of the record, so the record constructor sees exactly the zero the mutated money() admitted, and the call's observable outcome (exception type, message, no ledger entry, no record stored, entry sequence unchanged) is identical to the original's rejection. Equivalent on every call."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁborrow_debt__mutmut_14": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "record-shadows-mutator-zero-guard",
+      "rationale": "The mutated mutator accepts a zero amount, but the frozen record it then constructs re-enforces the identical bound in its own __post_init__ (money(original/gross/principal, allow_zero=False)) and raises the same ValueError message 'amount must be positive' before the mutator posts anything or writes any dict. The mutators pass their amount as both the original and the outstanding/opening field of the record, so the record constructor sees exactly the zero the mutated money() admitted, and the call's observable outcome (exception type, message, no ledger entry, no record stored, entry sequence unchanged) is identical to the original's rejection. Equivalent on every call."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁborrow_debt__mutmut_15": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "record-shadows-mutator-zero-guard",
+      "rationale": "The mutated mutator accepts a zero amount, but the frozen record it then constructs re-enforces the identical bound in its own __post_init__ (money(original/gross/principal, allow_zero=False)) and raises the same ValueError message 'amount must be positive' before the mutator posts anything or writes any dict. The mutators pass their amount as both the original and the outstanding/opening field of the record, so the record constructor sees exactly the zero the mutated money() admitted, and the call's observable outcome (exception type, message, no ledger entry, no record stored, entry sequence unchanged) is identical to the original's rejection. Equivalent on every call."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁissue_inventory_payable__mutmut_16": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "record-shadows-mutator-zero-guard",
+      "rationale": "The mutated mutator accepts a zero amount, but the frozen record it then constructs re-enforces the identical bound in its own __post_init__ (money(original/gross/principal, allow_zero=False)) and raises the same ValueError message 'amount must be positive' before the mutator posts anything or writes any dict. The mutators pass their amount as both the original and the outstanding/opening field of the record, so the record constructor sees exactly the zero the mutated money() admitted, and the call's observable outcome (exception type, message, no ledger entry, no record stored, entry sequence unchanged) is identical to the original's rejection. Equivalent on every call."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁissue_inventory_payable__mutmut_17": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "record-shadows-mutator-zero-guard",
+      "rationale": "The mutated mutator accepts a zero amount, but the frozen record it then constructs re-enforces the identical bound in its own __post_init__ (money(original/gross/principal, allow_zero=False)) and raises the same ValueError message 'amount must be positive' before the mutator posts anything or writes any dict. The mutators pass their amount as both the original and the outstanding/opening field of the record, so the record constructor sees exactly the zero the mutated money() admitted, and the call's observable outcome (exception type, message, no ledger entry, no record stored, entry sequence unchanged) is identical to the original's rejection. Equivalent on every call."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁissue_receivable__mutmut_14": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "record-shadows-mutator-zero-guard",
+      "rationale": "The mutated mutator accepts a zero amount, but the frozen record it then constructs re-enforces the identical bound in its own __post_init__ (money(original/gross/principal, allow_zero=False)) and raises the same ValueError message 'amount must be positive' before the mutator posts anything or writes any dict. The mutators pass their amount as both the original and the outstanding/opening field of the record, so the record constructor sees exactly the zero the mutated money() admitted, and the call's observable outcome (exception type, message, no ledger entry, no record stored, entry sequence unchanged) is identical to the original's rejection. Equivalent on every call."
+    },
+    "fwf_kernel.subledgers.xǁOperationalBookǁissue_receivable__mutmut_15": {
+      "classification": "EQUIVALENT_MUTANT",
+      "rule": "record-shadows-mutator-zero-guard",
+      "rationale": "The mutated mutator accepts a zero amount, but the frozen record it then constructs re-enforces the identical bound in its own __post_init__ (money(original/gross/principal, allow_zero=False)) and raises the same ValueError message 'amount must be positive' before the mutator posts anything or writes any dict. The mutators pass their amount as both the original and the outstanding/opening field of the record, so the record constructor sees exactly the zero the mutated money() admitted, and the call's observable outcome (exception type, message, no ledger entry, no record stored, entry sequence unchanged) is identical to the original's rejection. Equivalent on every call."
+    }
+  }
+}

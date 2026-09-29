@@ -106,9 +106,13 @@ def test_vendored_kernel_is_the_exact_recorded_snapshot() -> None:
     source = json.loads((kernel_dir / "SOURCE.json").read_text())
 
     assert source["source_repository"] == "https://github.com/Scott-Switzer/financial-system-core"
-    assert source["source_commit"] == "b533ef0ddf89b6de0041b2f64dc59514f40da46f"
+    # M5: both vendor groups pin the canonical commit that contains every pinned
+    # byte, including the vendored kernel_stateful test surface. This commit
+    # carries the M5.2 stateful finding fix (PPE depreciation capped at the
+    # depreciable base) and its regression test.
+    assert source["source_commit"] == "d9df2d41ac797df14df3deec654d844af4ff8ee9"
     assert source["license"] == "MIT"
-    assert len(source["source_paths"]) == 6
+    assert len(source["source_paths"]) == 8
     assert {Path(path).name for path in source["source_paths"]} == {
         "__init__.py",
         "temporal.py",
@@ -116,12 +120,12 @@ def test_vendored_kernel_is_the_exact_recorded_snapshot() -> None:
         "subledgers.py",
         "equity.py",
         "filings.py",
+        "qc.py",
+        "semantic_rng.py",
     }
     assert {path.name for path in kernel_dir.glob("*.py")} == {
         Path(path).name for path in source["source_paths"]
     }
-    assert not (kernel_dir / "semantic_rng.py").exists()
-    assert not (kernel_dir / "qc.py").exists()
 
     for source_path in source["source_paths"]:
         local_path = kernel_dir / Path(source_path).name

@@ -17,6 +17,11 @@ artifacts/*
 # Local Python envs and scratch
 .venv*/
 tmp/
+
+# M5 mutation-testing scratch: regenerated from the pinned vendor snapshot on
+# every run by scripts/m5_mutation.py, never a source of truth.
+.m5-mutation/
+mutants/
 tmp_check.py
 .supercode-launch.sh
 

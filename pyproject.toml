@@ -50,10 +50,38 @@ include = ["app*"]
 testpaths = ["tests"]
 addopts = "-q"
 
+# M5.3 mutation hardening.
+#
+# Mutation testing must exercise the *actual kernel byte content Market Fuzzer
+# ships*, so `source_paths` points at the vendored snapshot rather than at a
+# paraphrase. The killing suite is the vendored canonical Financial System Core
+# kernel test surface (see tests/m5/kernel_stateful/SOURCE.json), which is the
+# same bytes the canonical repository runs -- not a Market Fuzzer re-write.
+#
+# `only_mutate` restricts the run to the accounting-relevant accounting targets.
+# The differential oracle is deliberately NOT the killing suite: a hundred
+# sequences take far longer per candidate than a mutant budget can afford, and
+# the oracle's job is to prove cross-implementation agreement, not to pin every
+# branch.
+[tool.mutmut]
+source_paths = ["app/_vendor/fwf_kernel"]
+only_mutate = [
+  "app/_vendor/fwf_kernel/ledger.py",
+  "app/_vendor/fwf_kernel/subledgers.py",
+  "app/_vendor/fwf_kernel/equity.py",
+  "app/_vendor/fwf_kernel/filings.py",
+  "app/_vendor/fwf_kernel/temporal.py",
+]
+pytest_add_cli_args_test_selection = ["tests/m5/kernel_stateful"]
+pytest_add_cli_args = ["-p", "no:cacheprovider", "-x", "--no-header", "-q"]
+timeout_multiplier = 6.0
+timeout_constant = 30.0
+use_git_change_detection = false
+
 [tool.ruff]
 line-length = 110
 target-version = "py312"
-extend-exclude = ["app/_vendor/fwf_kernel"]
+extend-exclude = ["app/_vendor/fwf_kernel", "tests/m5/kernel_stateful"]
 force-exclude = true
 
 [tool.ruff.lint]
