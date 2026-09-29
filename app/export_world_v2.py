@@ -13,12 +13,16 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import platform
 import subprocess
+import sys
 from datetime import date
 from functools import cache
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+from app.causal.export import causal_graph_document
+from app.causal.world_v2 import build_world_v2_registry
 from app.economy.v2 import EconomyParamsV2, InterventionV2, WorldOutcomeV2, run_economy
 
 EXPORT_SCHEMA = "financial-world-release/v2"
@@ -41,6 +45,29 @@ def _git_sha() -> str:
         ).strip()
     except Exception:
         return "unavailable"
+
+
+def _logical_sha256(path: Path) -> str:
+    """Platform-independent hash: SHA-256 of the canonical JSON of the parsed document."""
+
+    return _canonical_json_sha256(json.loads(path.read_text()))
+
+
+def _environment() -> dict[str, Any]:
+    try:
+        import numpy
+
+        numpy_version = numpy.__version__
+    except ImportError:  # pragma: no cover - numpy is a hard dependency of the engine
+        numpy_version = "unavailable"
+    lock = Path(__file__).resolve().parent.parent / "requirements.lock"
+    return {
+        "python_version": platform.python_version(),
+        "numpy_version": numpy_version,
+        "platform": f"{sys.platform}-{platform.machine()}",
+        "lock_file": lock.name,
+        "lock_sha256": hashlib.sha256(lock.read_bytes()).hexdigest() if lock.exists() else "unavailable",
+    }
 
 
 def _iso(d: date) -> str:
@@ -123,7 +150,11 @@ def export_economy_v2(
                 "USD",
                 "pinned_fwf_kernel.income_statement.gross_profit",
             ),
-            "operating_expenses": (q.operating_expenses, "USD", "pinned_fwf_kernel.income_statement.sga"),
+            "operating_expenses": (
+                q.operating_expenses,
+                "USD",
+                "pinned_fwf_kernel.income_statement.sga+depreciation",
+            ),
             "depreciation": (
                 cash_flow_by_key[(q.company, q.period_end)].depreciation,
                 "USD",
@@ -405,6 +436,13 @@ def export_economy_v2(
         "companies": {ticker: outcome.accounting[ticker].evidence() for ticker in sorted(outcome.accounting)},
     }
     _write_json(output / "hidden" / "accounting.json", accounting_evidence)
+    _write_json(
+        output / "hidden" / "causal_graph.json",
+        causal_graph_document(
+            build_world_v2_registry().validate(),
+            cast("list[dict[str, Any]]", hidden["interventions"]),
+        ),
+    )
 
     # ---------------- manifest ---------------- #
     artifact_files = [
@@ -416,15 +454,18 @@ def export_economy_v2(
         "public/events.json",
         "hidden/world_state.json",
         "hidden/accounting.json",
+        "hidden/causal_graph.json",
     ]
     artifacts: dict[str, Any] = {}
     for rel in artifact_files:
         artifacts[rel] = {
             "path": rel,
             "sha256": _sha256(output / rel),
+            "logical_sha256": _logical_sha256(output / rel),
             "bytes": (output / rel).stat().st_size,
             "visibility": "hidden" if rel.startswith("hidden/") else "public",
         }
+    registry_hash = build_world_v2_registry().validate().registry_hash()
     manifest = {
         "schema": EXPORT_SCHEMA,
         "schema_version": "2",
@@ -453,7 +494,11 @@ def export_economy_v2(
                 "public/estimates.json",
                 "public/events.json",
             ],
-            "hidden": ["hidden/world_state.json", "hidden/accounting.json"],
+            "hidden": [
+                "hidden/world_state.json",
+                "hidden/accounting.json",
+                "hidden/causal_graph.json",
+            ],
         },
         "public_artifacts": [
             "public/entities.json",
@@ -463,13 +508,22 @@ def export_economy_v2(
             "public/estimates.json",
             "public/events.json",
         ],
-        "hidden_artifacts": ["hidden/world_state.json", "hidden/accounting.json"],
+        "hidden_artifacts": [
+            "hidden/world_state.json",
+            "hidden/accounting.json",
+            "hidden/causal_graph.json",
+        ],
         "company_count": len(outcome.companies),
         "quarter_count": len(outcome.quarters),
         "rng_namespace": outcome.rng_namespace,
         "rng_transform_versions": dict(outcome.rng_transform_versions),
         "rng_registry_sha256": _canonical_json_sha256(outcome.stream_registry),
         "artifact_hashes": artifacts,
+        "world_logical_sha256": _canonical_json_sha256(
+            {rel: entry["logical_sha256"] for rel, entry in sorted(artifacts.items())}
+        ),
+        "environment": _environment(),
+        "causal_registry_hash": registry_hash,
         "release_status": "world-v2-exported",
     }
     _write_json(output / "manifest.json", manifest)
