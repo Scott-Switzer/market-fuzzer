@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from datetime import date
 from typing import Any
+
+from benchmark_worlds import benchmark_universe, day_sessions
 
 from app.benchmark.model import SessionResult, TaskKind
 from app.benchmark.port import (
@@ -22,9 +23,7 @@ from app.benchmark.universe import (
     BenchmarkUniverse,
     EcologyProfile,
     EvaluationPartition,
-    build_universe,
 )
-from app.market.calendar import trading_days
 from app.market.process import ProcessFamilyKind
 from app.world.rng import SemanticRNG
 
@@ -75,20 +74,20 @@ def _universe(
     sessions: int = 2,
     seed: int = 11,
     ecology: EcologyProfile = FAMILIAR_ECOLOGY,
-    family: ProcessFamilyKind = ProcessFamilyKind.GJR_FACTOR_T_V1,
+    family: str = ProcessFamilyKind.GJR_FACTOR_T_V1,
     partition: EvaluationPartition = EvaluationPartition.FAMILIAR,
     universe_id: str = "u-session",
     world_id: str = "w-session",
 ) -> BenchmarkUniverse:
-    return build_universe(
+    return benchmark_universe(
         universe_id=universe_id,
         world_id=world_id,
         seed=seed,
         ecology=ecology,
-        family=family,
+        family_id=str(family),
         partition=partition,
         security_count=count,
-        sessions=tuple(trading_days(date(2026, 6, 1), date(2026, 6, 30))[:sessions]),
+        sessions=day_sessions(sessions),
     )
 
 

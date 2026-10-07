@@ -3,9 +3,17 @@ from __future__ import annotations
 from typing import Any
 
 from app.benchmark.model import TaskKind
+from app.benchmark.plan import (
+    DEFAULT_PLAN_ID,
+    DEFAULT_PLAN_VERSION,
+    DatasetSplit,
+    default_evaluation_plan,
+    plan_worlds,
+)
 from app.benchmark.port import InProcessPort, StrategyDecisionPort
-from app.benchmark.runner import builtin_port_factory, run_benchmark, world_design
-from app.benchmark.universe import EvaluationPartition
+from app.benchmark.process_registry import EVALUATOR_PRIVATE_FAMILY, default_process_registry
+from app.benchmark.runner import builtin_port_factory, run_benchmark
+from app.benchmark.universe import DISTRIBUTION_ECOLOGY, FAMILIAR_ECOLOGY, EvaluationPartition
 from app.market.process import FAMILIAR_FAMILY, MECHANISM_FAMILIES
 
 
@@ -66,19 +74,72 @@ def test_mechanism_worlds_use_only_held_out_families() -> None:
     assert set(report.mechanism_families) == held_out
 
 
-def test_complete_world_assignment_covers_every_partition() -> None:
+def test_the_default_plan_reproduces_the_m10_6_world_assignment() -> None:
+    """World identity, seed, partition, generator, and ecology, exactly as M10.6."""
+
     expected = (
         EvaluationPartition.FAMILIAR,
         EvaluationPartition.DISTRIBUTION,
         EvaluationPartition.MECHANISM,
     )
-    for index in range(12):
-        partition, family, _ecology = world_design(index)
-        assert partition is expected[index % 3]
+    worlds = plan_worlds(
+        plan=default_evaluation_plan(),
+        registry=default_process_registry(),
+        count=12,
+        base_seed=12_345,
+    )
+    for index, world in enumerate(worlds):
+        partition = expected[index % 3]
+        assert world.partition is partition
+        assert world.world_id == f"bench-{index:04d}-{partition.value}"
+        assert world.seed == (12_345 * 1_000_003 + index * 7_919) % 2_147_483_647
+        assert world.split is DatasetSplit.PUBLIC_EVAL
         if partition is EvaluationPartition.MECHANISM:
-            assert family in MECHANISM_FAMILIES
+            assert world.family_id in {family.value for family in MECHANISM_FAMILIES}
+            assert world.ecology is DISTRIBUTION_ECOLOGY
         else:
-            assert family is FAMILIAR_FAMILY
+            assert world.family_id == FAMILIAR_FAMILY.value
+            assert world.ecology is (
+                FAMILIAR_ECOLOGY if partition is EvaluationPartition.FAMILIAR else DISTRIBUTION_ECOLOGY
+            )
+
+
+def test_a_run_is_labelled_with_the_plan_that_produced_it() -> None:
+    report = _run()
+    assert report.evaluation_plan_id == DEFAULT_PLAN_ID
+    assert report.evaluation_plan_version == DEFAULT_PLAN_VERSION
+    assert report.sealed_worlds == 0
+    text = report.render()
+    assert f"Evaluation plan: {DEFAULT_PLAN_ID} ({DEFAULT_PLAN_VERSION})" in text
+    assert "evaluator-private" not in text
+
+
+def test_a_public_run_names_its_process_families() -> None:
+    report = _run(worlds=12)
+    assert set(report.mechanism_families) == {family.value for family in MECHANISM_FAMILIES}
+    for outcome in report.outcomes:
+        assert outcome.split == DatasetSplit.PUBLIC_EVAL.value
+        assert outcome.process_family != EVALUATOR_PRIVATE_FAMILY
+
+
+def test_the_replay_record_carries_the_provenance_an_authorized_replay_needs() -> None:
+    report = _run()
+    for entry in report.replay_package["worlds"]:
+        assert entry["evaluation_plan_id"] == DEFAULT_PLAN_ID
+        assert entry["evaluation_plan_version"] == DEFAULT_PLAN_VERSION
+        assert entry["split"] == DatasetSplit.PUBLIC_EVAL.value
+        assert entry["process_family_visibility"] == "public"
+        assert len(entry["process_family_digest"]) == 64
+        assert len(entry["seed_material_digest"]) == 64
+        assert len(entry["generator_bundle_digest"]) == 64
+
+
+def test_provenance_digests_are_stable_across_runs() -> None:
+    first, second = _run(), _run()
+    for field in ("process_family_digest", "generator_bundle_digest", "seed_material_digest"):
+        assert [entry[field] for entry in first.replay_package["worlds"]] == [
+            entry[field] for entry in second.replay_package["worlds"]
+        ]
 
 
 def test_the_distribution_gap_isolates_the_ecology_shift() -> None:

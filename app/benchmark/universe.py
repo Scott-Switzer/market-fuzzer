@@ -1,4 +1,4 @@
-"""Synthetic securities universe for the exchange benchmark (M10.6).
+"""Synthetic securities universe for the exchange benchmark (M10.6.1).
 
 The universe is built from the M10 daily market engine: a cross-sectional factor
 structure whose innovations come from a selectable *process family*. The engine
@@ -6,7 +6,7 @@ produces daily OHLC paths for every synthetic company; the intraday
 limit-order-book session then emerges from the background agents around those
 fundamental anchors.
 
-M10.6 separates the two axes that M10.5 conflated:
+M10.6 separated the two axes that M10.5 conflated:
 
 * the **process family** -- how innovations are generated (GJR-GARCH-t,
   stochastic volatility, or regime-jump). See :mod:`app.market.process`.
@@ -14,46 +14,38 @@ M10.6 separates the two axes that M10.5 conflated:
   volatility level, displayed depth, fee schedule, and background-agent mix
   (:class:`EcologyProfile`).
 
-Evaluation partitions combine the two:
-
-* ``familiar``     -- baseline ecology, the familiar process family.
-* ``distribution`` -- shifted ecology, the familiar process family (the M10.5
-  parameter/ecology holdout).
-* ``mechanism``    -- shifted ecology, a process family the agent never saw.
-
-Every family is normalized to the same unconditional per-session variance per
-node, so a score change on the mechanism partition reflects the *dynamics* of the
-generator, not a volatility-level shift.
+M10.6.1 removes the last hard-coded link between the two: a universe is built from
+a resolved :class:`~app.benchmark.plan.PlannedWorld` and a
+:class:`~app.benchmark.process_registry.MarketProcessRegistry`, so the family is
+looked up by identifier instead of being restricted to a public enum. The role
+parameters and the variance normalization for the built-in families now live with
+their definitions in :mod:`app.benchmark.process_registry`.
 """
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Literal
 
-from app.market.engine import EntitySpec, GjrGarchT, MarketWorld, ProcessFamily, simulate_daily_market
-from app.market.process import (
-    FAMILIAR_FAMILY,
-    MarkovRegimeJumpFactorT,
-    ProcessFamilyKind,
-    StochasticVolFactorT,
-)
+from app.benchmark.process_registry import MarketProcessRegistry, ProcessNodeRole
+from app.market.engine import EntitySpec, MarketWorld, simulate_daily_market
 from app.world.rng import SemanticRNG
+
+if TYPE_CHECKING:  # pragma: no cover - import-cycle guard, never executed at runtime
+    from app.benchmark.plan import PlannedWorld
 
 __all__ = [
     "DISTRIBUTION_ECOLOGY",
     "EvaluationPartition",
     "EcologyProfile",
     "FAMILIAR_ECOLOGY",
-    "FAMILIAR_FAMILY",
-    "LiquidityRegime",
-    "PUBLIC_PROFILE",
     "HIDDEN_PROFILE",
-    "Security",
+    "PUBLIC_PROFILE",
     "BenchmarkUniverse",
+    "LiquidityRegime",
+    "Security",
     "build_universe",
 ]
 
@@ -147,111 +139,6 @@ PUBLIC_PROFILE = FAMILIAR_ECOLOGY
 HIDDEN_PROFILE = DISTRIBUTION_ECOLOGY
 
 
-# --- process-family construction ------------------------------------------------
-#
-# Base GJR-GARCH-t parameters per node role (M10.5 values). The two held-out
-# families are normalized to the same unconditional per-session variance, so the
-# family axis changes the *dynamics* of the path, not its scale.
-
-_GJR_PARAMS: dict[str, dict[str, float]] = {
-    "market": {"omega": 4.0e-6, "alpha": 0.03, "gamma": 0.09, "beta": 0.88, "nu": 6.0},
-    "sector": {"omega": 2.5e-6, "alpha": 0.04, "gamma": 0.08, "beta": 0.86, "nu": 7.0},
-    "entity": {"omega": 6.0e-6, "alpha": 0.05, "gamma": 0.10, "beta": 0.83, "nu": 5.0},
-}
-
-# (phi, sigma_eta, nu) for the stochastic-volatility family, per node role.
-_SV_SHAPE: dict[str, tuple[float, float, float]] = {
-    "market": (0.96, 0.14, 5.0),
-    "sector": (0.95, 0.15, 6.0),
-    "entity": (0.97, 0.13, 4.5),
-}
-
-# Shared regime-jump template; the per-role instance is rescaled to match the
-# GJR baseline's unconditional variance.
-_MRJ_TEMPLATE: dict[str, Any] = {
-    "transition": ((0.95, 0.05), (0.20, 0.80)),
-    "means": (0.0006, -0.0015),
-    "sigmas": (0.006, 0.018),
-    "jump_scale": (0.4, 2.0),
-    "jump_prob": 0.02,
-    "jump_mean": -0.0002,
-    "jump_sigma": 0.02,
-    "nu": 5.0,
-}
-
-
-def _gjr_base_variance(role: str) -> float:
-    params = _GJR_PARAMS[role]
-    persistence = params["alpha"] + 0.5 * params["gamma"] + params["beta"]
-    return params["omega"] / (1.0 - persistence)
-
-
-def _scaled_garch(scale: float, *, role: str) -> GjrGarchT:
-    """A GJR-GARCH-t with its variance scaled by ``scale`` (persistence unchanged)."""
-
-    params = _GJR_PARAMS[role]
-    return GjrGarchT(
-        omega=params["omega"] * scale * scale,
-        alpha=params["alpha"],
-        gamma=params["gamma"],
-        beta=params["beta"],
-        nu=params["nu"],
-    )
-
-
-def _stochastic_vol(*, role: str, volatility_scale: float) -> StochasticVolFactorT:
-    phi, sigma_eta, nu = _SV_SHAPE[role]
-    log_variance = sigma_eta**2 / (1.0 - phi**2)
-    # E[eps^2] = volatility_scale^2 * exp(mu + log_variance / 2), so matching the
-    # GJR baseline's variance fixes mu exactly.
-    mu = math.log(_gjr_base_variance(role)) - 0.5 * log_variance
-    return StochasticVolFactorT(mu=mu, phi=phi, sigma_eta=sigma_eta, nu=nu, volatility_scale=volatility_scale)
-
-
-def _markov_regime_jump(*, role: str, volatility_scale: float) -> MarkovRegimeJumpFactorT:
-    """A regime-jump family rescaled to the GJR baseline's unconditional variance.
-
-    Every innovation component (regime mean, regime volatility, and jump size) is
-    scaled by a common factor, so the whole path scales by that factor and the
-    matching is exact.
-    """
-
-    transition = _MRJ_TEMPLATE["transition"]
-    jump_scale = _MRJ_TEMPLATE["jump_scale"]
-    base = MarkovRegimeJumpFactorT(
-        means=_MRJ_TEMPLATE["means"],
-        sigmas=_MRJ_TEMPLATE["sigmas"],
-        jump_scale=jump_scale,
-        transition=transition,
-        jump_prob=_MRJ_TEMPLATE["jump_prob"],
-        jump_mean=_MRJ_TEMPLATE["jump_mean"],
-        jump_sigma=_MRJ_TEMPLATE["jump_sigma"],
-        nu=_MRJ_TEMPLATE["nu"],
-    )
-    factor = math.sqrt(_gjr_base_variance(role) / base.unconditional_variance())
-    return MarkovRegimeJumpFactorT(
-        means=tuple(value * factor for value in _MRJ_TEMPLATE["means"]),
-        sigmas=tuple(value * factor for value in _MRJ_TEMPLATE["sigmas"]),
-        jump_scale=jump_scale,
-        transition=transition,
-        jump_prob=_MRJ_TEMPLATE["jump_prob"],
-        jump_mean=_MRJ_TEMPLATE["jump_mean"] * factor,
-        jump_sigma=_MRJ_TEMPLATE["jump_sigma"] * factor,
-        nu=_MRJ_TEMPLATE["nu"],
-        volatility_scale=volatility_scale,
-    )
-
-
-def _family_for(family: ProcessFamilyKind, role: str, scale: float) -> ProcessFamily:
-    """Instantiate one node of ``family`` at ecology volatility ``scale``."""
-
-    if family is ProcessFamilyKind.GJR_FACTOR_T_V1:
-        return _scaled_garch(scale, role=role)
-    if family is ProcessFamilyKind.STOCHASTIC_VOL_FACTOR_T_V1:
-        return _stochastic_vol(role=role, volatility_scale=scale)
-    return _markov_regime_jump(role=role, volatility_scale=scale)
-
-
 @dataclass(frozen=True, slots=True)
 class Security:
     """One synthetic security and its generated daily fundamentals."""
@@ -270,13 +157,23 @@ class Security:
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkUniverse:
-    """A generated set of synthetic securities over a fixed session calendar."""
+    """A generated set of synthetic securities over a fixed session calendar.
+
+    Carries the full evaluator-side provenance of the world it materializes: which
+    plan produced it, which partition it belongs to, which family generated it,
+    and the family's commitment digest. None of it is agent-visible; the session
+    only ever hands the agent quotes, its own order state, and the task.
+    """
 
     universe_id: str
     world_id: str
     seed: int
     partition: str
     process_family: str
+    family_commitment: str
+    evaluation_plan_id: str
+    evaluation_plan_version: str
+    split: str
     ecology_label: str
     sessions: tuple[date, ...]
     securities: tuple[Security, ...]
@@ -299,7 +196,8 @@ def _build_market_world(
     seed: int,
     sessions: tuple[date, ...],
     securities: tuple[Security, ...],
-    family: ProcessFamilyKind,
+    family_id: str,
+    registry: MarketProcessRegistry,
     scale: float,
 ) -> MarketWorld:
     sectors = sorted({security.sector for security in securities})
@@ -307,8 +205,11 @@ def _build_market_world(
         world_id=world_id,
         seed=seed,
         sessions=sessions,
-        market=_family_for(family, "market", scale),
-        sectors={sector: _family_for(family, "sector", scale) for sector in sectors},
+        market=registry.build(family_id, role=ProcessNodeRole.MARKET, volatility_scale=scale),
+        sectors={
+            sector: registry.build(family_id, role=ProcessNodeRole.SECTOR, volatility_scale=scale)
+            for sector in sectors
+        },
         entities=tuple(
             EntitySpec(
                 symbol=security.symbol,
@@ -316,7 +217,7 @@ def _build_market_world(
                 beta=security.beta,
                 sector_beta=security.sector_beta,
                 drift=security.drift,
-                process=_family_for(family, "entity", scale),
+                process=registry.build(family_id, role=ProcessNodeRole.ENTITY, volatility_scale=scale),
             )
             for security in securities
         ),
@@ -330,21 +231,25 @@ def _scaled_ticks(price_ticks: float, ratio: float) -> int:
 def build_universe(
     *,
     universe_id: str,
-    world_id: str,
-    seed: int,
-    ecology: EcologyProfile,
+    planned: PlannedWorld,
+    registry: MarketProcessRegistry,
     security_count: int,
     sessions: tuple[date, ...],
-    family: ProcessFamilyKind = FAMILIAR_FAMILY,
-    partition: EvaluationPartition = EvaluationPartition.FAMILIAR,
 ) -> BenchmarkUniverse:
-    """Build a deterministic synthetic universe with a chosen ecology and family."""
+    """Materialize one planned world into a deterministic synthetic universe.
+
+    ``planned`` supplies the world identity, the seed, the ecology, the partition,
+    the process family, and the plan provenance; ``registry`` supplies the family
+    implementation. The market path depends only on those values, so the same
+    plan, family, and seed reproduce the same securities byte for byte.
+    """
 
     if security_count < 1:
         raise ValueError("a universe needs at least one security")
     if not sessions:
         raise ValueError("a universe needs at least one session")
-    rng = SemanticRNG(world_id, seed)
+    ecology = planned.ecology
+    rng = SemanticRNG(planned.world_id, planned.seed)
     sector_count = min(len(SECTORS), max(4, security_count // 4))
     sector_names = SECTORS[:sector_count]
     liquidity_cycle = ecology.liquidity_cycle
@@ -371,11 +276,12 @@ def build_universe(
     provisional = tuple(provisional_list)
 
     market_world = _build_market_world(
-        world_id=world_id,
-        seed=seed,
+        world_id=planned.world_id,
+        seed=planned.seed,
         sessions=sessions,
         securities=provisional,
-        family=family,
+        family_id=planned.family_id,
+        registry=registry,
         scale=ecology.volatility_scale,
     )
     market = simulate_daily_market(market_world)
@@ -403,10 +309,14 @@ def build_universe(
 
     return BenchmarkUniverse(
         universe_id=universe_id,
-        world_id=world_id,
-        seed=seed,
-        partition=partition.value,
-        process_family=family.value,
+        world_id=planned.world_id,
+        seed=planned.seed,
+        partition=planned.partition.value,
+        process_family=planned.family_id,
+        family_commitment=planned.family_commitment,
+        evaluation_plan_id=planned.plan_id,
+        evaluation_plan_version=planned.plan_version,
+        split=planned.split.value,
         ecology_label=ecology.label,
         sessions=sessions,
         securities=tuple(securities),

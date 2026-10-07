@@ -126,20 +126,19 @@ def test_taker_flow_cannot_receive_maker_credit() -> None:
 
 
 def test_maker_then_flatten_still_reports_peak_inventory() -> None:
-    from datetime import date
+    from benchmark_worlds import benchmark_universe, day_sessions
 
     from app.benchmark.session import BenchmarkSession, SessionConfig
     from app.benchmark.tasks import build_task_spec
-    from app.benchmark.universe import FAMILIAR_ECOLOGY, build_universe
-    from app.market.calendar import trading_days
+    from app.benchmark.universe import FAMILIAR_ECOLOGY
 
-    universe = build_universe(
+    universe = benchmark_universe(
         universe_id="u-adversarial",
         world_id="w-adversarial",
         seed=99,
         ecology=FAMILIAR_ECOLOGY,
         security_count=2,
-        sessions=tuple(trading_days(date(2026, 6, 1), date(2026, 6, 30))[:1]),
+        sessions=day_sessions(1),
     )
     task = build_task_spec(TaskKind.MARKET_MAKING, universe)
     state = {"step": 0}

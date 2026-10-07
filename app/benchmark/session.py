@@ -54,11 +54,51 @@ from app.exchange.v2_matching import AccountRiskLimitsV2, AccountStateV2, Matchi
 from app.strategy_protocol import StrategyActionV2, StrategyObservationV2, StrategyOpenOrderV2
 from app.world.rng import SemanticRNG, SemanticStream
 
-__all__ = ["BenchmarkSession", "SessionConfig"]
+__all__ = ["BenchmarkSession", "SessionConfig", "run_manifest"]
 
 AGENT_ACCOUNT = "agent"
 AGENT_SESSION_NAMESPACE = "fwf-benchmark-agent-session-v1"
 _REJECTED_KINDS = frozenset({"order_rejected", "cancel_rejected", "replace_rejected"})
+
+
+def run_manifest(
+    *,
+    universe: BenchmarkUniverse,
+    ecology: EcologyProfile,
+    task: TaskSpec,
+    port_name: str,
+) -> RunManifestV2:
+    """The evaluator-side commitment record for one world.
+
+    Depends only on the world's public specification, the task, and the agent
+    artifact, so the runner that owns the campaign can reproduce exactly the
+    manifest a session committed to rather than re-deriving the digests (and
+    risking a drift between the two). The process family reaches the ledger only
+    as a digest; it never reaches an observation.
+    """
+
+    return RunManifestV2(
+        specification_digest=digest(
+            {
+                "universe": universe.universe_id,
+                "task": task.kind.value,
+                "partition": universe.partition,
+                "ecology": ecology.label,
+                "process_family": universe.process_family,
+                "target_quantity": task.target_quantity,
+            }
+        ),
+        strategy_artifact_digest=digest({"port": port_name}),
+        generator_bundle_digest=digest(
+            {
+                "generator": "benchmark-session-v2",
+                "process_family": universe.process_family,
+                "market": universe.market_logical_sha256,
+            }
+        ),
+        campaign_commitment=digest({"world": universe.world_id, "seed": universe.seed}),
+        seed_material_digest=digest({"seed": universe.seed, "process_family": universe.process_family}),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,29 +158,11 @@ class BenchmarkSession:
             for instrument in instruments
         }
 
-        manifest = RunManifestV2(
-            specification_digest=digest(
-                {
-                    "universe": self.universe.universe_id,
-                    "task": self.task.kind.value,
-                    "partition": self.universe.partition,
-                    "ecology": self.ecology.label,
-                    "process_family": self.universe.process_family,
-                    "target_quantity": self.task.target_quantity,
-                }
-            ),
-            strategy_artifact_digest=digest({"port": self.port.name}),
-            generator_bundle_digest=digest(
-                {
-                    "generator": "benchmark-session-v2",
-                    "process_family": self.universe.process_family,
-                    "market": self.universe.market_logical_sha256,
-                }
-            ),
-            campaign_commitment=digest({"world": self.universe.world_id, "seed": self.universe.seed}),
-            seed_material_digest=digest(
-                {"seed": self.universe.seed, "process_family": self.universe.process_family}
-            ),
+        manifest = run_manifest(
+            universe=self.universe,
+            ecology=self.ecology,
+            task=self.task,
+            port_name=self.port.name,
         )
         exchange = MatchingExchangeV2(
             EventKernelV2(manifest),
