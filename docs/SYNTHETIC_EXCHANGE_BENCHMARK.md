@@ -57,11 +57,20 @@ node role**, so the family axis changes the *dynamics* of the path (volatility
 clustering, tails, drift regimes), not its level. `volatility_scale` is a pure
 scale that multiplies the unconditional variance by `scale²` without touching the
 dynamics — this is what keeps the ecology axis orthogonal to the family axis.
-Each family is stationary from its first session (the stochastic-volatility path
-starts in the stationary distribution of its latent log-variance, the regime-jump
-path in the stationary regime distribution) and mean-centred, and
-`unconditional_variance()` equals the variance the family actually generates — a
-regression test checks the realized variance of every family at every ecology
+
+The two held-out families also start in their stationary state: the
+stochastic-volatility path draws its initial log-variance from the stationary
+distribution of its latent process, and the regime-jump path draws its initial
+regime from the stationary regime distribution. The regime-jump innovations are
+mean-centred on the stationary mean, so that family carries no drift relative to
+the zero-mean GJR and stochastic-volatility families. `gjr_factor_t_v1` is the
+exception: it starts from a *fixed* variance equal to its unconditional variance,
+so its expected variance is right from the first session but its short-horizon
+*distribution* is not a draw from the stationary law. That is the M10.5 behaviour,
+left unchanged.
+
+`unconditional_variance()` equals the variance each family actually generates, and
+a regression test checks the realized variance of every family at every ecology
 level.
 
 ## Evaluation partitions
