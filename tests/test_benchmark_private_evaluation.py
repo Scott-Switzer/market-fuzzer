@@ -21,6 +21,7 @@ module. Nothing here is exported by ``app.benchmark``.
 
 from __future__ import annotations
 
+import inspect
 import json
 import math
 from collections.abc import Sequence
@@ -356,6 +357,28 @@ def test_an_unknown_family_reports_unknown_process_family() -> None:
     with pytest.raises(UnknownProcessFamilyError):
         registry.build("not_a_registered_family_v1", role=ProcessNodeRole.ENTITY, volatility_scale=1.0)
     assert registry.contains("not_a_registered_family_v1") is False
+
+
+def test_the_participant_facing_cli_cannot_be_asked_to_load_evaluator_code() -> None:
+    """The injection surface is trusted code, never a participant-facing knob.
+
+    A registry definition is a Python object handed over in-process. Nothing the
+    CLI exposes may name a family, a plan, a registry, or a module to import, so a
+    participant cannot widen the evaluation from outside.
+    """
+
+    from app.cli import benchmark_run
+
+    parameters = {name.lower() for name in inspect.signature(benchmark_run).parameters}
+    for forbidden in ("plan", "registry", "family", "module", "import", "ecolog", "path"):
+        assert not any(forbidden in name for name in parameters), forbidden
+    assert {"task", "agent", "worlds", "policy", "output"} <= parameters
+    # The public registry and the default plan are what a CLI run uses.
+    assert default_process_registry().family_ids() == (
+        "gjr_factor_t_v1",
+        "markov_regime_jump_factor_t_v1",
+        "stochastic_vol_factor_t_v1",
+    )
 
 
 def test_the_private_family_never_had_to_join_the_public_enum() -> None:
