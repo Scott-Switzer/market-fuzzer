@@ -5,9 +5,12 @@ structure whose innovations are GJR-GARCH-t. The engine produces daily OHLC path
 for every synthetic company; the intraday limit-order-book session then emerges
 from the background agents around those fundamental anchors.
 
-Holdout profiles implement *mechanism holdout*: the public family and the hidden
-family differ in volatility, liquidity depth, fee schedule, and background-agent
-mix while preserving the same public interface.
+Holdout profiles implement a *distribution/parameter-ecology holdout*: the public
+family and the hidden family differ in volatility, liquidity depth, fee schedule,
+and background-agent mix while preserving the same public interface. Both
+families still use the same GJR-GARCH-t process family, so this is not a
+process-family (mechanism) holdout; true generator-family OOD evaluation is M10.6
+scope.
 """
 
 from __future__ import annotations
@@ -49,7 +52,7 @@ _HIDDEN_LIQUIDITY: tuple[LiquidityRegime, ...] = ("thin", "thin", "deep", "norma
 
 @dataclass(frozen=True, slots=True)
 class HoldoutProfile:
-    """A generated-market family. Hidden profiles exercise mechanism holdout."""
+    """A generated-market family. Hidden profiles exercise a distribution holdout."""
 
     label: str
     holdout: HoldoutClass
@@ -89,7 +92,7 @@ PUBLIC_PROFILE = HoldoutProfile(
 )
 
 HIDDEN_PROFILE = HoldoutProfile(
-    label="hidden-mechanism-holdout",
+    label="hidden-distribution-holdout",
     holdout="hidden",
     volatility_scale=1.7,
     depth_scale=0.55,

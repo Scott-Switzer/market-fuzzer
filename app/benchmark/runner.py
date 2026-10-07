@@ -1,11 +1,19 @@
 """Benchmark runner: sealed worlds, public/hidden partitions, and the report.
 
 ``run_benchmark`` generates ``worlds`` sealed synthetic worlds from the same
-generator family. Half of them are *public* (baseline family) and half are
-*hidden* (mechanism-holdout family). The generalization gap is the difference in
-mean score between the two partitions: a positive gap means the agent
-generalizes to the held-out mechanisms; a large negative gap means it has
-overfit the public generator.
+generator family. Half of them are *public* (baseline distribution) and half are
+*hidden* (distribution/parameter-ecology holdout: different volatility, depth,
+fee schedule, and agent mix behind the same interface). The *distribution
+generalization gap* is the difference in mean score between the two partitions.
+
+M10.5 is a distribution holdout, not a process-family holdout: both partitions
+still use the same GJR-GARCH-t generator family. True generator-family OOD
+evaluation is M10.6 scope.
+
+Evaluation validity: a world where the external agent could not be reached
+(``agent_unavailable``) or violated the response protocol (``agent_protocol``) is
+not a model decision and is excluded from the official public/hidden means. If
+any required evaluation world is invalid, the whole run is non-scoreable.
 """
 
 from __future__ import annotations
@@ -16,8 +24,17 @@ from datetime import date, timedelta
 from typing import Any
 
 from app.benchmark.hashing import digest_many
-from app.benchmark.model import TaskKind, TaskOutcome
+from app.benchmark.model import (
+    EVALUATION_VALID,
+    INVALID_AGENT_PROTOCOL,
+    INVALID_AGENT_UNAVAILABLE,
+    INVALID_INTERNAL,
+    TaskKind,
+    TaskOutcome,
+)
 from app.benchmark.port import (
+    AGENT_PROTOCOL,
+    AGENT_UNAVAILABLE,
     StrategyDecisionPort,
     accumulate_port,
     passive_maker_port,
@@ -61,6 +78,8 @@ class WorldOutcome:
     metrics: dict[str, float | int]
     violations: tuple[str, ...]
     replay: dict[str, Any]
+    scoreable: bool
+    agent_failure: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,14 +89,21 @@ class BenchmarkReport:
     agent_name: str
     task: str
     evaluation_worlds: int
+    valid_worlds: int
     securities_encountered: int
     exchange_events: int
     outcomes: tuple[WorldOutcome, ...]
     public_score: float
     hidden_score: float
+    valid_public_worlds: int
+    valid_hidden_worlds: int
     generalization_gap: float
+    generalization_scope: str
     weakest_environment: str
     replay_package: dict[str, Any]
+    scoreable: bool
+    run_status: str
+    invalid_worlds: tuple[str, ...]
 
     def render(self) -> str:
         """Render the human-readable benchmark report."""
@@ -88,23 +114,55 @@ class BenchmarkReport:
             f"Agent: {self.agent_name}",
             f"Task: {_TASK_TITLES.get(TaskKind(self.task), self.task)}",
             f"Evaluation worlds: {self.evaluation_worlds} sealed synthetic worlds",
+            f"Valid worlds: {self.valid_worlds}",
             f"Securities encountered: {self.securities_encountered}",
             f"Exchange events: {self.exchange_events:,}",
             "",
         ]
         lines.extend(_headline_lines(self.task, self.outcomes))
+        # A partition with no *valid* worlds must never render as a numeric 0.0 —
+        # that would read as a real (and terrible) score for a run in which the
+        # agent simply failed to respond.
+        public_line = (
+            f"Public worlds score      {self.public_score:6.1f}  ({self.valid_public_worlds} valid worlds)"
+            if self.valid_public_worlds
+            else "Public worlds score      n/a (no valid worlds)"
+        )
+        hidden_line = (
+            f"Hidden worlds score      {self.hidden_score:6.1f}  ({self.valid_hidden_worlds} valid worlds)"
+            if self.valid_hidden_worlds
+            else "Hidden worlds score      n/a (no valid worlds)"
+        )
+        gap_line = (
+            f"Distribution generalization gap {self.generalization_gap:+6.1f}"
+            if self.valid_public_worlds and self.valid_hidden_worlds
+            else "Distribution generalization gap n/a (both partitions required)"
+        )
         lines.extend(
             [
                 "",
-                f"Public worlds score      {self.public_score:6.1f}",
-                f"Hidden worlds score      {self.hidden_score:6.1f}",
-                f"Generalization gap       {self.generalization_gap:+6.1f}",
+                public_line,
+                hidden_line,
+                gap_line,
                 "",
                 "Weakest environment:",
                 self.weakest_environment,
                 "",
                 f"Replay package: {len(self.outcomes)} worlds, "
                 f"digest {self.replay_package['replay_digest'][:32]}",
+                "",
+                f"Validity: {self.run_status}",
+            ]
+        )
+        if not self.scoreable:
+            lines.append(
+                f"Invalid worlds: {len(self.invalid_worlds)} of {self.evaluation_worlds} "
+                f"({', '.join(self.invalid_worlds[:4])}"
+                f"{', ...' if len(self.invalid_worlds) > 4 else ''})"
+            )
+            lines.append("Official benchmark score: WITHHELD (invalid evaluation)")
+        lines.extend(
+            [
                 "",
                 "  None of these price paths, securities, order books, or events existed "
                 "before this benchmark generated them.",
@@ -118,22 +176,27 @@ def _mean(values: list[float]) -> float:
 
 
 def _headline_lines(task: str, outcomes: tuple[WorldOutcome, ...]) -> list[str]:
+    scored = [item for item in outcomes if item.scoreable]
+    if not scored:
+        # No valid worlds: the agent never produced a scoreable decision, so the
+        # task metrics are not a result and must not be headlined as one.
+        return ["Task metrics             withheld (no valid worlds)"]
     if task == TaskKind.EXECUTION.value:
-        completions = [float(item.metrics["completion"]) for item in outcomes]
-        shortfalls = [float(item.metrics["implementation_shortfall_bps"]) for item in outcomes]
-        inventory = [int(item.metrics["max_inventory_quantity"]) for item in outcomes]
+        completions = [float(item.metrics["completion"]) for item in scored]
+        shortfalls = [float(item.metrics["implementation_shortfall_bps"]) for item in scored]
+        inventory = [int(item.metrics["max_inventory_quantity"]) for item in scored]
         violations = sum(len(item.violations) for item in outcomes)
         return [
             f"Completion               {_mean(completions) * 100:6.1f}%",
             f"Implementation shortfall  {_mean(shortfalls):6.1f} bps",
             f"Tail shortfall           {max(shortfalls) if shortfalls else 0.0:6.1f} bps",
-            f"Max inventory exposure   {max(inventory) if inventory else 0:6d}",
+            f"Peak inventory exposure  {max(inventory) if inventory else 0:6d}",
             f"Constraint violations    {violations:6d}",
         ]
     if task == TaskKind.MARKET_MAKING.value:
-        pnl_bps = [float(item.metrics["pnl_bps"]) for item in outcomes]
-        uptime = [float(item.metrics["quote_uptime"]) for item in outcomes]
-        drawdown = [int(item.metrics["max_drawdown_cents"]) for item in outcomes]
+        pnl_bps = [float(item.metrics["pnl_bps"]) for item in scored]
+        uptime = [float(item.metrics["quote_uptime"]) for item in scored]
+        drawdown = [int(item.metrics["max_drawdown_cents"]) for item in scored]
         violations = sum(len(item.violations) for item in outcomes)
         return [
             f"P&L                       {_mean(pnl_bps):6.1f} bps",
@@ -141,9 +204,9 @@ def _headline_lines(task: str, outcomes: tuple[WorldOutcome, ...]) -> list[str]:
             f"Worst drawdown           {max(drawdown) if drawdown else 0:6d} cents",
             f"Constraint violations    {violations:6d}",
         ]
-    total_return = [float(item.metrics["total_return"]) for item in outcomes]
-    drawdown_fraction = [float(item.metrics["max_drawdown_fraction"]) for item in outcomes]
-    turnover = [float(item.metrics["turnover_fraction"]) for item in outcomes]
+    total_return = [float(item.metrics["total_return"]) for item in scored]
+    drawdown_fraction = [float(item.metrics["max_drawdown_fraction"]) for item in scored]
+    turnover = [float(item.metrics["turnover_fraction"]) for item in scored]
     violations = sum(len(item.violations) for item in outcomes)
     return [
         f"Mean total return        {_mean(total_return) * 100:6.2f}%",
@@ -159,6 +222,15 @@ def _world_seed(base_seed: int, index: int) -> int:
 
 def _calendar(start: date, days: int) -> tuple[date, ...]:
     return tuple(trading_days(start, start + timedelta(days=2 * days + 7))[:days])
+
+
+def _run_status(invalid: list[WorldOutcome]) -> str:
+    failures = {item.agent_failure for item in invalid}
+    if AGENT_UNAVAILABLE in failures:
+        return INVALID_AGENT_UNAVAILABLE
+    if AGENT_PROTOCOL in failures:
+        return INVALID_AGENT_PROTOCOL
+    return INVALID_INTERNAL
 
 
 def builtin_port_factory(
@@ -247,6 +319,8 @@ def run_benchmark(
             "trade_count": result.trade_count,
             "steps_total": result.steps_total,
             "score": round(outcome.score, 6),
+            "scoreable": result.scoreable,
+            "agent_failure": result.agent_failure,
         }
         replay_worlds.append(replay)
         outcomes.append(
@@ -259,28 +333,46 @@ def run_benchmark(
                 metrics=dict(outcome.metrics),
                 violations=outcome.violations,
                 replay=replay,
+                scoreable=result.scoreable,
+                agent_failure=result.agent_failure,
             )
         )
 
-    public = [item.score for item in outcomes if item.holdout == "public"]
-    hidden = [item.score for item in outcomes if item.holdout == "hidden"]
-    weakest = min(outcomes, key=lambda item: item.score)
+    invalid = [item for item in outcomes if not item.scoreable]
+    valid = [item for item in outcomes if item.scoreable]
+    public = [item.score for item in valid if item.holdout == "public"]
+    hidden = [item.score for item in valid if item.holdout == "hidden"]
+    scoreable = not invalid and bool(valid)
+    weakest = min(valid, key=lambda item: item.score) if valid else None
     replay_package = {
         "task": kind.value,
         "agent": agent_name,
         "worlds": replay_worlds,
         "replay_digest": digest_many([item.replay for item in outcomes]),
+        "scoreable": scoreable,
+        "run_status": EVALUATION_VALID if scoreable else _run_status(invalid),
     }
     return BenchmarkReport(
         agent_name=agent_name,
         task=kind.value,
         evaluation_worlds=worlds,
+        valid_worlds=len(valid),
         securities_encountered=len(symbols_seen),
         exchange_events=total_events,
         outcomes=tuple(outcomes),
         public_score=_mean(public),
         hidden_score=_mean(hidden),
+        valid_public_worlds=len(public),
+        valid_hidden_worlds=len(hidden),
         generalization_gap=_mean(hidden) - _mean(public),
-        weakest_environment=f"{weakest.holdout} / {weakest.profile_label} (world {weakest.world_id})",
+        generalization_scope="distribution",
+        weakest_environment=(
+            f"{weakest.holdout} / {weakest.profile_label} (world {weakest.world_id})"
+            if weakest is not None
+            else "withheld (no valid worlds)"
+        ),
         replay_package=replay_package,
+        scoreable=scoreable,
+        run_status=EVALUATION_VALID if scoreable else _run_status(invalid),
+        invalid_worlds=tuple(item.world_id for item in invalid),
     )

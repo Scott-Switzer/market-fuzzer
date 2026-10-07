@@ -3,6 +3,10 @@
 Every score is a bounded [0, 100] number derived only from the recorded session
 result, so the same world + agent behaviour always yields the same score. Task
 metrics are reported alongside the score so a leaderboard entry is auditable.
+
+Execution scoring is parent-order based: completion and shortfall use the *net
+quantity delivered* on the requested side. Speculative round trips therefore
+cannot manufacture completion, because they net out to zero.
 """
 
 from __future__ import annotations
@@ -83,18 +87,31 @@ def _sign(side: str) -> float:
 
 def _execution(spec: TaskSpec, result: SessionResult) -> TaskOutcome:
     focus = spec.focus_symbol
-    fills = tuple(
-        fill for fill in result.agent_fills if fill.instrument_id == focus and fill.side == spec.side
-    )
-    filled = sum(fill.quantity for fill in fills)
-    notional = sum(fill.quantity * fill.price_ticks for fill in fills)
+    fills = tuple(fill for fill in result.agent_fills if fill.instrument_id == focus)
+    buy_quantity = sum(fill.quantity for fill in fills if fill.side == "buy")
+    sell_quantity = sum(fill.quantity for fill in fills if fill.side == "sell")
+    buy_notional = sum(fill.notional_cents for fill in fills if fill.side == "buy")
+    sell_notional = sum(fill.notional_cents for fill in fills if fill.side == "sell")
+    if spec.side == "buy":
+        parent_quantity, opposite_quantity = buy_quantity, sell_quantity
+        net_delivered = buy_quantity - sell_quantity
+        net_notional = buy_notional - sell_notional
+    else:
+        parent_quantity, opposite_quantity = sell_quantity, buy_quantity
+        net_delivered = sell_quantity - buy_quantity
+        net_notional = sell_notional - buy_notional
+
     arrival = max(1, result.arrival_price_ticks)
     sign = _sign(spec.side)
-    average_price = notional / filled if filled else 0.0
-    shortfall_bps = sign * (average_price - arrival) / arrival * 10_000.0 if filled else 0.0
-    completion = min(1.0, filled / spec.target_quantity) if spec.target_quantity else 0.0
-    impact_bps = sign * (result.final_price_ticks - arrival) / arrival * 10_000.0
-    shortfall_score = _clamp01(1.0 - max(0.0, shortfall_bps) / 50.0) if filled else 0.0
+    completion = min(1.0, max(0.0, net_delivered / spec.target_quantity)) if spec.target_quantity else 0.0
+    if net_delivered > 0:
+        # Net cost basis per net share delivered, expressed in ticks.
+        average_price = net_notional / (net_delivered * max(1, result.tick_size_cents))
+        shortfall_bps = sign * (average_price - arrival) / arrival * 10_000.0
+    else:
+        average_price = 0.0
+        shortfall_bps = 0.0
+    shortfall_score = _clamp01(1.0 - max(0.0, shortfall_bps) / 50.0) if net_delivered > 0 else 0.0
     score = 100.0 * (0.6 * completion + 0.4 * shortfall_score)
     score = max(0.0, score - 25.0 * len(result.violations))
     return TaskOutcome(
@@ -102,15 +119,17 @@ def _execution(spec: TaskSpec, result: SessionResult) -> TaskOutcome:
         score=score,
         metrics={
             "completion": round(completion, 6),
-            "filled_quantity": filled,
+            "net_delivered_quantity": net_delivered,
+            "parent_side_quantity": parent_quantity,
+            "opposite_side_quantity": opposite_quantity,
             "target_quantity": spec.target_quantity,
             "average_price_ticks": round(average_price, 6),
             "arrival_price_ticks": arrival,
             "implementation_shortfall_bps": round(shortfall_bps, 6),
-            "market_impact_bps": round(impact_bps, 6),
+            "market_impact_bps": round(sign * (result.final_price_ticks - arrival) / arrival * 10_000.0, 6),
             "shortfall_score": round(shortfall_score, 6),
             "fill_count": len(fills),
-            "max_inventory_quantity": abs(result.agent_positions.get(focus, 0)),
+            "max_inventory_quantity": result.agent_peak_inventory.get(focus, 0),
         },
         violations=result.violations,
     )
@@ -122,7 +141,7 @@ def _market_making(spec: TaskSpec, result: SessionResult) -> TaskOutcome:
     pnl_bps = pnl_cents / initial * 10_000.0
     fill_count = result.agent_maker_fill_count + result.agent_taker_fill_count
     maker_share = result.agent_maker_fill_count / fill_count if fill_count else 0.0
-    max_inventory = max((abs(value) for value in result.agent_positions.values()), default=0)
+    max_inventory = max(result.agent_peak_inventory.values(), default=0)
     drawdown = max_drawdown_cents(result.equity_curve_cents)
     pnl_score = _clamp01(0.5 + pnl_bps / 200.0)
     score = 100.0 * (0.5 * pnl_score + 0.3 * result.quote_uptime + 0.2 * maker_share)
@@ -148,7 +167,7 @@ def _portfolio(spec: TaskSpec, result: SessionResult) -> TaskOutcome:
     initial = max(1, result.agent_initial_value_cents)
     total_return = (result.agent_final_value_cents - initial) / initial
     drawdown = max_drawdown_cents(result.equity_curve_cents) / initial
-    turnover = sum(fill.quantity * fill.price_ticks for fill in result.agent_fills) / initial
+    turnover = sum(fill.notional_cents for fill in result.agent_fills) / initial
     return_score = _clamp01(0.5 + total_return / 0.10)
     drawdown_score = _clamp01(1.0 - drawdown / 0.10)
     score = 100.0 * (0.6 * return_score + 0.4 * drawdown_score)

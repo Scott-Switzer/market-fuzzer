@@ -9,6 +9,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+__all__ = [
+    "EVALUATION_VALID",
+    "INVALID_AGENT_PROTOCOL",
+    "INVALID_AGENT_UNAVAILABLE",
+    "INVALID_INTERNAL",
+    "FillRecord",
+    "SessionResult",
+    "TaskKind",
+    "TaskOutcome",
+    "TaskSpec",
+]
+
+# Evaluation validity states. A benchmark is only scoreable when it is VALID.
+EVALUATION_VALID = "VALID"
+INVALID_AGENT_UNAVAILABLE = "INVALID_AGENT_UNAVAILABLE"
+INVALID_AGENT_PROTOCOL = "INVALID_AGENT_PROTOCOL"
+INVALID_INTERNAL = "INVALID_INTERNAL"
+
 
 class TaskKind(StrEnum):
     """The three M10.5 benchmark tasks."""
@@ -45,7 +63,11 @@ class TaskSpec:
 
 @dataclass(frozen=True, slots=True)
 class FillRecord:
-    """One execution of the external agent's own order."""
+    """One execution of the external agent's own order.
+
+    ``notional_cents`` is the executed consideration in account currency, so
+    downstream metrics never have to guess at the tick size.
+    """
 
     instrument_id: str
     side: str
@@ -54,6 +76,7 @@ class FillRecord:
     step_index: int
     day_index: int
     is_maker: bool
+    notional_cents: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,22 +96,29 @@ class SessionResult:
     replace_count: int
     trade_count: int
     background_trade_count: int
+    expired_day_order_count: int
     instruments: tuple[str, ...]
     focus_symbol: str
     steps_total: int
+    tick_size_cents: int
     arrival_price_ticks: int
     final_price_ticks: int
     agent_fills: tuple[FillRecord, ...]
     agent_maker_fill_count: int
     agent_taker_fill_count: int
     agent_filled_quantity: int
+    agent_net_delivered_quantity: int
     agent_cash_cents: int
     agent_positions: dict[str, int]
+    agent_peak_inventory: dict[str, int]
     agent_initial_value_cents: int
     agent_final_value_cents: int
     equity_curve_cents: tuple[int, ...]
     quote_uptime: float
     violations: tuple[str, ...]
+    agent_failure: str | None
+    agent_failure_count: int
+    scoreable: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,12 +129,3 @@ class TaskOutcome:
     score: float
     metrics: dict[str, float | int]
     violations: tuple[str, ...]
-
-
-__all__ = [
-    "FillRecord",
-    "SessionResult",
-    "TaskKind",
-    "TaskOutcome",
-    "TaskSpec",
-]

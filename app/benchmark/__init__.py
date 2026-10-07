@@ -17,8 +17,20 @@ from app.benchmark.agents import (
     build_background_agents,
 )
 from app.benchmark.hashing import canonical_json, digest, digest_many
-from app.benchmark.model import FillRecord, SessionResult, TaskKind, TaskOutcome, TaskSpec
+from app.benchmark.model import (
+    EVALUATION_VALID,
+    INVALID_AGENT_PROTOCOL,
+    INVALID_AGENT_UNAVAILABLE,
+    INVALID_INTERNAL,
+    FillRecord,
+    SessionResult,
+    TaskKind,
+    TaskOutcome,
+    TaskSpec,
+)
 from app.benchmark.port import (
+    AGENT_PROTOCOL,
+    AGENT_UNAVAILABLE,
     HttpJsonPort,
     InProcessPort,
     StrategyDecisionPort,
@@ -26,6 +38,7 @@ from app.benchmark.port import (
     crossing_limit_action,
     hold_action,
     passive_maker_port,
+    replace_action,
     submit_limit_action,
     twap_port,
 )
@@ -42,6 +55,12 @@ from app.benchmark.universe import (
 )
 
 __all__ = [
+    "AGENT_PROTOCOL",
+    "AGENT_UNAVAILABLE",
+    "EVALUATION_VALID",
+    "INVALID_AGENT_PROTOCOL",
+    "INVALID_AGENT_UNAVAILABLE",
+    "INVALID_INTERNAL",
     "BackgroundAgent",
     "BenchmarkReport",
     "BenchmarkSession",
@@ -80,6 +99,7 @@ __all__ = [
     "hold_action",
     "max_drawdown_cents",
     "passive_maker_port",
+    "replace_action",
     "run_benchmark",
     "submit_limit_action",
     "twap_port",

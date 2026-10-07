@@ -7,6 +7,17 @@ versioned external-agent observation/action protocol all meet here.
 The session is fully deterministic. Every exchange command is stamped with a
 globally monotonic (time, sequence) pair from a single internal clock, so the V2
 event ledger is totally ordered regardless of which agent acted first.
+
+Sealed-evaluation rules enforced here:
+
+* Model-facing identifiers never reveal the world index, the public/hidden
+  partition, the holdout family, the seed, or generator parameters. The agent
+  session identifier is an opaque digest over evaluator-private seed material.
+* Order ownership is tracked explicitly; maker/taker attribution never relies on
+  parsing an order-ID string.
+* The external agent only ever holds and trades the task's tradable instruments.
+* A transport or protocol failure of the agent is recorded as an evaluation
+  validity failure, not silently absorbed as a legitimate decision.
 """
 
 from __future__ import annotations
@@ -44,6 +55,7 @@ from app.world.rng import SemanticRNG, SemanticStream
 __all__ = ["BenchmarkSession", "SessionConfig"]
 
 AGENT_ACCOUNT = "agent"
+AGENT_SESSION_NAMESPACE = "fwf-benchmark-agent-session-v1"
 _REJECTED_KINDS = frozenset({"order_rejected", "cancel_rejected", "replace_rejected"})
 
 
@@ -92,11 +104,16 @@ class BenchmarkSession:
         cfg = self.config
         securities = tuple(self.universe.securities)
         instruments = tuple(security.symbol for security in securities)
-        security_map = {security.symbol: security for security in securities}
         rng = SemanticRNG(self.universe.world_id, self.universe.seed)
         agents = build_background_agents(self.profile)
-        agent_streams: dict[str, SemanticStream] = {
-            agent.agent_id: rng.stream(f"AGENT:{agent.agent_id}", "benchmark.agent") for agent in agents
+        # Instrument-specific streams: a given agent must not make an identical
+        # random decision in every security at the same step.
+        agent_streams: dict[tuple[str, str], SemanticStream] = {
+            (agent.agent_id, instrument): rng.stream(
+                f"AGENT:{agent.agent_id}:{instrument}", "benchmark.agent"
+            )
+            for agent in agents
+            for instrument in instruments
         }
 
         manifest = RunManifestV2(
@@ -129,20 +146,23 @@ class BenchmarkSession:
                     {instrument: cfg.background_position for instrument in instruments},
                 )
             )
+        # Starting inventory exists only for instruments the task allows the agent
+        # to trade, so an inaccessible security can never move the agent's P&L.
+        agent_start_positions = {
+            symbol: self.task.initial_position_per_instrument
+            for symbol in self.task.agent_instruments
+            if self.task.initial_position_per_instrument > 0
+        }
         exchange.register(
-            AccountStateV2(
-                AGENT_ACCOUNT,
-                cfg.agent_cash_cents,
-                {instrument: self.task.initial_position_per_instrument for instrument in instruments},
-            ),
+            AccountStateV2(AGENT_ACCOUNT, cfg.agent_cash_cents, agent_start_positions),
             risk_limits=AccountRiskLimitsV2(max_order_quantity=self.task.max_order_quantity),
         )
 
         self._exchange = exchange
         self._instruments = instruments
-        self._security_map = security_map
         self._clock = 0
         self._order_sequence = 0
+        self._order_owner: dict[str, str] = {}
         self._mark: dict[str, int] = {}
         self._recent: dict[str, list[int]] = {instrument: [] for instrument in instruments}
         self._fundamental: dict[str, int] = {}
@@ -156,7 +176,12 @@ class BenchmarkSession:
         self._replace_count = 0
         self._trade_count = 0
         self._background_trade_count = 0
-        self._agent_executed = 0
+        self._expired_day_order_count = 0
+        self._focus_buy_quantity = 0
+        self._focus_sell_quantity = 0
+        self._peak_inventory: dict[str, int] = {
+            symbol: abs(quantity) for symbol, quantity in agent_start_positions.items()
+        }
         self._quote_steps = 0
         self._eligible_steps = 0
         self._arrival_price_ticks: int | None = None
@@ -172,15 +197,27 @@ class BenchmarkSession:
                 if global_step == 0:
                     self._arrival_price_ticks = self._mid_price(self.task.focus_symbol)
                     self._initial_value_cents = self._agent_value()
+                    # The drawdown baseline is the pre-decision value: a loss in
+                    # the very first decision must be visible in the curve.
+                    self._equity.append(self._initial_value_cents)
                 self._run_external_agent(global_step, day_index)
                 self._equity.append(self._agent_value())
                 global_step += 1
-            exchange.close_session(exchange_time_ns=self._tick(), venue_sequence=self._tick())
+            self._expired_day_order_count += self._close_day(exchange)
 
         account = exchange.accounts[AGENT_ACCOUNT]
         arrival = self._arrival_price_ticks or self._mid_price(self.task.focus_symbol)
         initial_value = self._initial_value_cents or 0
         final_value = self._agent_value()
+        failure = getattr(self.port, "first_failure", None)
+        failure_count = int(getattr(self.port, "errors", 0) or 0)
+        peak_inventory = {
+            instrument: max(
+                self._peak_inventory.get(instrument, 0),
+                abs(account.positions.get(instrument, 0)),
+            )
+            for instrument in instruments
+        }
         return SessionResult(
             world_id=self.universe.world_id,
             universe_id=self.universe.universe_id,
@@ -195,37 +232,86 @@ class BenchmarkSession:
             replace_count=self._replace_count,
             trade_count=self._trade_count,
             background_trade_count=self._background_trade_count,
+            expired_day_order_count=self._expired_day_order_count,
             instruments=self._instruments,
             focus_symbol=self.task.focus_symbol,
             steps_total=global_step,
+            tick_size_cents=cfg.tick_size_cents,
             arrival_price_ticks=arrival,
             final_price_ticks=self._price(self.task.focus_symbol),
             agent_fills=tuple(self._fills),
             agent_maker_fill_count=sum(1 for fill in self._fills if fill.is_maker),
             agent_taker_fill_count=sum(1 for fill in self._fills if not fill.is_maker),
-            agent_filled_quantity=self._agent_executed,
+            agent_filled_quantity=sum(fill.quantity for fill in self._fills),
+            agent_net_delivered_quantity=self._net_delivered(),
             agent_cash_cents=account.cash_cents,
             agent_positions={instrument: account.positions.get(instrument, 0) for instrument in instruments},
+            agent_peak_inventory=peak_inventory,
             agent_initial_value_cents=initial_value,
             agent_final_value_cents=final_value,
             equity_curve_cents=tuple(self._equity),
             quote_uptime=self._quote_steps / self._eligible_steps if self._eligible_steps else 0.0,
             violations=tuple(sorted(self._violations)),
+            agent_failure=failure,
+            agent_failure_count=failure_count,
+            scoreable=failure is None,
         )
 
-    # -- clock and price helpers -------------------------------------------------
+    def _close_day(self, exchange: MatchingExchangeV2) -> int:
+        """Close the trading day and report how many DAY orders expired."""
+
+        before = len(exchange.kernel.ledger.events)
+        exchange.close_session(exchange_time_ns=self._tick(), venue_sequence=self._tick())
+        return sum(
+            1 for event in exchange.kernel.ledger.events[before:] if event.kind.value == "order_cancelled"
+        )
+
+    # -- identity and clock helpers ----------------------------------------------
+
+    def session_identifier(self) -> str:
+        """An opaque, deterministic, non-informative agent-facing session ID.
+
+        Derived from evaluator-private seed material only, so it is stable for
+        replay yet reveals nothing about the world index, the partition, the
+        holdout family, or the generator parameters.
+        """
+
+        return (
+            "sx-"
+            + digest(
+                {
+                    "namespace": AGENT_SESSION_NAMESPACE,
+                    "seed": self.universe.seed,
+                    "task": self.task.kind.value,
+                }
+            )[:32]
+        )
 
     def _tick(self) -> int:
         self._clock += 1
         return self._clock
 
-    def _next_order_id(self) -> str:
+    def _next_order_id(self, account_id: str) -> str:
         self._order_sequence += 1
-        return f"{AGENT_ACCOUNT}-O{self._order_sequence:09d}"
+        order_id = f"{account_id}-O{self._order_sequence:09d}"
+        self._order_owner[order_id] = account_id
+        return order_id
 
     def _next_command_id(self, prefix: str) -> str:
         self._order_sequence += 1
         return f"{prefix}-{self._order_sequence:09d}"
+
+    def _owns(self, order_id: str) -> bool:
+        """Explicit ownership lookup; never inferred from an ID prefix."""
+
+        return self._order_owner.get(order_id) == AGENT_ACCOUNT
+
+    def _net_delivered(self) -> int:
+        """Sign-aware parent-order quantity delivered on the focus instrument."""
+
+        if self.task.side == "buy":
+            return self._focus_buy_quantity - self._focus_sell_quantity
+        return self._focus_sell_quantity - self._focus_buy_quantity
 
     def _price(self, instrument: str) -> int:
         if instrument in self._mark:
@@ -255,7 +341,7 @@ class BenchmarkSession:
     def _run_background_agents(
         self,
         agents: tuple[BackgroundAgent, ...],
-        streams: dict[str, SemanticStream],
+        streams: dict[tuple[str, str], SemanticStream],
         step: int,
         day_index: int,
     ) -> None:
@@ -266,19 +352,20 @@ class BenchmarkSession:
                 open_ids = tuple(
                     order.order_id for order in self._exchange.open_orders_for(agent.account_id, instrument)
                 )
+                bid, ask = self._exchange.best_quote(instrument)
                 view = BookView(
                     instrument_id=instrument,
                     step=step,
                     fundamental_ticks=self._fundamental[instrument],
                     mid_ticks=self._bid_ask_mid(instrument),
-                    best_bid_ticks=self._exchange.best_quote(instrument)[0],
-                    best_ask_ticks=self._exchange.best_quote(instrument)[1],
+                    best_bid_ticks=bid,
+                    best_ask_ticks=ask,
                     last_price_ticks=self._mark.get(instrument),
                     recent_prices=tuple(self._recent[instrument]),
                     open_order_ids=open_ids,
                     depth_scale=self.profile.depth_scale,
                 )
-                for intent in agent.act(view, streams[agent.agent_id]):
+                for intent in agent.act(view, streams[(agent.agent_id, instrument)]):
                     self._apply_background_intent(agent.account_id, instrument, intent, day_index)
 
     def _record_recent(self, instrument: str) -> None:
@@ -311,7 +398,7 @@ class BenchmarkSession:
             return
         if not isinstance(intent, SubmitIntent):
             return
-        order_id = self._next_order_id()
+        order_id = self._next_order_id(account_id)
         submit_command = OrderCommandV2(
             command_id=self._next_command_id("bg"),
             order_id=order_id,
@@ -369,10 +456,10 @@ class BenchmarkSession:
         self._observed_order_ids.update(order.order_id for order in open_orders)
         remaining = 0
         if self.task.kind is TaskKind.EXECUTION and instrument == self.task.focus_symbol:
-            remaining = max(0, self.task.target_quantity - self._agent_executed)
+            remaining = max(0, self.task.target_quantity - self._net_delivered())
         account = self._exchange.accounts[AGENT_ACCOUNT]
         return StrategyObservationV2(
-            session_id=f"bench-{self.universe.universe_id[:48]}",
+            session_id=self.session_identifier(),
             step=step,
             symbol=instrument,
             side=self.task.side,  # type: ignore[arg-type]
@@ -420,7 +507,7 @@ class BenchmarkSession:
             price_ticks = max(1, rounding(reference * multiplier / 10_000))
             time_in_force = TimeInForceV2.IOC
         self._order_count += 1
-        order_id = self._next_order_id()
+        order_id = self._next_order_id(AGENT_ACCOUNT)
         command = OrderCommandV2(
             command_id=self._next_command_id("agent"),
             order_id=order_id,
@@ -502,7 +589,7 @@ class BenchmarkSession:
                 self._background_trade_count += 1
                 continue
             side = "buy" if trade.buyer_account_id == AGENT_ACCOUNT else "sell"
-            is_maker = trade.maker_order_id.startswith(f"{AGENT_ACCOUNT}-O")
+            is_maker = self._owns(trade.maker_order_id)
             self._fills.append(
                 FillRecord(
                     instrument_id=trade.instrument_id,
@@ -512,10 +599,20 @@ class BenchmarkSession:
                     step_index=len(self._equity),
                     day_index=day_index,
                     is_maker=is_maker,
+                    notional_cents=(trade.quantity * trade.price_ticks * self.config.tick_size_cents),
                 )
             )
-            if trade.instrument_id == self.task.focus_symbol and side == self.task.side:
-                self._agent_executed += trade.quantity
+            if trade.instrument_id == self.task.focus_symbol:
+                if side == "buy":
+                    self._focus_buy_quantity += trade.quantity
+                else:
+                    self._focus_sell_quantity += trade.quantity
+            self._update_peak_inventory(trade.instrument_id)
+
+    def _update_peak_inventory(self, instrument: str) -> None:
+        position = abs(self._exchange.accounts[AGENT_ACCOUNT].positions.get(instrument, 0))
+        if position > self._peak_inventory.get(instrument, 0):
+            self._peak_inventory[instrument] = position
 
     def _agent_value(self) -> int:
         account = self._exchange.accounts[AGENT_ACCOUNT]

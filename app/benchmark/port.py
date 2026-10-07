@@ -6,7 +6,14 @@ A port receives a ``StrategyObservationV2`` JSON document and must return a
 * :class:`InProcessPort` wraps a deterministic Python callable (built-in
   baselines and tests).
 * :class:`HttpJsonPort` posts observations to an external HTTP agent, guarded by
-  an explicit host allowlist, and fails closed to a protocol-matched hold.
+  an explicit host allowlist.
+
+Both fail closed to a protocol-matched hold so the exchange stays deterministic
+and replayable. Failures are *classified* rather than swallowed: a transport
+failure is ``agent_unavailable``, a malformed or invalid response is
+``agent_protocol``. The session reads the first failure kind and marks the world
+non-scoreable, so a dead or broken agent can never receive an official score.
+An explicit ``hold`` from a healthy agent stays valid.
 """
 
 from __future__ import annotations
@@ -22,6 +29,8 @@ import httpx
 from app.strategy_protocol import StrategyActionV2, parse_strategy_action
 
 __all__ = [
+    "AGENT_PROTOCOL",
+    "AGENT_UNAVAILABLE",
     "HttpJsonPort",
     "InProcessPort",
     "StrategyDecisionPort",
@@ -36,9 +45,21 @@ __all__ = [
 
 _MAX_RESPONSE_BYTES = 64 * 1024
 
+# Agent evaluation failure kinds.
+AGENT_UNAVAILABLE = "agent_unavailable"
+AGENT_PROTOCOL = "agent_protocol"
+
+
+class _AgentUnavailableError(RuntimeError):
+    """Raised internally when the remote agent cannot be reached or is broken."""
+
 
 class StrategyDecisionPort(Protocol):
     name: str
+    errors: int
+    unavailable_failures: int
+    protocol_failures: int
+    first_failure: str | None
 
     def decide(self, observation: dict[str, Any]) -> dict[str, Any]: ...
 
@@ -76,6 +97,18 @@ def cancel_action(order_id: str, rationale_code: str = "builtin_cancel") -> dict
     ).model_dump(mode="json")
 
 
+def replace_action(
+    order_id: str, quantity: int, price_ticks: int, rationale_code: str = "builtin_replace"
+) -> dict[str, Any]:
+    return StrategyActionV2(
+        action_type="replace",
+        order_id=order_id,
+        quantity=quantity,
+        limit_price_ticks=max(1, int(price_ticks)),
+        rationale_code=rationale_code,
+    ).model_dump(mode="json")
+
+
 def crossing_limit_action(observation: dict[str, Any], quantity: int) -> dict[str, Any]:
     """A marketable limit price that crosses the observed touch."""
 
@@ -87,22 +120,45 @@ def crossing_limit_action(observation: dict[str, Any], quantity: int) -> dict[st
     return submit_limit_action(side, quantity, max(1, price))
 
 
-class InProcessPort:
-    """Wrap a deterministic callable as a decision port."""
+class _PortBase:
+    """Common failure bookkeeping shared by every decision port."""
 
-    def __init__(self, name: str, decide: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
+    def __init__(self, name: str) -> None:
         self.name = name
-        self._decide = decide
         self.errors = 0
+        self.unavailable_failures = 0
+        self.protocol_failures = 0
+        self.first_failure: str | None = None
 
-    def decide(self, observation: dict[str, Any]) -> dict[str, Any]:
-        return parse_strategy_action(self._decide(observation)).model_dump(mode="json")
+    def _record_failure(self, kind: str) -> None:
+        self.errors += 1
+        if kind == AGENT_UNAVAILABLE:
+            self.unavailable_failures += 1
+        else:
+            self.protocol_failures += 1
+        if self.first_failure is None:
+            self.first_failure = kind
 
     def close(self) -> None:
         return None
 
 
-class HttpJsonPort:
+class InProcessPort(_PortBase):
+    """Wrap a deterministic callable as a decision port."""
+
+    def __init__(self, name: str, decide: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
+        super().__init__(name)
+        self._decide = decide
+
+    def decide(self, observation: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return parse_strategy_action(self._decide(observation)).model_dump(mode="json")
+        except Exception:
+            self._record_failure(AGENT_PROTOCOL)
+            return hold_action("adapter_error")
+
+
+class HttpJsonPort(_PortBase):
     """Post observations to an allowlisted external HTTP agent."""
 
     def __init__(
@@ -128,13 +184,14 @@ class HttpJsonPort:
             headers["authorization"] = f"Bearer {token}"
         self._endpoint = endpoint_url
         self._client = httpx.Client(timeout=timeout_ms / 1_000, headers=headers)
-        self.name = f"{name}:{parsed.hostname}"
-        self.errors = 0
+        super().__init__(f"{name}:{parsed.hostname}")
 
     def decide(self, observation: dict[str, Any]) -> dict[str, Any]:
         try:
             body = bytearray()
             with self._client.stream("POST", self._endpoint, json=observation) as response:
+                if response.status_code >= 500:
+                    raise _AgentUnavailableError(f"agent returned {response.status_code}")
                 response.raise_for_status()
                 for chunk in response.iter_bytes():
                     body.extend(chunk)
@@ -144,8 +201,18 @@ class HttpJsonPort:
             if not isinstance(action, StrategyActionV2):
                 raise ValueError("the benchmark agent must speak strategy action protocol version 2.0")
             return action.model_dump(mode="json")
+        except _AgentUnavailableError:
+            self._record_failure(AGENT_UNAVAILABLE)
+            return hold_action("adapter_error")
+        except httpx.TransportError:
+            self._record_failure(AGENT_UNAVAILABLE)
+            return hold_action("adapter_error")
+        except httpx.HTTPStatusError:
+            # A 4xx response means the agent is reachable but broke the protocol.
+            self._record_failure(AGENT_PROTOCOL)
+            return hold_action("adapter_error")
         except Exception:
-            self.errors += 1
+            self._record_failure(AGENT_PROTOCOL)
             return hold_action("adapter_error")
 
     def close(self) -> None:
@@ -153,14 +220,32 @@ class HttpJsonPort:
 
 
 def twap_port(*, slice_quantity: int, name: str = "builtin-twap") -> InProcessPort:
-    """Buy (or sell) a fixed slice of the remaining parent order every step."""
+    """Buy (or sell) a fixed slice of the parent order every step.
+
+    Sizing subtracts outstanding same-side quantity, so the invariant
+    ``net delivered <= target`` holds for this baseline: submitted quantity can
+    never exceed what the parent order still needs. When the target is reached
+    while live DAY orders remain, they are cancelled deterministically so a late
+    fill cannot overfill the parent.
+    """
 
     def decide(observation: dict[str, Any]) -> dict[str, Any]:
+        side = str(observation.get("side", "buy"))
+        open_orders = tuple(observation.get("open_orders", ()))
+        same_side = [order for order in open_orders if order.get("side") == side]
+        outstanding = sum(int(order["remaining_quantity"]) for order in same_side)
         remaining = int(observation.get("remaining_quantity", 0))
         if remaining <= 0:
+            if same_side:
+                return cancel_action(str(same_side[0]["order_id"]))
             return hold_action()
-        quantity = min(remaining, max(1, slice_quantity))
-        return crossing_limit_action(observation, quantity)
+        if outstanding > remaining:
+            largest = max(same_side, key=lambda order: int(order["remaining_quantity"]))
+            return cancel_action(str(largest["order_id"]))
+        budget = remaining - outstanding
+        if budget <= 0:
+            return hold_action()
+        return crossing_limit_action(observation, min(budget, max(1, slice_quantity)))
 
     return InProcessPort(name, decide)
 

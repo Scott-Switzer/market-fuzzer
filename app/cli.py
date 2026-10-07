@@ -272,8 +272,16 @@ def benchmark_run(
     seed: Annotated[int, typer.Option()] = 20_261_006,
     policy: Annotated[str, typer.Option(help="builtin policy when --agent is absent")] = "twap",
     output: Annotated[Path | None, typer.Option(help="write the replay package JSON here")] = None,
+    allow_invalid: Annotated[
+        bool,
+        typer.Option(help="exit 0 even when the agent failed; the run stays labelled non-scoreable"),
+    ] = False,
 ) -> None:
-    """Run a synthetic exchange benchmark against a sealed set of worlds."""
+    """Run a synthetic exchange benchmark against a sealed set of worlds.
+
+    Exit codes: 0 = valid benchmark completed, 1 = internal benchmark failure,
+    2 = external agent unavailable or protocol-invalid.
+    """
 
     from app.benchmark import TaskKind, run_benchmark
     from app.benchmark.port import accumulate_port, passive_maker_port, twap_port
@@ -299,19 +307,28 @@ def benchmark_run(
                 return accumulate_port(slice_quantity=1_000, max_shares_per_instrument=20_000)
             return twap_port(slice_quantity=2_500)
 
-    report = run_benchmark(
-        kind=kind,
-        port_factory=port_factory,  # type: ignore[arg-type]
-        worlds=worlds,
-        security_count=securities,
-        days=days,
-        steps_per_day=steps_per_day,
-        base_seed=seed,
-    )
+    try:
+        report = run_benchmark(
+            kind=kind,
+            port_factory=port_factory,  # type: ignore[arg-type]
+            worlds=worlds,
+            security_count=securities,
+            days=days,
+            steps_per_day=steps_per_day,
+            base_seed=seed,
+        )
+    except Exception as exc:  # any internal failure must map to the documented exit code 1
+        typer.echo(f"benchmark failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     typer.echo(report.render())
     if output is not None:
         output.write_text(json.dumps(report.replay_package, indent=2, sort_keys=True))
         typer.echo(f"\nReplay package written to {output}")
+    if report.scoreable or allow_invalid:
+        return
+    if report.run_status.startswith("INVALID_AGENT"):
+        raise typer.Exit(code=2)
+    raise typer.Exit(code=1)
 
 
 cli.add_typer(benchmark_app, name="benchmark")
