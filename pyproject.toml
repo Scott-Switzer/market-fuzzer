@@ -42,6 +42,7 @@ lock = [
 
 [project.scripts]
 smw = "app.cli:entrypoint"
+fwf = "app.cli:entrypoint"
 
 [tool.setuptools.packages.find]
 include = ["app*"]

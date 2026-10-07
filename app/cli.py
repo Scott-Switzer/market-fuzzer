@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Annotated
 
 import typer
 import uvicorn
@@ -255,6 +256,65 @@ def run_example() -> None:
             indent=2,
         )
     )
+
+
+benchmark_app = typer.Typer(help="Synthetic exchange benchmark (M10.5)")
+
+
+@benchmark_app.command("run")
+def benchmark_run(
+    task: Annotated[str, typer.Option(help="execution | market_making | portfolio")] = "execution",
+    agent: Annotated[str | None, typer.Option(help="external agent HTTP endpoint")] = None,
+    worlds: Annotated[int, typer.Option(min=1, help="number of sealed evaluation worlds")] = 32,
+    securities: Annotated[int, typer.Option(min=1)] = 8,
+    days: Annotated[int, typer.Option(min=1)] = 5,
+    steps_per_day: Annotated[int, typer.Option(min=1)] = 30,
+    seed: Annotated[int, typer.Option()] = 20_261_006,
+    policy: Annotated[str, typer.Option(help="builtin policy when --agent is absent")] = "twap",
+    output: Annotated[Path | None, typer.Option(help="write the replay package JSON here")] = None,
+) -> None:
+    """Run a synthetic exchange benchmark against a sealed set of worlds."""
+
+    from app.benchmark import TaskKind, run_benchmark
+    from app.benchmark.port import accumulate_port, passive_maker_port, twap_port
+
+    try:
+        kind = TaskKind(task)
+    except ValueError as exc:
+        raise typer.BadParameter(f"unknown task {task!r}") from exc
+    if agent is not None:
+        from app.benchmark.port import HttpJsonPort
+
+        def port_factory(_index: int) -> object:
+            return HttpJsonPort(agent)
+
+    else:
+        if policy not in {"twap", "maker", "accumulate"}:
+            raise typer.BadParameter(f"unknown policy {policy!r}")
+
+        def port_factory(_index: int) -> object:
+            if policy == "maker":
+                return passive_maker_port(spread_ticks=3, quantity=200)
+            if policy == "accumulate":
+                return accumulate_port(slice_quantity=1_000, max_shares_per_instrument=20_000)
+            return twap_port(slice_quantity=2_500)
+
+    report = run_benchmark(
+        kind=kind,
+        port_factory=port_factory,  # type: ignore[arg-type]
+        worlds=worlds,
+        security_count=securities,
+        days=days,
+        steps_per_day=steps_per_day,
+        base_seed=seed,
+    )
+    typer.echo(report.render())
+    if output is not None:
+        output.write_text(json.dumps(report.replay_package, indent=2, sort_keys=True))
+        typer.echo(f"\nReplay package written to {output}")
+
+
+cli.add_typer(benchmark_app, name="benchmark")
 
 
 def entrypoint() -> None:
