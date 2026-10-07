@@ -53,7 +53,8 @@ def _result(
     return SessionResult(
         world_id="w",
         universe_id="u",
-        holdout="public",
+        partition="familiar",
+        process_family="gjr_factor_t_v1",
         sessions=("2026-06-01",),
         ledger_digest="ledger",
         market_logical_sha256="market",

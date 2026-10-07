@@ -1,19 +1,35 @@
-"""Benchmark runner: sealed worlds, public/hidden partitions, and the report.
+"""Benchmark runner: sealed worlds, three partitions, and the report.
 
-``run_benchmark`` generates ``worlds`` sealed synthetic worlds from the same
-generator family. Half of them are *public* (baseline distribution) and half are
-*hidden* (distribution/parameter-ecology holdout: different volatility, depth,
-fee schedule, and agent mix behind the same interface). The *distribution
-generalization gap* is the difference in mean score between the two partitions.
+``run_benchmark`` generates ``worlds`` sealed synthetic worlds and assigns each
+one an evaluation partition:
 
-M10.5 is a distribution holdout, not a process-family holdout: both partitions
-still use the same GJR-GARCH-t generator family. True generator-family OOD
-evaluation is M10.6 scope.
+* **familiar** -- baseline ecology, the familiar process family
+  (``gjr_factor_t_v1``). This is what the agent is expected to have adapted to.
+* **distribution** -- shifted ecology (volatility, depth, fees, and background
+  agent mix) but the *same* process family. This is the M10.5
+  distribution/parameter-ecology holdout.
+* **mechanism** -- shifted ecology *and* a process family the agent never saw
+  (``stochastic_vol_factor_t_v1`` or ``markov_regime_jump_factor_v1``).
+
+Three gaps are reported, each isolating one axis:
+
+* **distribution generalization gap** -- ``mean(distribution) - mean(familiar)``:
+the ecology/parameter shift at a fixed process family.
+* **mechanism generalization gap** -- ``mean(mechanism) - mean(familiar)``: the
+joint shift (ecology *and* process family) relative to what the agent saw.
+* **process-family generalization gap** -- ``mean(mechanism) - mean(distribution)``:
+the *isolated* market-process effect, because the mechanism and distribution
+partitions share the same shifted ecology and differ only in the process family.
+This is the true market-process generalization gap.
+
+A large negative process-family gap is the signature of an agent that learned the
+familiar generator (its volatility clustering, tails, and drift dynamics) rather
+than the execution task.
 
 Evaluation validity: a world where the external agent could not be reached
 (``agent_unavailable``) or violated the response protocol (``agent_protocol``) is
-not a model decision and is excluded from the official public/hidden means. If
-any required evaluation world is invalid, the whole run is non-scoreable.
+not a model decision and is excluded from the official partition means. If any
+required evaluation world is invalid, the whole run is non-scoreable.
 """
 
 from __future__ import annotations
@@ -43,12 +59,15 @@ from app.benchmark.port import (
 from app.benchmark.session import BenchmarkSession, SessionConfig
 from app.benchmark.tasks import build_task_spec, evaluate
 from app.benchmark.universe import (
-    HIDDEN_PROFILE,
-    PUBLIC_PROFILE,
+    DISTRIBUTION_ECOLOGY,
+    FAMILIAR_ECOLOGY,
     BenchmarkUniverse,
+    EcologyProfile,
+    EvaluationPartition,
     build_universe,
 )
 from app.market.calendar import trading_days
+from app.market.process import FAMILIAR_FAMILY, MECHANISM_FAMILIES, ProcessFamilyKind
 
 __all__ = ["BenchmarkReport", "WorldOutcome", "builtin_port_factory", "run_benchmark"]
 
@@ -72,8 +91,9 @@ class WorldOutcome:
 
     world_id: str
     seed: int
-    holdout: str
-    profile_label: str
+    partition: str
+    process_family: str
+    ecology_label: str
     score: float
     metrics: dict[str, float | int]
     violations: tuple[str, ...]
@@ -93,11 +113,16 @@ class BenchmarkReport:
     securities_encountered: int
     exchange_events: int
     outcomes: tuple[WorldOutcome, ...]
-    public_score: float
-    hidden_score: float
-    valid_public_worlds: int
-    valid_hidden_worlds: int
-    generalization_gap: float
+    familiar_score: float
+    distribution_score: float
+    mechanism_score: float
+    valid_familiar_worlds: int
+    valid_distribution_worlds: int
+    valid_mechanism_worlds: int
+    distribution_gap: float
+    mechanism_gap: float
+    process_family_gap: float
+    mechanism_families: tuple[str, ...]
     generalization_scope: str
     weakest_environment: str
     replay_package: dict[str, Any]
@@ -120,30 +145,31 @@ class BenchmarkReport:
             "",
         ]
         lines.extend(_headline_lines(self.task, self.outcomes))
-        # A partition with no *valid* worlds must never render as a numeric 0.0 —
-        # that would read as a real (and terrible) score for a run in which the
-        # agent simply failed to respond.
-        public_line = (
-            f"Public worlds score      {self.public_score:6.1f}  ({self.valid_public_worlds} valid worlds)"
-            if self.valid_public_worlds
-            else "Public worlds score      n/a (no valid worlds)"
-        )
-        hidden_line = (
-            f"Hidden worlds score      {self.hidden_score:6.1f}  ({self.valid_hidden_worlds} valid worlds)"
-            if self.valid_hidden_worlds
-            else "Hidden worlds score      n/a (no valid worlds)"
-        )
-        gap_line = (
-            f"Distribution generalization gap {self.generalization_gap:+6.1f}"
-            if self.valid_public_worlds and self.valid_hidden_worlds
-            else "Distribution generalization gap n/a (both partitions required)"
-        )
         lines.extend(
             [
                 "",
-                public_line,
-                hidden_line,
-                gap_line,
+                _partition_line("Familiar", self.familiar_score, self.valid_familiar_worlds),
+                _partition_line("Distribution", self.distribution_score, self.valid_distribution_worlds),
+                _partition_line("Mechanism", self.mechanism_score, self.valid_mechanism_worlds),
+                "",
+                _gap_line(
+                    "Distribution generalization gap",
+                    self.distribution_gap,
+                    self.valid_familiar_worlds,
+                    self.valid_distribution_worlds,
+                ),
+                _gap_line(
+                    "Mechanism generalization gap",
+                    self.mechanism_gap,
+                    self.valid_familiar_worlds,
+                    self.valid_mechanism_worlds,
+                ),
+                _gap_line(
+                    "Process-family generalization gap",
+                    self.process_family_gap,
+                    self.valid_distribution_worlds,
+                    self.valid_mechanism_worlds,
+                ),
                 "",
                 "Weakest environment:",
                 self.weakest_environment,
@@ -169,6 +195,22 @@ class BenchmarkReport:
             ]
         )
         return "\n".join(lines)
+
+
+def _partition_line(name: str, score: float, valid_worlds: int) -> str:
+    # A partition with no *valid* worlds must never render as a numeric 0.0 —
+    # that would read as a real (and terrible) score for a run in which the
+    # agent simply failed to respond.
+    label = f"{name} worlds score"
+    if valid_worlds:
+        return f"{label:<26}{score:6.1f}  ({valid_worlds} valid worlds)"
+    return f"{label:<26}n/a (no valid worlds)"
+
+
+def _gap_line(name: str, gap: float, baseline_worlds: int, compared_worlds: int) -> str:
+    if baseline_worlds and compared_worlds:
+        return f"{name:<36}{gap:+6.1f}"
+    return f"{name:<36}n/a (both partitions required)"
 
 
 def _mean(values: list[float]) -> float:
@@ -233,6 +275,24 @@ def _run_status(invalid: list[WorldOutcome]) -> str:
     return INVALID_INTERNAL
 
 
+def world_design(index: int) -> tuple[EvaluationPartition, ProcessFamilyKind, EcologyProfile]:
+    """Assign world ``index`` to a partition, a process family, and an ecology.
+
+    The assignment is evaluator-private: it is never surfaced through the
+    agent-facing observation protocol. Mechanism worlds rotate through the
+    held-out families so a single mechanism score averages over more than one
+    unseen generator.
+    """
+
+    bucket = index % 3
+    if bucket == 0:
+        return EvaluationPartition.FAMILIAR, FAMILIAR_FAMILY, FAMILIAR_ECOLOGY
+    if bucket == 1:
+        return EvaluationPartition.DISTRIBUTION, FAMILIAR_FAMILY, DISTRIBUTION_ECOLOGY
+    family = MECHANISM_FAMILIES[(index // 3) % len(MECHANISM_FAMILIES)]
+    return EvaluationPartition.MECHANISM, family, DISTRIBUTION_ECOLOGY
+
+
 def builtin_port_factory(
     kind: TaskKind, *, slice_quantity: int = 2_500
 ) -> Callable[[int], StrategyDecisionPort]:
@@ -273,15 +333,16 @@ def run_benchmark(
     agent_name = "unnamed-agent"
 
     for index in range(worlds):
-        holdout = "public" if index % 2 == 0 else "hidden"
-        profile = PUBLIC_PROFILE if holdout == "public" else HIDDEN_PROFILE
+        partition, family, ecology = world_design(index)
         seed = _world_seed(base_seed, index)
-        world_id = f"bench-{index:04d}-{holdout}"
+        world_id = f"bench-{index:04d}-{partition.value}"
         universe: BenchmarkUniverse = build_universe(
             universe_id=f"synth-exchange-{kind.value}-{index:04d}",
             world_id=world_id,
             seed=seed,
-            profile=profile,
+            ecology=ecology,
+            family=family,
+            partition=partition,
             security_count=security_count,
             sessions=sessions,
         )
@@ -296,7 +357,7 @@ def run_benchmark(
         try:
             result = BenchmarkSession(
                 universe=universe,
-                profile=profile,
+                ecology=ecology,
                 task=task_spec,
                 port=port,
                 config=session_config,
@@ -310,8 +371,9 @@ def run_benchmark(
             "world_id": world_id,
             "universe_id": universe.universe_id,
             "seed": seed,
-            "holdout": holdout,
-            "profile": profile.label,
+            "partition": partition.value,
+            "process_family": family.value,
+            "ecology": ecology.label,
             "market_logical_sha256": result.market_logical_sha256,
             "ledger_digest": result.ledger_digest,
             "action_digest": result.action_digest,
@@ -327,8 +389,9 @@ def run_benchmark(
             WorldOutcome(
                 world_id=world_id,
                 seed=seed,
-                holdout=holdout,
-                profile_label=profile.label,
+                partition=partition.value,
+                process_family=family.value,
+                ecology_label=ecology.label,
                 score=outcome.score,
                 metrics=dict(outcome.metrics),
                 violations=outcome.violations,
@@ -340,8 +403,9 @@ def run_benchmark(
 
     invalid = [item for item in outcomes if not item.scoreable]
     valid = [item for item in outcomes if item.scoreable]
-    public = [item.score for item in valid if item.holdout == "public"]
-    hidden = [item.score for item in valid if item.holdout == "hidden"]
+    familiar = _scores(valid, EvaluationPartition.FAMILIAR)
+    distribution = _scores(valid, EvaluationPartition.DISTRIBUTION)
+    mechanism = _scores(valid, EvaluationPartition.MECHANISM)
     scoreable = not invalid and bool(valid)
     weakest = min(valid, key=lambda item: item.score) if valid else None
     replay_package = {
@@ -360,14 +424,22 @@ def run_benchmark(
         securities_encountered=len(symbols_seen),
         exchange_events=total_events,
         outcomes=tuple(outcomes),
-        public_score=_mean(public),
-        hidden_score=_mean(hidden),
-        valid_public_worlds=len(public),
-        valid_hidden_worlds=len(hidden),
-        generalization_gap=_mean(hidden) - _mean(public),
-        generalization_scope="distribution",
+        familiar_score=_mean(familiar),
+        distribution_score=_mean(distribution),
+        mechanism_score=_mean(mechanism),
+        valid_familiar_worlds=len(familiar),
+        valid_distribution_worlds=len(distribution),
+        valid_mechanism_worlds=len(mechanism),
+        distribution_gap=_mean(distribution) - _mean(familiar),
+        mechanism_gap=_mean(mechanism) - _mean(familiar),
+        process_family_gap=_mean(mechanism) - _mean(distribution),
+        mechanism_families=tuple(
+            sorted({item.process_family for item in valid if item.partition == EvaluationPartition.MECHANISM})
+        ),
+        generalization_scope="process-family",
         weakest_environment=(
-            f"{weakest.holdout} / {weakest.profile_label} (world {weakest.world_id})"
+            f"{weakest.partition} / {weakest.process_family} / {weakest.ecology_label} "
+            f"(world {weakest.world_id})"
             if weakest is not None
             else "withheld (no valid worlds)"
         ),
@@ -376,3 +448,7 @@ def run_benchmark(
         run_status=EVALUATION_VALID if scoreable else _run_status(invalid),
         invalid_worlds=tuple(item.world_id for item in invalid),
     )
+
+
+def _scores(outcomes: list[WorldOutcome], partition: EvaluationPartition) -> list[float]:
+    return [item.score for item in outcomes if item.partition == partition]

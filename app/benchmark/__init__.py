@@ -1,8 +1,10 @@
-"""Synthetic Exchange Benchmark vertical slice (M10.5).
+"""Synthetic Exchange Benchmark vertical slice (M10.6).
 
 Joins the M10 synthetic universe, the V2 price-time-priority exchange, deterministic
 background agents, and the versioned external-agent observation/action protocol
 into one reproducible synthetic trading session with sealed evaluation worlds.
+M10.6 adds three process families and the familiar / distribution / mechanism
+evaluation partitions behind a market-process generalization gap.
 """
 
 from app.benchmark.agents import (
@@ -46,12 +48,23 @@ from app.benchmark.runner import BenchmarkReport, WorldOutcome, builtin_port_fac
 from app.benchmark.session import BenchmarkSession, SessionConfig
 from app.benchmark.tasks import build_task_spec, evaluate, max_drawdown_cents
 from app.benchmark.universe import (
+    DISTRIBUTION_ECOLOGY,
+    FAMILIAR_ECOLOGY,
     HIDDEN_PROFILE,
     PUBLIC_PROFILE,
     BenchmarkUniverse,
-    HoldoutProfile,
+    EcologyProfile,
+    EvaluationPartition,
     Security,
     build_universe,
+)
+from app.market.process import (
+    FAMILIAR_FAMILY,
+    MECHANISM_FAMILIES,
+    MarkovRegimeJumpFactorT,
+    ProcessFamily,
+    ProcessFamilyKind,
+    StochasticVolFactorT,
 )
 
 __all__ = [
@@ -65,21 +78,30 @@ __all__ = [
     "BenchmarkReport",
     "BenchmarkSession",
     "BenchmarkUniverse",
+    "DISTRIBUTION_ECOLOGY",
     "BookView",
     "CancelIntent",
+    "EcologyProfile",
+    "EvaluationPartition",
+    "FAMILIAR_ECOLOGY",
+    "FAMILIAR_FAMILY",
     "FillRecord",
     "FundamentalTraderAgent",
     "HIDDEN_PROFILE",
-    "HoldoutProfile",
     "HttpJsonPort",
     "InProcessPort",
+    "MECHANISM_FAMILIES",
+    "MarkovRegimeJumpFactorT",
     "MarketMakerAgent",
     "MomentumTraderAgent",
     "NoiseTraderAgent",
     "PUBLIC_PROFILE",
+    "ProcessFamily",
+    "ProcessFamilyKind",
     "Security",
     "SessionConfig",
     "SessionResult",
+    "StochasticVolFactorT",
     "StrategyDecisionPort",
     "SubmitIntent",
     "TaskKind",

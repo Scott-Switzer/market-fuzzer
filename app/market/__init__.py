@@ -8,6 +8,7 @@ from app.market.engine import (
     MarketResult,
     MarketWorld,
     OhlcBoundError,
+    ProcessFamily,
     SimulatedSeries,
     brownian_bridge_bar,
     logical_sha256,
@@ -15,18 +16,31 @@ from app.market.engine import (
     standardized_t_draw,
     validate_bar,
 )
+from app.market.process import (
+    FAMILIAR_FAMILY,
+    MECHANISM_FAMILIES,
+    MarkovRegimeJumpFactorT,
+    ProcessFamilyKind,
+    StochasticVolFactorT,
+)
 from app.market.registry import MARKET_MECHANISMS, market_registry
 
 __all__ = [
     "Bar",
     "EntitySpec",
+    "FAMILIAR_FAMILY",
     "GjrGarchT",
     "MARKET_MECHANISMS",
+    "MECHANISM_FAMILIES",
+    "MarkovRegimeJumpFactorT",
     "MarketCalendar",
     "MarketResult",
     "MarketWorld",
     "OhlcBoundError",
+    "ProcessFamily",
+    "ProcessFamilyKind",
     "SimulatedSeries",
+    "StochasticVolFactorT",
     "XNYS",
     "brownian_bridge_bar",
     "easter_sunday",

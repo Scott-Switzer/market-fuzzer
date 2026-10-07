@@ -40,8 +40,8 @@ def _world(session_count: int = 40, seed: int = 7, jumps: dict | None = None) ->
         market=_params(),
         sectors={"Tech": _params(), "Energy": _params()},
         entities=(
-            EntitySpec("AAA", "Tech", beta=1.1, sector_beta=0.5, drift=0.0002, garch=_params()),
-            EntitySpec("BBB", "Energy", beta=0.9, sector_beta=0.4, drift=0.0001, garch=_params()),
+            EntitySpec("AAA", "Tech", beta=1.1, sector_beta=0.5, drift=0.0002, process=_params()),
+            EntitySpec("BBB", "Energy", beta=0.9, sector_beta=0.4, drift=0.0001, process=_params()),
         ),
         jumps=jumps or {},
     )

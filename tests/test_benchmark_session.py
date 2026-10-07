@@ -17,13 +17,15 @@ from app.benchmark.port import (
 from app.benchmark.session import BenchmarkSession, SessionConfig
 from app.benchmark.tasks import build_task_spec
 from app.benchmark.universe import (
-    HIDDEN_PROFILE,
-    PUBLIC_PROFILE,
+    DISTRIBUTION_ECOLOGY,
+    FAMILIAR_ECOLOGY,
     BenchmarkUniverse,
-    HoldoutProfile,
+    EcologyProfile,
+    EvaluationPartition,
     build_universe,
 )
 from app.market.calendar import trading_days
+from app.market.process import ProcessFamilyKind
 from app.world.rng import SemanticRNG
 
 
@@ -72,7 +74,9 @@ def _universe(
     count: int = 4,
     sessions: int = 2,
     seed: int = 11,
-    profile: HoldoutProfile = PUBLIC_PROFILE,
+    ecology: EcologyProfile = FAMILIAR_ECOLOGY,
+    family: ProcessFamilyKind = ProcessFamilyKind.GJR_FACTOR_T_V1,
+    partition: EvaluationPartition = EvaluationPartition.FAMILIAR,
     universe_id: str = "u-session",
     world_id: str = "w-session",
 ) -> BenchmarkUniverse:
@@ -80,7 +84,9 @@ def _universe(
         universe_id=universe_id,
         world_id=world_id,
         seed=seed,
-        profile=profile,
+        ecology=ecology,
+        family=family,
+        partition=partition,
         security_count=count,
         sessions=tuple(trading_days(date(2026, 6, 1), date(2026, 6, 30))[:sessions]),
     )
@@ -96,16 +102,16 @@ def _run(
     seed: int = 11,
     max_order_quantity: int = 20_000,
     target_quantity: int = 2_000,
-    profile: HoldoutProfile = PUBLIC_PROFILE,
+    ecology: EcologyProfile = FAMILIAR_ECOLOGY,
     config: SessionConfig | None = None,
 ) -> SessionResult:
-    universe = _universe(count=count, sessions=sessions, seed=seed, profile=profile)
+    universe = _universe(count=count, sessions=sessions, seed=seed, ecology=ecology)
     task = build_task_spec(
         kind, universe, target_quantity=target_quantity, max_order_quantity=max_order_quantity
     )
     session = BenchmarkSession(
         universe=universe,
-        profile=profile,
+        ecology=ecology,
         task=task,
         port=port,
         config=config or SessionConfig(steps_per_day=steps),
@@ -181,30 +187,40 @@ def test_an_aggressive_order_is_partially_filled_across_makers() -> None:
 
 
 def test_the_agent_session_id_does_not_reveal_the_world_or_partition() -> None:
-    public = _universe(seed=101, universe_id="synth-exchange-execution-0000", world_id="bench-0000-public")
-    hidden = _universe(seed=202, universe_id="synth-exchange-execution-0001", world_id="bench-0001-hidden")
-    public_id = _public_session_id(public)
-    hidden_id = _hidden_session_id(hidden)
-    assert public_id != hidden_id
-    assert public_id.startswith("sx-") and hidden_id.startswith("sx-")
-    for token in ("0000", "0001", "public", "hidden", "bench", "synth-exchange"):
-        assert token not in public_id
-        assert token not in hidden_id
+    familiar = _universe(
+        seed=101, universe_id="synth-exchange-execution-0000", world_id="bench-0000-familiar"
+    )
+    mechanism = _universe(
+        seed=202,
+        universe_id="synth-exchange-execution-0002",
+        world_id="bench-0002-mechanism",
+        family=ProcessFamilyKind.STOCHASTIC_VOL_FACTOR_T_V1,
+        partition=EvaluationPartition.MECHANISM,
+    )
+    familiar_id = _session_id_for(familiar, FAMILIAR_ECOLOGY)
+    mechanism_id = _session_id_for(mechanism, DISTRIBUTION_ECOLOGY)
+    assert familiar_id != mechanism_id
+    assert familiar_id.startswith("sx-") and mechanism_id.startswith("sx-")
+    for token in ("0000", "0002", "familiar", "mechanism", "bench", "synth-exchange"):
+        assert token not in familiar_id
+        assert token not in mechanism_id
 
 
-def _public_session_id(universe: BenchmarkUniverse) -> str:
-    return _session_id_for(universe, PUBLIC_PROFILE)
+def test_the_session_id_is_independent_of_the_process_family() -> None:
+    # Worlds that differ only by generator family must present the same
+    # agent-facing identity: the process family is evaluator-private.
+    identifiers = {
+        _session_id_for(_universe(seed=555, family=family, world_id="w-identity"), FAMILIAR_ECOLOGY)
+        for family in ProcessFamilyKind
+    }
+    assert len(identifiers) == 1
 
 
-def _hidden_session_id(universe: BenchmarkUniverse) -> str:
-    return _session_id_for(universe, HIDDEN_PROFILE)
-
-
-def _session_id_for(universe: BenchmarkUniverse, profile: HoldoutProfile) -> str:
+def _session_id_for(universe: BenchmarkUniverse, ecology: EcologyProfile) -> str:
     task = build_task_spec(TaskKind.EXECUTION, universe, target_quantity=1_000)
     session = BenchmarkSession(
         universe=universe,
-        profile=profile,
+        ecology=ecology,
         task=task,
         port=InProcessPort("opaque-probe", lambda _observation: hold_action()),
         config=SessionConfig(steps_per_day=1),
@@ -213,16 +229,29 @@ def _session_id_for(universe: BenchmarkUniverse, profile: HoldoutProfile) -> str
 
 
 def _observations_for(
-    profile: HoldoutProfile, *, universe_id: str, world_id: str, count: int = 3
+    ecology: EcologyProfile,
+    *,
+    universe_id: str,
+    world_id: str,
+    count: int = 3,
+    family: ProcessFamilyKind = ProcessFamilyKind.GJR_FACTOR_T_V1,
+    partition: EvaluationPartition = EvaluationPartition.FAMILIAR,
 ) -> list[dict[str, Any]]:
     universe = _universe(
-        count=count, sessions=1, seed=7, profile=profile, universe_id=universe_id, world_id=world_id
+        count=count,
+        sessions=1,
+        seed=7,
+        ecology=ecology,
+        family=family,
+        partition=partition,
+        universe_id=universe_id,
+        world_id=world_id,
     )
     task = build_task_spec(TaskKind.PORTFOLIO, universe)
     port = RecordingPort(InProcessPort("probe", lambda _observation: hold_action()))
     BenchmarkSession(
         universe=universe,
-        profile=profile,
+        ecology=ecology,
         task=task,
         port=port,
         config=SessionConfig(steps_per_day=2),
@@ -230,27 +259,65 @@ def _observations_for(
     return port.observations
 
 
-def test_public_and_hidden_observations_expose_the_same_fields() -> None:
-    public = _observations_for(PUBLIC_PROFILE, universe_id="u-pub", world_id="w-pub")
-    hidden = _observations_for(HIDDEN_PROFILE, universe_id="u-hid", world_id="w-hid")
-    assert public and hidden
-    assert set(public[0]) == set(hidden[0])
+def test_familiar_and_mechanism_observations_expose_the_same_fields() -> None:
+    familiar = _observations_for(FAMILIAR_ECOLOGY, universe_id="u-fam", world_id="w-fam")
+    mechanism = _observations_for(
+        DISTRIBUTION_ECOLOGY,
+        universe_id="u-mech",
+        world_id="w-mech",
+        family=ProcessFamilyKind.MARKOV_REGIME_JUMP_FACTOR_T_V1,
+        partition=EvaluationPartition.MECHANISM,
+    )
+    assert familiar and mechanism
+    assert set(familiar[0]) == set(mechanism[0])
 
 
 def test_serialized_observations_carry_no_partition_metadata() -> None:
-    for profile, universe_id, world_id, forbidden in (
-        (PUBLIC_PROFILE, "CANARY-UNIVERSE-ALPHA", "CANARY-WORLD-ALPHA", "ALPHA"),
-        (HIDDEN_PROFILE, "CANARY-UNIVERSE-BETA", "CANARY-WORLD-BETA", "BETA"),
-    ):
-        observations = _observations_for(profile, universe_id=universe_id, world_id=world_id, count=3)
+    cases = (
+        (
+            FAMILIAR_ECOLOGY,
+            ProcessFamilyKind.GJR_FACTOR_T_V1,
+            EvaluationPartition.FAMILIAR,
+            "CANARY-UNIVERSE-ALPHA",
+            "CANARY-WORLD-ALPHA",
+            "ALPHA",
+        ),
+        (
+            DISTRIBUTION_ECOLOGY,
+            ProcessFamilyKind.STOCHASTIC_VOL_FACTOR_T_V1,
+            EvaluationPartition.MECHANISM,
+            "CANARY-UNIVERSE-BETA",
+            "CANARY-WORLD-BETA",
+            "BETA",
+        ),
+    )
+    for ecology, family, partition, universe_id, world_id, forbidden in cases:
+        observations = _observations_for(
+            ecology,
+            universe_id=universe_id,
+            world_id=world_id,
+            count=3,
+            family=family,
+            partition=partition,
+        )
         payload = json.dumps(observations, sort_keys=True)
         assert forbidden not in payload
         assert universe_id not in payload
         assert world_id not in payload
-        assert profile.label not in payload
-        assert profile.holdout not in payload
-        assert "holdout" not in payload
-        assert "seed" not in payload
+        assert ecology.label not in payload
+        # Neither the process family nor the partition may reach the agent.
+        for token in (
+            "gjr_factor_t_v1",
+            "stochastic_vol_factor_t_v1",
+            "markov_regime_jump_factor_t_v1",
+            "familiar",
+            "distribution",
+            "mechanism",
+            "holdout",
+            "process_family",
+            "seed",
+        ):
+            assert token not in payload
 
 
 # -- maker / taker attribution ---------------------------------------------------
@@ -358,7 +425,7 @@ def test_a_first_step_loss_is_visible_in_the_curve() -> None:
             "rationale_code": "fee_payer",
         }
 
-    result = _run(TaskKind.EXECUTION, InProcessPort("fee-payer", decide), profile=HIDDEN_PROFILE)
+    result = _run(TaskKind.EXECUTION, InProcessPort("fee-payer", decide), ecology=DISTRIBUTION_ECOLOGY)
     assert result.agent_fills
     assert result.equity_curve_cents[0] == result.agent_initial_value_cents
     assert result.equity_curve_cents[1] < result.equity_curve_cents[0]
@@ -424,7 +491,7 @@ def test_an_untradable_instrument_cannot_change_agent_pnl() -> None:
         task = build_task_spec(TaskKind.EXECUTION, universe, target_quantity=2_000)
         return BenchmarkSession(
             universe=universe,
-            profile=PUBLIC_PROFILE,
+            ecology=FAMILIAR_ECOLOGY,
             task=task,
             port=twap_port(slice_quantity=500),
             config=SessionConfig(steps_per_day=6),
