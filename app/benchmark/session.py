@@ -168,6 +168,10 @@ class BenchmarkSession:
         self._fundamental: dict[str, int] = {}
         self._fills: list[FillRecord] = []
         self._equity: list[int] = []
+        # The step ordinal a fill belongs to. Kept separate from len(self._equity)
+        # because the equity curve carries a pre-decision baseline entry, so its
+        # length is not the trading step.
+        self._current_step = 0
         self._action_digests: list[str] = []
         self._observed_order_ids: set[str] = set()
         self._violations: set[str] = set()
@@ -192,6 +196,7 @@ class BenchmarkSession:
             if day_index > 0:
                 exchange.open_session(exchange_time_ns=self._tick(), venue_sequence=self._tick())
             for step in range(cfg.steps_per_day):
+                self._current_step = global_step
                 self._advance_marks(day_index, step, securities)
                 self._run_background_agents(agents, agent_streams, global_step, day_index)
                 if global_step == 0:
@@ -596,7 +601,7 @@ class BenchmarkSession:
                     side=side,
                     quantity=trade.quantity,
                     price_ticks=trade.price_ticks,
-                    step_index=len(self._equity),
+                    step_index=self._current_step,
                     day_index=day_index,
                     is_maker=is_maker,
                     notional_cents=(trade.quantity * trade.price_ticks * self.config.tick_size_cents),

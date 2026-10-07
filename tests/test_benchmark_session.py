@@ -323,6 +323,27 @@ def test_the_equity_curve_starts_at_the_pre_decision_value() -> None:
     assert len(result.equity_curve_cents) == result.steps_total + 1
 
 
+def test_fill_step_indices_agree_with_the_steps_the_agent_observed() -> None:
+    """A fill must carry the step ordinal the agent was acting at.
+
+    The equity curve carries a pre-decision baseline entry, so its length is not
+    the trading step. Deriving ``step_index`` from that length shifted every fill
+    forward by one and let a final-step fill report ``step_index == steps_total``,
+    so agents received fills attributed to a step they never observed.
+    """
+
+    port = RecordingPort(twap_port(slice_quantity=500))
+    result = _run(TaskKind.EXECUTION, port, count=2, sessions=1, steps=4, target_quantity=2_000)
+    assert result.agent_fills, "the TWAP baseline should trade in this configuration"
+    observed_steps = {int(observation["step"]) for observation in port.observations}
+    assert observed_steps == {0, 1, 2, 3}
+    fill_steps = {fill.step_index for fill in result.agent_fills}
+    assert fill_steps <= observed_steps
+    assert min(fill_steps) == 0, "a first-step fill must be step 0, not the curve offset"
+    assert max(fill_steps) < result.steps_total
+    assert result.steps_total == 4
+
+
 def test_a_first_step_loss_is_visible_in_the_curve() -> None:
     # A small order fills inside one price level, so the only first-step value
     # change is the taker fee the hidden profile charges. If the curve did not
