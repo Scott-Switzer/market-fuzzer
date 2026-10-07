@@ -90,7 +90,7 @@ requirement of the evaluation architecture.
 An **evaluator-private family** is registered by trusted evaluator code:
 
 ```python
-registry = default_process_registry()   # the public benchmark
+registry = default_process_registry()  # the public benchmark
 registry.register(MyPrivateDefinition())  # from the evaluator's own process
 report = run_benchmark(..., plan=my_sealed_plan, registry=registry)
 ```
