@@ -135,7 +135,13 @@ class ArrowRowBuilder:
 
 
 class TableWriter:
-    """One release table: buffered appends, sharded files, streaming hash."""
+    """One release table: buffered appends, sharded files, streaming hash.
+
+    Row groups: the Arrow builder buffers to ``batch_target_rows`` and this
+    writer accumulates consecutive batches up to ``row_group_rows`` before
+    emitting a single Parquet row group, so the declared grouping is actually
+    built instead of silently following the batch size.
+    """
 
     def __init__(
         self,
@@ -155,6 +161,8 @@ class TableWriter:
         self._shards: list[ShardStat] = []
         self._writer: pq.ParquetWriter | None = None
         self._shard_path: Path | None = None
+        self._pending_group: list[pa.RecordBatch] = []
+        self._pending_group_rows = 0
         directory.mkdir(parents=True, exist_ok=True)
 
     # -- row ingestion -----------------------------------------------------------
@@ -195,8 +203,26 @@ class TableWriter:
         assert batch is not None
         self._write_batch(batch)
 
+    def _staged_group_rows(self) -> int:
+        return sum(batch.num_rows for batch in self._pending_group) + self._pending_group_rows
+
     def _write_batch(self, batch: pa.RecordBatch) -> None:
-        rows_to_write = batch.num_rows
+        """Stage one flushed batch into the row-group accumulator."""
+
+        self._pending_group.append(batch)
+        self._pending_group_rows += batch.num_rows
+        if self._staged_group_rows() >= self.limits.row_group_rows:
+            self._flush_row_group()
+
+    def _flush_row_group(self) -> None:
+        """Emit the staged batches as one row group (split across shards as needed)."""
+
+        if not self._pending_group:
+            return
+        group = pa.Table.from_batches(self._pending_group, schema=self.table.schema)
+        self._pending_group = []
+        self._pending_group_rows = 0
+        rows_to_write = group.num_rows
         offset = 0
         while rows_to_write > 0:
             if self._writer is None or self._shard_rows >= self.limits.max_rows_per_file:
@@ -204,9 +230,9 @@ class TableWriter:
                 self._open_shard()
             space = self.limits.max_rows_per_file - self._shard_rows
             take = min(rows_to_write, space)
-            piece = batch.slice(offset, take)
+            piece = group.slice(offset, take)
             assert self._writer is not None
-            self._writer.write_batch(piece)
+            self._writer.write_table(piece)
             self._shard_rows += take
             offset += take
             rows_to_write -= take
@@ -235,6 +261,7 @@ class TableWriter:
         """Flush, seal the last shard, and return the table's manifest entry."""
 
         self.flush_buffer()
+        self._flush_row_group()
         self._close_shard()
         return {
             "name": self.table.name,

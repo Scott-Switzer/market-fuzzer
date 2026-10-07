@@ -214,9 +214,9 @@ class _RecordingSink:
         self.snapshot_depth = snapshot_depth
         self.policy_id = policy_id
         self.decision_rows: list[dict[str, Any]] = []
-        self.command_rows: list[dict[str, Any]] = []
         self.snapshot_rows: list[dict[str, Any]] = []
         self.command_ordinal = 0
+        self.commands_streamed = 0
         self.events_recorded = 0
 
     def on_session_start(self, **_kwargs: Any) -> None:
@@ -236,8 +236,8 @@ class _RecordingSink:
     ) -> None:
         snapshot_id = book_snapshot.get("snapshot_id")
         if snapshot_id:
-            bid_levels = book_snapshot.get("bid_levels") or []
-            ask_levels = book_snapshot.get("ask_levels") or []
+            bid_levels = book_snapshot.get("bids") or []
+            ask_levels = book_snapshot.get("asks") or []
             self.snapshot_rows.append(
                 {
                     "corpus_schema_version": CORPUS_SCHEMA_VERSION,
@@ -249,8 +249,14 @@ class _RecordingSink:
                     "book_depth": int(book_snapshot.get("book_depth", self.snapshot_depth)),
                     "best_bid_ticks": book_snapshot.get("best_bid_ticks"),
                     "best_ask_ticks": book_snapshot.get("best_ask_ticks"),
-                    "bids": [[int(price), int(quantity)] for price, quantity in bid_levels],
-                    "asks": [[int(price), int(quantity)] for price, quantity in ask_levels],
+                    "bids": [
+                        {"price_ticks": int(price), "quantity": int(quantity)}
+                        for price, quantity in bid_levels
+                    ],
+                    "asks": [
+                        {"price_ticks": int(price), "quantity": int(quantity)}
+                        for price, quantity in ask_levels
+                    ],
                 }
             )
         self.decision_rows.append(
@@ -308,7 +314,11 @@ class _RecordingSink:
             if row[enum_field] is not None:
                 row[enum_field] = row[enum_field].value
         self.command_ordinal += 1
-        self.command_rows.append(row)
+        # Streamed straight to the bounded writer: commands are the second
+        # largest stream after events, and staging them per episode would let
+        # the sink's memory scale with episode length.
+        self.writers["exchange_commands"].append(row)
+        self.commands_streamed += 1
 
     def on_events(self, *, episode_id: str, events: Sequence[Any]) -> None:
         rows: list[dict[str, Any]] = []
@@ -397,12 +407,20 @@ def build_corpus(config: CorpusConfig) -> tuple[CorpusManifest, CorpusWriterStat
     )
     # The gate fires before any world is generated, before any port is
     # constructed, and before the temporary directory or any writer exists.
+    # Whole-plan, not requested-prefix: a mixed plan must fail even when only a
+    # TRAINABLE prefix would be built.
+    require_trainable(tuple({template.split for template in plan.worlds}))
     require_trainable(tuple(world.split for world in planned))
 
     building = output.parent / f".{output.name}.building"
     output.parent.mkdir(parents=True, exist_ok=True)
     if building.exists():
-        shutil.rmtree(building)
+        # A concurrent or crashed build owns this directory; deleting it would
+        # erase a live builder's files. Refuse instead; the caller cleans up.
+        raise FileExistsError(
+            f"a temporary build directory already exists for {output}; "
+            "remove it explicitly if no build is running"
+        )
     building.mkdir(parents=True)
     try:
         manifest_data, stats = _build_into(
@@ -471,10 +489,13 @@ def _build_into(
                     agent_cash_cents=_agent_cash_cents(config.task),
                 ),
                 recorder=sink,
+                snapshot_depth=config.book_depth,
             )
-            result = session.run()
-            outcome = evaluate(task_spec, result)
-            port.close()
+            try:
+                result = session.run()
+                outcome = evaluate(task_spec, result)
+            finally:
+                port.close()
             if not result.scoreable:
                 # An unavailable or protocol-invalid agent aborts the release:
                 # no invalid episode may enter fwf-corpus-v1.
@@ -502,8 +523,8 @@ def _build_into(
                 writers["agent_decisions"].append(row)
             for row in sink.snapshot_rows:
                 writers["book_snapshots"].append(row)
-            for row in sink.command_rows:
-                writers["exchange_commands"].append(row)
+            # Commands were already streamed into the bounded writer by the
+            # sink as they were created; nothing to stage here.
             total_events += result.event_count
 
         table_entries = [writers[name].close() for name in table_names()]

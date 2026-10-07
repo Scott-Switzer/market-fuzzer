@@ -36,7 +36,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from app.corpus.schema import CORPUS_SCHEMA_VERSION, TABLE_SCHEMAS
+from app.corpus.schema import CORPUS_SCHEMA_VERSION, TABLE_SCHEMAS, table_names
 from app.corpus.writer import canonical_row_bytes
 
 __all__ = ["ValidationError", "validate_corpus"]
@@ -60,6 +60,8 @@ BOOK_SNAPSHOT_INVALID = "BOOK_SNAPSHOT_INVALID"
 OHLC_INVALID = "OHLC_INVALID"
 NUMERIC_INVALID = "NUMERIC_INVALID"
 LEAKAGE_DETECTED = "LEAKAGE_DETECTED"
+RELEASE_DIGEST_MISMATCH = "RELEASE_DIGEST_MISMATCH"
+JSON_INVALID = "JSON_INVALID"
 
 #: Strings that must not appear in any persisted structural field of a
 #: TRAINABLE-only release.
@@ -150,18 +152,23 @@ def _recompute_logical_hash(name: str, table: pa.Table) -> str:
     return digest.hexdigest()
 
 
-def _json_safe(row: dict[str, Any]) -> dict[str, Any]:
-    """Normalize Arrow round-trips (list-of-struct levels) to JSON-safe Python."""
+def _level_pair(level: Any) -> tuple[int, int]:
+    """One stored depth level, tolerant to the Arrow round-trip shape."""
 
-    normalized: dict[str, Any] = {}
-    for key, value in row.items():
-        if isinstance(value, list):
-            normalized[key] = [
-                [item["price_ticks"], item["quantity"]] if isinstance(item, dict) else item for item in value
-            ]
-        else:
-            normalized[key] = value
-    return normalized
+    if isinstance(level, dict):
+        return int(level["price_ticks"]), int(level["quantity"])
+    return int(level[0]), int(level[1])
+
+
+def _json_safe(row: dict[str, Any]) -> dict[str, Any]:
+    """Normalize Arrow round-trips to JSON-safe Python.
+
+    The depth levels are stored as ``list<struct<price_ticks, quantity>>``;
+    after ``to_pylist`` they are plain dicts, which is exactly the canonical
+    form the writer hashed, so no re-shaping happens here.
+    """
+
+    return dict(row)
 
 
 def _check_numeric(name: str, table: pa.Table, columns: tuple[str, ...]) -> None:
@@ -214,12 +221,29 @@ def validate_corpus(path: Path) -> ValidationResult:
             LEAKAGE_DETECTED, f"manifest declares dataset_split {declared_split!r}, not trainable"
         )
 
+    # All seven canonical tables must be declared (a manifest that drops one
+    # would otherwise validate as a 'complete' release).
+    declared = {entry["name"] for entry in manifest["tables"]}
+    missing_tables = sorted(set(table_names()) - declared)
+    if missing_tables:
+        raise ValidationError(
+            MANIFEST_SCHEMA_UNKNOWN, f"manifest does not declare required tables: {missing_tables}"
+        )
+    extra_tables = sorted(declared - set(table_names()))
+    if extra_tables:
+        raise ValidationError(MANIFEST_SCHEMA_UNKNOWN, f"manifest declares unknown tables: {extra_tables}")
+
     episode_ids: set[str] = set()
     table_rows: dict[str, int] = {}
 
     for entry in manifest["tables"]:
         name = entry["name"]
         _validate_table_directory(path, name, entry, manifest, episode_ids, table_rows)
+
+    # The corpus-level identity is recomputed from verified inputs, not
+    # trusted: base parameters + the table hashes/counts this validator just
+    # re-derived. A forged release_digest, base_seed, plan id, etc., is caught.
+    _recompute_release_digest(manifest)
 
     # Cross-table referential closure: every child row resolves (spec 30).
     _validate_foreign_keys(path, manifest, episode_ids, table_rows)
@@ -258,6 +282,11 @@ def _validate_table_directory(
     table_rows[name] = table.num_rows
 
     if name == "episodes":
+        _check_numeric(
+            "episodes",
+            table,
+            ("score", "seed", "event_count", "trade_count", "steps_total", "security_count"),
+        )
         _validate_episodes(table, manifest, episode_ids)
     elif name == "securities" or name == "daily_bars":
         _validate_prices_and_grain(name, table)
@@ -269,6 +298,9 @@ def _validate_table_directory(
     elif name == "exchange_events":
         _validate_events(name, table, episode_ids, set())
     elif name == "book_snapshots":
+        _check_numeric(
+            "book_snapshots", table, ("best_bid_ticks", "best_ask_ticks", "global_step", "decision_index")
+        )
         _validate_book_snapshots(name, table, episode_ids, set())
     else:  # pragma: no cover - table_names() is closed over the 7 canonical tables
         raise ValidationError(MANIFEST_SCHEMA_UNKNOWN, f"unknown table {name!r} in manifest")
@@ -369,7 +401,42 @@ def _validate_episodes_present(name: str, table: pa.Table, episode_ids: set[str]
 
 
 def _validate_prices_and_grain(name: str, table: pa.Table) -> None:
-    """Shared numeric guards for bar-like tables."""
+    """Grain uniqueness for the per-episode market tables (spec 30)."""
+
+    symbol_values = table.column("symbol").to_pylist()
+    episode_values = table.column("episode_id").to_pylist()
+    if name == "securities":
+        keys = list(zip(episode_values, symbol_values, strict=True))
+        if len(set(keys)) != len(keys):
+            duplicates = sorted({key for key in keys if keys.count(key) > 1})
+            raise ValidationError(
+                DUPLICATE_EPISODE_ID,
+                f"securities: duplicate (episode, symbol) grain keys: {duplicates[:3]}",
+            )
+        _check_numeric(
+            "securities",
+            table,
+            ("initial_price_ticks", "beta", "sector_beta", "drift", "shares_outstanding"),
+        )
+    if name == "daily_bars":
+        dates = table.column("session_date").to_pylist()
+        bar_keys = [
+            (episode, symbol, session_date)
+            for episode, symbol, session_date in zip(
+                episode_values,
+                symbol_values,
+                dates,
+                strict=True,
+            )
+        ]
+        keys = bar_keys  # type: ignore[assignment]  # a distinct 3-tuple grain
+        if len(set(keys)) != len(keys):
+            duplicates = sorted({key for key in keys if keys.count(key) > 1})
+            raise ValidationError(
+                DUPLICATE_EPISODE_ID,
+                f"daily_bars: duplicate (episode, symbol, date) grain keys: {duplicates[:3]}",
+            )
+        _check_numeric("daily_bars", table, ("open_ticks", "high_ticks", "low_ticks", "close_ticks"))
 
 
 def _validate_decisions(name: str, table: pa.Table, episode_ids: set[str], _unused: set[str]) -> None:
@@ -393,6 +460,17 @@ def _validate_decisions(name: str, table: pa.Table, episode_ids: set[str], _unus
             raise ValidationError(DECISION_ORDER, f"unknown decision_status {status!r}")
         if not row["observation_json"] or not row["action_json"]:
             raise ValidationError(DECISION_ORDER, f"episode {row['episode_id']!r}: empty observation/action")
+        # The stored protocol documents must be real JSON (a bad string that
+        # later breaks a consumer is corruption, not data).
+        for json_field in ("observation_json", "action_json"):
+            try:
+                json.loads(row[json_field])
+            except json.JSONDecodeError as exc:
+                raise ValidationError(
+                    JSON_INVALID,
+                    f"episode {row['episode_id']!r} decision {row['decision_index']}: "
+                    f"{json_field} is not valid JSON ({exc})",
+                ) from exc
 
 
 def _validate_commands(name: str, table: pa.Table, episode_ids: set[str], _unused: set[str]) -> None:
@@ -434,6 +512,13 @@ def _validate_events(name: str, table: pa.Table, episode_ids: set[str], _unused:
                 raise ValidationError(EVENT_ORDER, f"episode {episode_id!r}: empty event_id")
             if not row["payload_json"]:
                 raise ValidationError(EVENT_ORDER, f"episode {episode_id!r}: empty payload_json")
+            try:
+                json.loads(row["payload_json"])
+            except json.JSONDecodeError as exc:
+                raise ValidationError(
+                    JSON_INVALID,
+                    f"episode {episode_id!r} event {row['event_id']!r}: payload not valid JSON ({exc})",
+                ) from exc
 
 
 def _validate_book_snapshots(name: str, table: pa.Table, episode_ids: set[str], _unused: set[str]) -> None:
@@ -454,8 +539,10 @@ def _validate_book_snapshots(name: str, table: pa.Table, episode_ids: set[str], 
                 f"snapshot {snapshot_id!r} exceeds configured depth {depth}",
             )
         for label, levels, ordering in (("bid", bids, "descending"), ("ask", asks, "ascending")):
-            prices = [int(level[0]) for level in levels]
-            quantities = [int(level[1]) for level in levels]
+            # Arrow round-trips the level struct as dicts with named fields.
+            pairs = [_level_pair(level) for level in levels]
+            prices = [price for price, _quantity in pairs]
+            quantities = [quantity for _price, quantity in pairs]
             if len(prices) != len(quantities):
                 raise ValidationError(
                     BOOK_SNAPSHOT_INVALID, f"snapshot {snapshot_id!r}: ragged {label} levels"
@@ -479,7 +566,7 @@ def _validate_book_snapshots(name: str, table: pa.Table, episode_ids: set[str], 
                     BOOK_SNAPSHOT_INVALID,
                     f"snapshot {snapshot_id!r}: {label} prices not strictly {ordering}",
                 )
-        if bids and asks and bids[0][0] >= asks[0][0]:
+        if bids and asks and _level_pair(bids[0])[0] >= _level_pair(asks[0])[0]:
             raise ValidationError(
                 BOOK_SNAPSHOT_INVALID, f"snapshot {snapshot_id!r}: crossed book (bid >= ask)"
             )
@@ -508,6 +595,27 @@ def _validate_foreign_keys(
     for index, ref in enumerate(decision_snapshot_refs):
         if ref is not None and ref not in snapshot_ids:
             raise ValidationError(SNAPSHOT_FK, f"decision row {index} references unknown snapshot {ref!r}")
+
+    # The decision must reference *its own* pre-decision snapshot: episode,
+    # decision index, instrument, and step must all agree on the join.
+    snapshot_index = {row["snapshot_id"]: row for row in snapshots.to_pylist()}
+    for index, decision in enumerate(decisions.to_pylist()):
+        ref = decision.get("book_snapshot_id")
+        if ref is None:
+            continue
+        snapshot = snapshot_index[ref]
+        mismatch = (
+            snapshot["episode_id"] != decision["episode_id"]
+            or snapshot["decision_index"] != decision["decision_index"]
+            or snapshot["instrument_id"] != decision["instrument_id"]
+            or snapshot["global_step"] != decision["global_step"]
+        )
+        if mismatch:
+            raise ValidationError(
+                SNAPSHOT_FK,
+                f"decision row {index} ({decision['episode_id']!r}) references snapshot {ref!r} "
+                "of a different decision/episode/instrument/step",
+            )
 
     episode_events = dict(
         zip(
@@ -542,3 +650,46 @@ def _entry(manifest: dict[str, Any], name: str) -> dict[str, Any]:
         if entry["name"] == name:
             return entry
     raise ValidationError(MANIFEST_MISSING, f"manifest does not declare table {name!r}")
+
+
+def _recompute_release_digest(manifest: dict[str, Any]) -> None:
+    """Recompute the corpus-level digest from verified inputs (spec 27).
+
+    The digest is defined over generation parameters and the per-table
+    logical hashes/row counts. This validator has just re-derived the latter
+    from the files, so a forged ``release_digest`` or a drifted generation
+    parameter (base seed, plan id, world count, ...) fails here even though
+    every table-level check passed.
+    """
+
+    payload = {
+        "schema_version": manifest["corpus_schema_version"],
+        "manifest_version": manifest["manifest_version"],
+        "training_plan_id": manifest["training_plan_id"],
+        "training_plan_version": manifest["training_plan_version"],
+        "dataset_split": manifest["dataset_split"],
+        "task": manifest["task"],
+        "policy": manifest["policy"],
+        "base_seed": manifest["base_seed"],
+        "world_count": manifest["world_count"],
+        "security_count": manifest["security_count"],
+        "days": manifest["days"],
+        "steps_per_day": manifest["steps_per_day"],
+        "book_depth": manifest["book_depth"],
+        "tables": [
+            {
+                "name": entry["name"],
+                "row_count": entry["row_count"],
+                "logical_sha256": entry["logical_sha256"],
+            }
+            for entry in manifest["tables"]
+        ],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    recomputed = hashlib.sha256(encoded).hexdigest()
+    if recomputed != manifest["release_digest"]:
+        raise ValidationError(
+            RELEASE_DIGEST_MISMATCH,
+            f"release digest {manifest['release_digest'][:16]}... does not match the "
+            f"recomputed {recomputed[:16]}...; generation parameters or table hashes drifted",
+        )

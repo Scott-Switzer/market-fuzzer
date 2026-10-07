@@ -255,6 +255,60 @@ def test_a_release_validates_and_carries_all_seven_tables(tmp_path: Path) -> Non
     assert result.tables["book_snapshots"] == result.tables["agent_decisions"]
 
 
+def test_snapshots_carry_real_depth_and_honor_the_requested_depth(tmp_path: Path) -> None:
+    """L10 depth is the aggregated book, and --book-depth shapes the capture."""
+
+    config = CorpusConfig(
+        output=tmp_path / "depth",
+        worlds=2,
+        securities=4,
+        days=2,
+        steps_per_day=6,
+        seed=99,
+        book_depth=3,
+    )
+    build_corpus(config)
+
+    table = pa.concat_tables(
+        [pq.read_table(p) for p in sorted((tmp_path / "depth" / "book_snapshots").glob("*.parquet"))]
+    ).to_pylist()
+    with_depth = [row for row in table if row["bids"] or row["asks"]]
+    assert table, "snapshots written"
+    assert with_depth, "snapshots must carry non-empty aggregated depth"
+    for row in with_depth:
+        assert len(row["bids"]) <= 3 and len(row["asks"]) <= 3
+        assert row["book_depth"] == 3
+        bid_prices = [level["price_ticks"] for level in row["bids"]]
+        ask_prices = [level["price_ticks"] for level in row["asks"]]
+        assert bid_prices == sorted(bid_prices, reverse=True)
+        assert ask_prices == sorted(ask_prices)
+
+
+def test_a_concurrent_second_build_refuses_instead_of_erasing(tmp_path: Path) -> None:
+    from app.corpus.builder import CorpusConfig as Config
+
+    out = tmp_path / "corpus"
+    # Simulate a live builder by creating the temporary directory it would use.
+    building = tmp_path / ".corpus.building"
+    building.mkdir()
+    (building / "sentinel").write_text("live")
+    with pytest.raises(FileExistsError):
+        build_corpus(Config(output=out, worlds=1, securities=2, days=1, steps_per_day=2, seed=1))
+    # The live builder's files were not touched.
+    assert (building / "sentinel").read_text() == "live"
+
+
+def test_a_manifest_missing_a_required_table_fails_validation(tmp_path: Path) -> None:
+    _small_release(tmp_path, name="gold")
+    work = tmp_path / "dropped"
+    shutil.copytree(tmp_path / "gold", work)
+    blob = json.loads((work / "manifest.json").read_text())
+    blob["tables"] = [entry for entry in blob["tables"] if entry["name"] != "securities"]
+    (work / "manifest.json").write_text(json.dumps(blob))
+    with pytest.raises(ValidationError):
+        validate_corpus(work)
+
+
 def test_the_release_directory_layout_is_deterministic(tmp_path: Path) -> None:
     _manifest, _stats = _small_release(tmp_path)
     release = tmp_path / "release"
@@ -364,11 +418,39 @@ def _corruption_suite(tmp_path: Path) -> None:
         (work / "manifest.json").write_text(json.dumps(blob))
 
     def rewrite_shard(work: Path, table: str, mutate_rows) -> None:
+        """Rewrite one shard's rows AND refresh the manifest hashes for it.
+
+        Without the refresh, a rewritten file trips FILE_SHA_MISMATCH first and
+        the row-level corruption the matrix targets would never be reached. The
+        refresh keeps physical + logical hashes consistent so the validator's
+        *row checks* (duplicates, bounds, leakage markers, joins) are what
+        reject the defect. The refreshed logical hash is computed over the
+        written rows exactly the way the release writer hashed them.
+        """
+        from app.corpus.writer import canonical_row_bytes
+
         path = next((work / table).glob("*.parquet"))
         schema = pq.ParquetFile(path).schema_arrow
         rows = pq.read_table(path).to_pylist()
         mutate_rows(rows)
         pq.write_table(pa.Table.from_pylist(rows, schema=schema), path)
+        data = path.read_bytes()
+        digest = hashlib.sha256()
+        for row in rows:
+            digest.update(canonical_row_bytes(row))
+            digest.update(b"\n")
+        blob = json.loads((work / "manifest.json").read_text())
+        for entry in blob["tables"]:
+            if entry["name"] != table:
+                continue
+            for shard in entry["shards"]:
+                if shard["relative_path"].endswith(path.name):
+                    shard["sha256"] = hashlib.sha256(data).hexdigest()
+                    shard["bytes"] = len(data)
+            entry["logical_sha256"] = digest.hexdigest()
+            entry["row_count"] = len(rows)
+        blob["release_digest"] = _recomputed_release_digest(blob)
+        (work / "manifest.json").write_text(json.dumps(blob))
 
     def levels(pairs):
         return [{"price_ticks": price, "quantity": quantity} for price, quantity in pairs]
@@ -394,33 +476,56 @@ def _corruption_suite(tmp_path: Path) -> None:
         tmp_path,
         lambda work: manifest_entry(work, "securities", lambda entry: entry.__setitem__("row_count", 999)),
     )
-    # alter one parquet value (physical sha breaks first)
-    _with_defect(
-        tmp_path,
-        lambda work: rewrite_shard(
-            work, "daily_bars", lambda rows: rows[0].__setitem__("open_ticks", rows[0]["open_ticks"] + 7)
-        ),
-    )
-    # duplicate episode id
+
+    # alter one parquet value: raw bytes change with no manifest refresh, so
+    # the mismatch is caught by the physical hash (this is the hash layer's
+    # job); row-level cases below use hash-refreshing rewrites instead.
+    def _alter_value(work: Path) -> None:
+        path = next((work / "daily_bars").glob("*.parquet"))
+        schema = pq.ParquetFile(path).schema_arrow
+        rows = pq.read_table(path).to_pylist()
+        rows[0]["open_ticks"] = rows[0]["open_ticks"] + 7
+        pq.write_table(pa.Table.from_pylist(rows, schema=schema), path)
+
+    _with_defect(tmp_path, _alter_value)
+    # duplicate episode id (row-level: hashes refreshed by rewrite_shard)
     _with_defect(
         tmp_path,
         lambda work: rewrite_shard(
             work, "episodes", lambda rows: rows[1].__setitem__("episode_id", rows[0]["episode_id"])
         ),
     )
-    # break a foreign key
+    # duplicate daily_bars grain key (same episode/symbol/date twice)
+    _with_defect(
+        tmp_path,
+        lambda work: rewrite_shard(
+            work,
+            "daily_bars",
+            lambda rows: (
+                rows[1].__setitem__("episode_id", rows[0]["episode_id"])
+                or rows[1].__setitem__("symbol", rows[0]["symbol"])
+                or rows[1].__setitem__("session_date", rows[0]["session_date"])
+            ),
+        ),
+    )
+    # break a foreign key (row-level)
     _with_defect(
         tmp_path,
         lambda work: rewrite_shard(
             work, "daily_bars", lambda rows: rows[0].__setitem__("episode_id", "ep-nope")
         ),
     )
-    # inject SEALED_EVAL
+    # inject SEALED_EVAL (row-level)
     _with_defect(
         tmp_path,
         lambda work: rewrite_shard(
             work, "episodes", lambda rows: rows[0].__setitem__("dataset_split", "sealed_eval")
         ),
+    )
+    # forged release digest / drifted generation parameter (base seed)
+    _with_defect(tmp_path, lambda work: _forge_release_digest(work))
+    _with_defect(
+        tmp_path, lambda work: manifest_entry(work, "episodes", lambda _entry: None) or _drift_seed(work)
     )
     # inject evaluator-private family label
     _with_defect(
@@ -450,6 +555,17 @@ def _corruption_suite(tmp_path: Path) -> None:
         tmp_path,
         lambda work: rewrite_shard(
             work, "book_snapshots", lambda rows: rows[0].__setitem__("bids", levels([(10, 5), (11, 5)]))
+        ),
+    )
+    # decision references ANOTHER decision's snapshot (join-field mismatch)
+    _with_defect(tmp_path, lambda work: _swap_snapshot_ref(work))
+    # malformed observation JSON
+    _with_defect(
+        tmp_path,
+        lambda work: rewrite_shard(
+            work,
+            "agent_decisions",
+            lambda rows: rows[0].__setitem__("observation_json", "{bad json"),
         ),
     )
     # crossed snapshot
@@ -488,9 +604,76 @@ def _bump_schema(work: Path) -> None:
     (work / "manifest.json").write_text(json.dumps(blob))
 
 
+def _recomputed_release_digest(blob) -> str:
+    """Re-derive the release digest over the (possibly tampered) manifest."""
+
+    payload = {
+        "schema_version": blob["corpus_schema_version"],
+        "manifest_version": blob["manifest_version"],
+        "training_plan_id": blob["training_plan_id"],
+        "training_plan_version": blob["training_plan_version"],
+        "dataset_split": blob["dataset_split"],
+        "task": blob["task"],
+        "policy": blob["policy"],
+        "base_seed": blob["base_seed"],
+        "world_count": blob["world_count"],
+        "security_count": blob["security_count"],
+        "days": blob["days"],
+        "steps_per_day": blob["steps_per_day"],
+        "book_depth": blob["book_depth"],
+        "tables": [
+            {
+                "name": entry["name"],
+                "row_count": entry["row_count"],
+                "logical_sha256": entry["logical_sha256"],
+            }
+            for entry in blob["tables"]
+        ],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def test_the_full_corruption_matrix_is_rejected(tmp_path: Path) -> None:
     _small_release(tmp_path, name="gold")
     _corruption_suite(tmp_path)
+
+
+def _forge_release_digest(work: Path) -> None:
+    blob = json.loads((work / "manifest.json").read_text())
+    blob["release_digest"] = "f" * 64
+    (work / "manifest.json").write_text(json.dumps(blob))
+
+
+def _drift_seed(work: Path) -> None:
+    blob = json.loads((work / "manifest.json").read_text())
+    blob["base_seed"] = blob["base_seed"] + 1
+    (work / "manifest.json").write_text(json.dumps(blob))
+
+
+def _swap_snapshot_ref(work: Path) -> None:
+    """Point the first episode's first decision at the second decision's snapshot."""
+
+    import pyarrow.parquet as pq
+
+    path = next((work / "agent_decisions").glob("*.parquet"))
+    schema = pq.ParquetFile(path).schema_arrow
+    rows = pq.read_table(path).to_pylist()
+    if len(rows) > 1 and rows[1]["book_snapshot_id"]:
+        rows[0]["book_snapshot_id"] = rows[1]["book_snapshot_id"]
+        pq.write_table(pa.Table.from_pylist(rows, schema=schema), path)
+    import json as _json
+
+    blob = _json.loads((work / "manifest.json").read_text())
+    data = path.read_bytes()
+    for entry in blob["tables"]:
+        if entry["name"] == "agent_decisions":
+            for shard in entry["shards"]:
+                if shard["relative_path"].endswith(path.name):
+                    shard["sha256"] = hashlib.sha256(data).hexdigest()
+                    shard["bytes"] = len(data)
+            break
+    (work / "manifest.json").write_text(_json.dumps(blob))
 
 
 # --- reader smoke test (spec 46) ------------------------------------------------------

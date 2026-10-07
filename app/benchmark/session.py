@@ -140,6 +140,7 @@ class BenchmarkSession:
         port: StrategyDecisionPort,
         config: SessionConfig | None = None,
         recorder: SessionRecorder | None = None,
+        snapshot_depth: int = 10,
     ) -> None:
         self.universe = universe
         self.ecology = ecology
@@ -152,7 +153,10 @@ class BenchmarkSession:
         self.recorder: SessionRecorder = recorder or NullSessionRecorder()
         self.recorder_hooks = RecorderHooks()
         self._episode_id = ""
-        self._snapshot_depth = 10
+        # Snapshot depth: corpus callers may pin it (default 10 levels). A
+        # plain benchmark run records nothing, so this only shapes the
+        # depth_snapshot the recorder observes.
+        self._snapshot_depth = snapshot_depth
         self._record_session_label = ""
 
     def run(self) -> SessionResult:
