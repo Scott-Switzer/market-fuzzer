@@ -405,10 +405,19 @@ def _validate_prices_and_grain(name: str, table: pa.Table) -> None:
 
     symbol_values = table.column("symbol").to_pylist()
     episode_values = table.column("episode_id").to_pylist()
+
+    def _duplicates(keys: list[tuple]) -> list[tuple]:
+        """One counting pass; keys may repeat at scale, so no O(n^2) rescans."""
+
+        from collections import Counter
+
+        counts = Counter(keys)
+        return sorted(key for key, count in counts.items() if count > 1)
+
     if name == "securities":
         keys = list(zip(episode_values, symbol_values, strict=True))
         if len(set(keys)) != len(keys):
-            duplicates = sorted({key for key in keys if keys.count(key) > 1})
+            duplicates = _duplicates(keys)
             raise ValidationError(
                 DUPLICATE_EPISODE_ID,
                 f"securities: duplicate (episode, symbol) grain keys: {duplicates[:3]}",
@@ -431,7 +440,7 @@ def _validate_prices_and_grain(name: str, table: pa.Table) -> None:
         ]
         keys = bar_keys  # type: ignore[assignment]  # a distinct 3-tuple grain
         if len(set(keys)) != len(keys):
-            duplicates = sorted({key for key in keys if keys.count(key) > 1})
+            duplicates = _duplicates(keys)
             raise ValidationError(
                 DUPLICATE_EPISODE_ID,
                 f"daily_bars: duplicate (episode, symbol, date) grain keys: {duplicates[:3]}",
