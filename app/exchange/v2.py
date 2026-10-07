@@ -231,6 +231,24 @@ class ImmutableEventLedgerV2:
     def events(self) -> tuple[OrderEventV2, ...]:
         return tuple(self._events)
 
+    @property
+    def event_count(self) -> int:
+        """The number of appended events, without materializing the ledger."""
+
+        return len(self._events)
+
+    def events_since(self, index: int) -> tuple[OrderEventV2, ...]:
+        """The narrow M10.7 ledger cursor: events appended at or after ``index``.
+
+        Corpus recording drains bounded deltas with this instead of copying the
+        whole ledger at every drain point. ``index`` must not exceed the current
+        count; a frontier of ``0`` yields every event so far.
+        """
+
+        if index < 0 or index > len(self._events):
+            raise ExchangeValidationError(f"ledger cursor {index} out of range [0, {len(self._events)}]")
+        return tuple(self._events[index:])
+
     def canonical_bytes(self) -> bytes:
         payload = {
             "manifest": asdict(self.manifest),

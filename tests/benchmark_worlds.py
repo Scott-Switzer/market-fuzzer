@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from app.benchmark.plan import (
+    DatasetSplit,
     EvaluationPlan,
     EvaluationWorldTemplate,
     PlannedWorld,
@@ -70,11 +71,17 @@ def planned_world(
     """Resolve one concrete world from explicit values."""
 
     resolved_registry = registry if registry is not None else default_process_registry()
+    split = DatasetSplit.TRAINABLE if partition is EvaluationPartition.TRAINING else DatasetSplit.PUBLIC_EVAL
     resolved_plan = (
         plan
         if plan is not None
         else test_plan(
-            EvaluationWorldTemplate(partition=partition, family_id=str(family_id), ecology_id=ecology.label)
+            EvaluationWorldTemplate(
+                family_id=str(family_id),
+                ecology_id=ecology.label,
+                split=split,
+                partition=partition,
+            )
         )
     )
     return resolve_world(

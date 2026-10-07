@@ -1,5 +1,7 @@
 from dataclasses import replace
 
+import pytest
+
 from app.exchange.v2 import (
     CancelOrderCommandV2,
     EventKernelV2,
@@ -223,3 +225,48 @@ def test_typed_replace_commands_audit_outcomes_and_reject_unknown_orders() -> No
     event = exchange.kernel.ledger.events[-1]
     assert event.kind == EventKindV2.REPLACE_REJECTED
     assert event.payload == {"orig_order_id": "missing", "reason": "unknown_resting_order"}
+
+
+# --- M10.7 read-only depth snapshot ---------------------------------------------------
+
+
+def test_depth_snapshot_orders_and_aggregates_without_identity() -> None:
+    exchange = make_exchange()
+    # seller-a rests 40 @ 104 first, then seller-b adds 25 @ 104 and 30 @ 102.
+    exchange.submit(command("sell-a", "seller-a", SideV2.SELL, 104, quantity=40, sequence=1))
+    exchange.submit(command("sell-b", "seller-b", SideV2.SELL, 104, quantity=25, sequence=2))
+    exchange.submit(command("sell-c", "seller-b", SideV2.SELL, 102, quantity=30, sequence=3))
+    exchange.submit(command("buy-a", "buyer", SideV2.BUY, 99, quantity=20, sequence=4))
+
+    bids, asks = exchange.depth_snapshot("NOVA", levels=10)
+    # Asks lowest-price-first, aggregate across both accounts at 104.
+    assert asks == ((102, 30), (104, 65))
+    assert bids == ((99, 20),)
+    # No account or order identity leaks through the aggregate view.
+    for price, quantity in bids + asks:
+        assert isinstance(price, int) and isinstance(quantity, int)
+
+
+def test_depth_snapshot_truncates_to_the_requested_level_count() -> None:
+    exchange = make_exchange()
+    for index, price in enumerate((107, 106, 105, 104), start=1):
+        exchange.submit(command(f"sell-{index}", "seller-a", SideV2.SELL, price, quantity=10, sequence=index))
+    bids, asks = exchange.depth_snapshot("NOVA", levels=2)
+    assert len(asks) == 2
+    assert asks == ((104, 10), (105, 10))
+    assert bids == ()
+
+
+def test_depth_snapshot_is_read_only_and_rejects_non_positive_levels() -> None:
+    exchange = make_exchange()
+    exchange.submit(command("sell-a", "seller-a", SideV2.SELL, 104, quantity=40, sequence=1))
+    before_events = exchange.kernel.ledger.event_count
+    before_orders = exchange.open_orders_for("seller-a", "NOVA")
+    exchange.depth_snapshot("NOVA", levels=10)
+    assert exchange.kernel.ledger.event_count == before_events
+    assert exchange.open_orders_for("seller-a", "NOVA") == before_orders
+    assert exchange.best_quote("NOVA") == (None, 104)
+    from app.exchange.v2 import ExchangeValidationError
+
+    with pytest.raises(ExchangeValidationError):
+        exchange.depth_snapshot("NOVA", levels=0)

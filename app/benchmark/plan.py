@@ -17,6 +17,16 @@ that keeps sealed evaluation worlds out of any future training corpus.
 Resolution happens *before* any world is generated: a plan that names a family the
 registry does not hold fails with ``UNKNOWN_PROCESS_FAMILY`` and no partial
 campaign is produced.
+
+M10.7 adds the training side of the same wall and removes the last heuristic:
+every template now carries an explicit ``DatasetSplit``, so a *public* family can
+be assigned to TRAINABLE or to PUBLIC_EVAL as a declared *use* rather than
+inferred from family visibility, and ``TRAINABLE`` is a separate use from either
+evaluation split. Whole-plan validation enforces the split/visibility/partition
+matrix before any world, reference policy, export buffer, or file output is
+produced, and the evaluator (``run_benchmark``) refuses a plan that contains
+TRAINABLE worlds exactly as the trainer refuses a plan that contains evaluation
+worlds.
 """
 
 from __future__ import annotations
@@ -42,6 +52,8 @@ from app.market.process import MARKOV_REGIME_JUMP_FACTOR_T_V1, STOCHASTIC_VOL_FA
 __all__ = [
     "DEFAULT_PLAN_ID",
     "DEFAULT_PLAN_VERSION",
+    "DEFAULT_TRAINING_PLAN_ID",
+    "DEFAULT_TRAINING_PLAN_VERSION",
     "DatasetSplit",
     "EcologyRegistry",
     "EvaluationPlan",
@@ -50,12 +62,15 @@ __all__ = [
     "SEALED_PLAN_EXPORT_ERROR",
     "SEALED_PLAN_LABEL",
     "SealedEvaluationExportError",
+    "InvalidPlanSplitError",
     "UnknownProcessFamilyError",
-    "default_evaluation_plan",
     "default_ecology_registry",
+    "default_evaluation_plan",
+    "default_training_plan",
     "default_world_id",
     "is_trainable",
     "plan_worlds",
+    "require_evaluation",
     "require_trainable",
     "resolve_world",
     "validate_plan",
@@ -65,6 +80,16 @@ __all__ = [
 #: Identifier and version of the plan that reproduces the M10.6 campaign.
 DEFAULT_PLAN_ID = "m10_6_open_ood_v1"
 DEFAULT_PLAN_VERSION = "v1"
+
+#: Identifier and version of the published M10.7 training cycle.
+DEFAULT_TRAINING_PLAN_ID = "m10_7_training_v1"
+DEFAULT_TRAINING_PLAN_VERSION = "v1"
+
+#: Machine-readable code the *benchmark* gate reports for a training plan.
+TRAINABLE_PLAN_IN_BENCHMARK = "TRAINABLE_PLAN_IN_BENCHMARK"
+
+#: Machine-readable code a whole-plan split-matrix violation reports.
+INVALID_PLAN_SPLIT = "INVALID_PLAN_SPLIT"
 
 #: Machine-readable code an M10.7 export gate reports for withheld worlds.
 SEALED_PLAN_EXPORT_ERROR = "SEALED_EVAL_NOT_TRAINABLE"
@@ -78,9 +103,10 @@ SEALED_PLAN_LABEL = "evaluator-private plan"
 class DatasetSplit(StrEnum):
     """What a world may be used for.
 
-    M10.6.1 does not build training worlds yet, but the classification exists now
-    so M10.7's corpus exporter cannot be written without confronting it: a sealed
-    evaluation world is *never* trainable, however convenient it would be.
+    M10.7 makes the classification explicit: a template declares its split, and a
+    whole-plan validation enforces the visibility matrix. A sealed evaluation
+    world is *never* trainable, however convenient it would be, and a public
+    family legitimately serves both TRAINABLE and PUBLIC_EVAL purposes.
     """
 
     #: Generated explicitly for training and never used for official scoring.
@@ -114,20 +140,115 @@ def require_trainable(splits: tuple[DatasetSplit, ...]) -> None:
     """The M10.7 export gate: raise unless every split is trainable.
 
     Declared here, with its tests, so the exporter that follows cannot quietly
-    reach into an evaluation campaign for data.
+    reach into an evaluation campaign for data. Since the split became explicit,
+    the gate is an identity check on declared (and plan-validated) splits: it
+    rejects PUBLIC_EVAL exactly as it rejects SEALED_EVAL.
     """
 
     if any(not is_trainable(split) for split in splits):
         raise SealedEvaluationExportError(tuple(splits))
 
 
+class TrainablePlanInBenchmarkError(RuntimeError):
+    """A scored evaluation was handed a plan that contains trainable worlds."""
+
+    code = TRAINABLE_PLAN_IN_BENCHMARK
+
+    def __init__(self) -> None:
+        super().__init__(
+            f"{TRAINABLE_PLAN_IN_BENCHMARK}: an evaluation cannot consume TRAINABLE worlds; "
+            "scored worlds must declare PUBLIC_EVAL or SEALED_EVAL"
+        )
+
+
+def require_evaluation(splits: tuple[DatasetSplit, ...]) -> None:
+    """The evaluator gate, symmetric to :func:`require_trainable`.
+
+    The scorer and the trainer consume the same world machinery, so the two paths
+    are separated by an explicit declared check, not by which caller happened to
+    construct the plan: a benchmark that silently scored training worlds would
+    contaminate itself, and a trainer that silently trained on evaluation worlds
+    would leak the holdout. Neither direction is left to caller discipline.
+    """
+
+    if any(is_trainable(split) for split in splits):
+        raise TrainablePlanInBenchmarkError()
+
+
+class InvalidPlanSplitError(ValueError):
+    """A template's declared split contradicts its family visibility or partition."""
+
+    code = INVALID_PLAN_SPLIT
+
+
+def check_split_matrix(
+    *,
+    definition: ProcessFamilyDefinition,
+    template: EvaluationWorldTemplate,
+) -> None:
+    """Validate one template against the M10.7 split/visibility/partition matrix.
+
+    TRAINABLE and PUBLIC_EVAL are *uses of published families*, so both require a
+    public family; SEALED_EVAL is reserved for evaluator-private families. The
+    TRAINING partition is reserved for TRAINABLE worlds, and evaluation partitions
+    may never carry one.
+    """
+
+    split, partition = template.split, template.partition
+    if split is DatasetSplit.TRAINABLE:
+        if definition.visibility is not FamilyVisibility.PUBLIC:
+            raise InvalidPlanSplitError(
+                INVALID_PLAN_SPLIT + f": TRAINABLE world {template.family_id!r} requires a PUBLIC family, "
+                f"got {definition.visibility.value}"
+            )
+        if partition is not EvaluationPartition.TRAINING:
+            observed = partition.value if partition is not None else "unspecified"
+            raise InvalidPlanSplitError(
+                INVALID_PLAN_SPLIT + f": TRAINABLE world {template.family_id!r} must run the TRAINING "
+                f"partition, got {observed}"
+            )
+    elif split is DatasetSplit.PUBLIC_EVAL:
+        if definition.visibility is not FamilyVisibility.PUBLIC:
+            raise InvalidPlanSplitError(
+                INVALID_PLAN_SPLIT + f": PUBLIC_EVAL world {template.family_id!r} requires a PUBLIC family, "
+                f"got {definition.visibility.value}"
+            )
+        if partition is EvaluationPartition.TRAINING:
+            raise InvalidPlanSplitError(
+                INVALID_PLAN_SPLIT + ": PUBLIC_EVAL world must not run the TRAINING partition"
+            )
+    elif split is DatasetSplit.SEALED_EVAL:
+        if definition.visibility is not FamilyVisibility.EVALUATOR_PRIVATE:
+            raise InvalidPlanSplitError(
+                INVALID_PLAN_SPLIT + f": SEALED_EVAL world {template.family_id!r} requires an "
+                f"evaluator-private family, got {definition.visibility.value}"
+            )
+        if partition is EvaluationPartition.TRAINING:
+            raise InvalidPlanSplitError(
+                INVALID_PLAN_SPLIT + ": SEALED_EVAL world must not run the TRAINING partition"
+            )
+    else:  # pragma: no cover - DatasetSplit is closed; guards future members
+        raise InvalidPlanSplitError(INVALID_PLAN_SPLIT + f": unknown split {split!r}")
+
+
 @dataclass(frozen=True, slots=True)
 class EvaluationWorldTemplate:
-    """One entry of an evaluation plan: *what* a world is, before it is built."""
+    """One entry of an evaluation plan: *what* a world is, before it is built.
 
-    partition: EvaluationPartition
+    M10.7 makes the world's usage explicit: a template declares its
+    :class:`DatasetSplit`, so TRAINABLE versus PUBLIC_EVAL versus SEALED_EVAL is a
+    *statement about intent*, not something guessed from family visibility.
+
+    ``partition`` may be omitted when it is implied by the split (both evaluation
+    splits resolve to the familiar partition... that default is set in
+    :func:`resolve_world` when needed; explicitly supplying the partition is the
+    normal way to state a distribution or mechanism world).
+    """
+
     family_id: str
     ecology_id: str
+    split: DatasetSplit
+    partition: EvaluationPartition | None = None
     weight: int = 1
 
     def __post_init__(self) -> None:
@@ -137,6 +258,22 @@ class EvaluationWorldTemplate:
             raise ValueError("a template needs a process family id")
         if not self.ecology_id:
             raise ValueError("a template needs an ecology id")
+        if not isinstance(self.split, DatasetSplit):
+            raise ValueError("a template needs an explicit DatasetSplit")
+        if self.partition is None:
+            default_partition = (
+                EvaluationPartition.TRAINING
+                if self.split is DatasetSplit.TRAINABLE
+                else EvaluationPartition.FAMILIAR
+            )
+            object.__setattr__(self, "partition", default_partition)
+
+    @property
+    def resolved_partition(self) -> EvaluationPartition:
+        """The partition a world built from this template runs (never ``None``)."""
+
+        assert self.partition is not None  # narrowed in __post_init__
+        return self.partition
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +309,25 @@ class EvaluationPlan:
         cycle = self.cycle()
         return cycle[index % len(cycle)]
 
+    def split(self) -> DatasetSplit:
+        """The one split every template declares; breakpoints on disagreement.
+
+        Mixed-split plans are legal only for evaluation campaigns after M10.7
+        resolves that evaluator splits keep segregating by *family visibility*
+        (the sealed template pattern); this helper stays available for callers
+        that need to distinguish the two cases without re-scan-shape.
+        """
+
+        splits = {template.split for template in self.worlds}
+        if len(splits) == 1:
+            return next(iter(splits))
+        raise ValueError("this plan mixes splits; use splits() instead")
+
+    def splits(self) -> frozenset[DatasetSplit]:
+        """Every distinct split the templates declare."""
+
+        return frozenset(template.split for template in self.worlds)
+
     def family_ids(self) -> tuple[str, ...]:
         """Every process family this plan names, sorted."""
 
@@ -201,7 +357,7 @@ class PlannedWorld:
 
     @property
     def partition(self) -> EvaluationPartition:
-        return self.template.partition
+        return self.template.resolved_partition
 
     @property
     def family_id(self) -> str:
@@ -275,42 +431,119 @@ def default_evaluation_plan() -> EvaluationPlan:
 
     so the default plan reproduces the M10.6 world identities, seeds, partitions,
     and generators byte for byte.
-    """
 
+    M10.7 adds the split provenance: every template declares its use as
+    ``PUBLIC_EVAL``, so the evaluator can never silently consume training worlds,
+    and the corpus builder has no heuristic to undo. World machinery (ids, seeds,
+    partitions, families, and ecologies) is unchanged.
+    """
     return EvaluationPlan(
         plan_id=DEFAULT_PLAN_ID,
         version=DEFAULT_PLAN_VERSION,
         description="Open-source process-family OOD: baseline and shifted ecology, two published held-out families.",
         worlds=(
             EvaluationWorldTemplate(
-                partition=EvaluationPartition.FAMILIAR,
                 family_id=FAMILIAR_FAMILY_ID,
                 ecology_id=FAMILIAR_ECOLOGY.label,
+                split=DatasetSplit.PUBLIC_EVAL,
+                partition=EvaluationPartition.FAMILIAR,
             ),
             EvaluationWorldTemplate(
-                partition=EvaluationPartition.DISTRIBUTION,
                 family_id=FAMILIAR_FAMILY_ID,
                 ecology_id=DISTRIBUTION_ECOLOGY.label,
+                split=DatasetSplit.PUBLIC_EVAL,
+                partition=EvaluationPartition.DISTRIBUTION,
             ),
             EvaluationWorldTemplate(
-                partition=EvaluationPartition.MECHANISM,
                 family_id=STOCHASTIC_VOL_FACTOR_T_V1,
                 ecology_id=DISTRIBUTION_ECOLOGY.label,
+                split=DatasetSplit.PUBLIC_EVAL,
+                partition=EvaluationPartition.MECHANISM,
             ),
             EvaluationWorldTemplate(
-                partition=EvaluationPartition.FAMILIAR,
                 family_id=FAMILIAR_FAMILY_ID,
                 ecology_id=FAMILIAR_ECOLOGY.label,
+                split=DatasetSplit.PUBLIC_EVAL,
+                partition=EvaluationPartition.FAMILIAR,
             ),
             EvaluationWorldTemplate(
-                partition=EvaluationPartition.DISTRIBUTION,
                 family_id=FAMILIAR_FAMILY_ID,
                 ecology_id=DISTRIBUTION_ECOLOGY.label,
+                split=DatasetSplit.PUBLIC_EVAL,
+                partition=EvaluationPartition.DISTRIBUTION,
             ),
             EvaluationWorldTemplate(
-                partition=EvaluationPartition.MECHANISM,
                 family_id=MARKOV_REGIME_JUMP_FACTOR_T_V1,
                 ecology_id=DISTRIBUTION_ECOLOGY.label,
+                split=DatasetSplit.PUBLIC_EVAL,
+                partition=EvaluationPartition.MECHANISM,
+            ),
+        ),
+    )
+
+
+def default_training_plan() -> EvaluationPlan:
+    """``m10_7_training_v1``: the published M10.7 training cycle.
+
+    Every world is TRAINABLE: it runs the TRAINING partition, on a *public*
+    process family, in one of the two published ecologies. The six-template cycle
+    rotates family-by-family with each family seeing both ecologies, so training
+    data covers the same generator structure the open benchmark evaluates with --
+    without ever touching its evaluation worlds:
+
+        training / GJR / familiar + shifted
+        training / stochastic-vol / familiar + shifted
+        training / regime-jump / familiar + shifted
+
+    ``default_training_plan()`` is the *only* plan the participant-facing corpus
+    CLI can name. An evaluator-private family can never enter it, and a plan that
+    tagged a public family SEALED_EVAL (or a private family TRAINABLE) fails
+    whole-plan validation before anything is generated.
+    """
+
+    return EvaluationPlan(
+        plan_id=DEFAULT_TRAINING_PLAN_ID,
+        version=DEFAULT_TRAINING_PLAN_VERSION,
+        description=(
+            "Leakage-safe synthetic training cycle: every world TRAINABLE, all three "
+            "public process families across both published ecologies."
+        ),
+        worlds=(
+            EvaluationWorldTemplate(
+                family_id=FAMILIAR_FAMILY_ID,
+                ecology_id=FAMILIAR_ECOLOGY.label,
+                split=DatasetSplit.TRAINABLE,
+                partition=EvaluationPartition.TRAINING,
+            ),
+            EvaluationWorldTemplate(
+                family_id=FAMILIAR_FAMILY_ID,
+                ecology_id=DISTRIBUTION_ECOLOGY.label,
+                split=DatasetSplit.TRAINABLE,
+                partition=EvaluationPartition.TRAINING,
+            ),
+            EvaluationWorldTemplate(
+                family_id=STOCHASTIC_VOL_FACTOR_T_V1,
+                ecology_id=FAMILIAR_ECOLOGY.label,
+                split=DatasetSplit.TRAINABLE,
+                partition=EvaluationPartition.TRAINING,
+            ),
+            EvaluationWorldTemplate(
+                family_id=STOCHASTIC_VOL_FACTOR_T_V1,
+                ecology_id=DISTRIBUTION_ECOLOGY.label,
+                split=DatasetSplit.TRAINABLE,
+                partition=EvaluationPartition.TRAINING,
+            ),
+            EvaluationWorldTemplate(
+                family_id=MARKOV_REGIME_JUMP_FACTOR_T_V1,
+                ecology_id=FAMILIAR_ECOLOGY.label,
+                split=DatasetSplit.TRAINABLE,
+                partition=EvaluationPartition.TRAINING,
+            ),
+            EvaluationWorldTemplate(
+                family_id=MARKOV_REGIME_JUMP_FACTOR_T_V1,
+                ecology_id=DISTRIBUTION_ECOLOGY.label,
+                split=DatasetSplit.TRAINABLE,
+                partition=EvaluationPartition.TRAINING,
             ),
         ),
     )
@@ -350,14 +583,19 @@ def resolve_world(
     template = plan.template_for(index)
     ecology_registry = ecologies or default_ecology_registry()
     definition: ProcessFamilyDefinition = registry.resolve(template.family_id)
-    split = DatasetSplit.PUBLIC_EVAL if definition.is_public else DatasetSplit.SEALED_EVAL
+    # Split provenance re-checked from the visibility matrix on every resolution:
+    # an explicitly-seeded or caller-constructed path cannot silently present a
+    # split the family visibility contradicts. (Defense in depth; plan-validating
+    # callers perform the same check as a whole-plan phase.)
+    check_split_matrix(definition=definition, template=template)
+    split = template.split
     return PlannedWorld(
         plan_id=plan.plan_id,
         plan_version=plan.version,
         index=index,
         world_id=world_identifier
         if world_identifier is not None
-        else default_world_id(index=index, partition=template.partition),
+        else default_world_id(index=index, partition=template.resolved_partition),
         seed=world_seed(base_seed, index) if seed is None else seed,
         template=template,
         ecology=ecology_registry.resolve(template.ecology_id),
@@ -385,9 +623,17 @@ def validate_plan(
     every role, so a definition that cannot construct a node fails here rather
     than part-way through a campaign. Neither an unregistered family nor an
     unregistered ecology can therefore be discovered late.
+
+    M10.7 adds the whole-plan split matrix: every template's declared split is
+    validated against its family's visibility (never in the reverse order: TRAINABLE
+    and PUBLIC_EVAL are *uses* of public families, SEALED_EVAL is reserved for
+    evaluator-private ones) and against its partition, so an invalid combination
+    fails to build a campaign at all rather than after worlds have been generated.
     """
 
     ecology_registry = ecologies or default_ecology_registry()
+    for template in plan.worlds:
+        check_split_matrix(definition=registry.resolve(template.family_id), template=template)
     for family_id in plan.family_ids():
         registry.commitment(family_id)
     for ecology_id in plan.ecology_ids():
