@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from benchmark_worlds import benchmark_universe, day_sessions
 
 from app.benchmark.universe import (
     DISTRIBUTION_ECOLOGY,
@@ -10,29 +11,27 @@ from app.benchmark.universe import (
     BenchmarkUniverse,
     EcologyProfile,
     EvaluationPartition,
-    build_universe,
 )
-from app.market.calendar import trading_days
 from app.market.process import FAMILIAR_FAMILY, MECHANISM_FAMILIES, ProcessFamilyKind
 
 
 def _sessions(days: int = 3) -> tuple[date, ...]:
-    return tuple(trading_days(date(2026, 6, 1), date(2026, 6, 30))[:days])
+    return day_sessions(days)
 
 
 def _universe(
     seed: int = 7,
     count: int = 8,
     ecology: EcologyProfile = FAMILIAR_ECOLOGY,
-    family: ProcessFamilyKind = FAMILIAR_FAMILY,
+    family: str = FAMILIAR_FAMILY,
     partition: EvaluationPartition = EvaluationPartition.FAMILIAR,
 ) -> BenchmarkUniverse:
-    return build_universe(
+    return benchmark_universe(
         universe_id="u1",
         world_id="w1",
         seed=seed,
         ecology=ecology,
-        family=family,
+        family_id=str(family),
         partition=partition,
         security_count=count,
         sessions=_sessions(),
@@ -106,6 +105,26 @@ def test_a_universe_records_its_partition_family_and_ecology() -> None:
     assert universe.partition == "mechanism"
     assert universe.process_family == "stochastic_vol_factor_t_v1"
     assert universe.ecology_label == DISTRIBUTION_ECOLOGY.label
+
+
+def test_a_universe_carries_the_provenance_of_the_plan_that_built_it() -> None:
+    universe = _universe()
+    assert universe.evaluation_plan_id == "test_worlds_v1"
+    assert universe.evaluation_plan_version == "v1"
+    assert universe.split == "public_eval"
+    # The commitment identifies the generator structurally; it is stable for a
+    # given family and is what an authorized replay checks a sealed world against.
+    assert len(universe.family_commitment) == 64
+    assert universe.family_commitment == _universe().family_commitment
+    assert universe.family_commitment == _universe(seed=99).family_commitment
+
+
+def test_every_public_family_commits_to_a_distinct_generator() -> None:
+    commitments = {
+        family.value: _universe(family=family, partition=EvaluationPartition.MECHANISM).family_commitment
+        for family in ProcessFamilyKind
+    }
+    assert len(set(commitments.values())) == len(ProcessFamilyKind)
 
 
 def test_each_process_family_generates_a_distinct_market() -> None:

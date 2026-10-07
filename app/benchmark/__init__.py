@@ -1,10 +1,16 @@
-"""Synthetic Exchange Benchmark vertical slice (M10.6).
+"""Synthetic Exchange Benchmark vertical slice (M10.6.1).
 
 Joins the M10 synthetic universe, the V2 price-time-priority exchange, deterministic
 background agents, and the versioned external-agent observation/action protocol
 into one reproducible synthetic trading session with sealed evaluation worlds.
-M10.6 adds three process families and the familiar / distribution / mechanism
-evaluation partitions behind a market-process generalization gap.
+
+M10.6 added three process families and the familiar / distribution / mechanism
+evaluation partitions. M10.6.1 makes the *campaign* explicit and the *families*
+extensible: an evaluation is an immutable :class:`EvaluationPlan`, its families come
+from a :class:`MarketProcessRegistry`, and a trusted evaluator can register a
+family the public repository does not publish. Every world also carries a
+:class:`DatasetSplit` so a sealed evaluation world can never be mistaken for
+training data.
 """
 
 from app.benchmark.agents import (
@@ -30,6 +36,22 @@ from app.benchmark.model import (
     TaskOutcome,
     TaskSpec,
 )
+from app.benchmark.plan import (
+    DEFAULT_PLAN_ID,
+    DEFAULT_PLAN_VERSION,
+    DatasetSplit,
+    EcologyRegistry,
+    EvaluationPlan,
+    EvaluationWorldTemplate,
+    PlannedWorld,
+    SealedEvaluationExportError,
+    default_ecology_registry,
+    default_evaluation_plan,
+    is_trainable,
+    plan_worlds,
+    require_trainable,
+    resolve_world,
+)
 from app.benchmark.port import (
     AGENT_PROTOCOL,
     AGENT_UNAVAILABLE,
@@ -44,8 +66,21 @@ from app.benchmark.port import (
     submit_limit_action,
     twap_port,
 )
+from app.benchmark.process_registry import (
+    EVALUATOR_PRIVATE_FAMILY,
+    FAMILIAR_FAMILY_ID,
+    DuplicateProcessFamilyError,
+    FamilyVisibility,
+    MarketProcessRegistry,
+    ProcessFamilyDefinition,
+    ProcessNodeRole,
+    UnknownProcessFamilyError,
+    default_process_registry,
+    family_commitment,
+    validate_family_id,
+)
 from app.benchmark.runner import BenchmarkReport, WorldOutcome, builtin_port_factory, run_benchmark
-from app.benchmark.session import BenchmarkSession, SessionConfig
+from app.benchmark.session import BenchmarkSession, SessionConfig, run_manifest
 from app.benchmark.tasks import build_task_spec, evaluate, max_drawdown_cents
 from app.benchmark.universe import (
     DISTRIBUTION_ECOLOGY,
@@ -70,7 +105,11 @@ from app.market.process import (
 __all__ = [
     "AGENT_PROTOCOL",
     "AGENT_UNAVAILABLE",
+    "DEFAULT_PLAN_ID",
+    "DEFAULT_PLAN_VERSION",
     "EVALUATION_VALID",
+    "EVALUATOR_PRIVATE_FAMILY",
+    "FAMILIAR_FAMILY_ID",
     "INVALID_AGENT_PROTOCOL",
     "INVALID_AGENT_UNAVAILABLE",
     "INVALID_INTERNAL",
@@ -78,26 +117,37 @@ __all__ = [
     "BenchmarkReport",
     "BenchmarkSession",
     "BenchmarkUniverse",
-    "DISTRIBUTION_ECOLOGY",
     "BookView",
     "CancelIntent",
+    "DISTRIBUTION_ECOLOGY",
+    "DatasetSplit",
+    "DuplicateProcessFamilyError",
     "EcologyProfile",
+    "EcologyRegistry",
     "EvaluationPartition",
+    "EvaluationPlan",
+    "EvaluationWorldTemplate",
     "FAMILIAR_ECOLOGY",
     "FAMILIAR_FAMILY",
+    "FamilyVisibility",
     "FillRecord",
     "FundamentalTraderAgent",
     "HIDDEN_PROFILE",
     "HttpJsonPort",
     "InProcessPort",
     "MECHANISM_FAMILIES",
-    "MarkovRegimeJumpFactorT",
     "MarketMakerAgent",
+    "MarketProcessRegistry",
+    "MarkovRegimeJumpFactorT",
     "MomentumTraderAgent",
     "NoiseTraderAgent",
     "PUBLIC_PROFILE",
+    "PlannedWorld",
     "ProcessFamily",
+    "ProcessFamilyDefinition",
     "ProcessFamilyKind",
+    "ProcessNodeRole",
+    "SealedEvaluationExportError",
     "Security",
     "SessionConfig",
     "SessionResult",
@@ -107,6 +157,7 @@ __all__ = [
     "TaskKind",
     "TaskOutcome",
     "TaskSpec",
+    "UnknownProcessFamilyError",
     "WorldOutcome",
     "accumulate_port",
     "build_background_agents",
@@ -115,14 +166,24 @@ __all__ = [
     "builtin_port_factory",
     "canonical_json",
     "crossing_limit_action",
+    "default_ecology_registry",
+    "default_evaluation_plan",
+    "default_process_registry",
     "digest",
     "digest_many",
     "evaluate",
+    "family_commitment",
     "hold_action",
+    "is_trainable",
     "max_drawdown_cents",
     "passive_maker_port",
+    "plan_worlds",
     "replace_action",
+    "require_trainable",
+    "resolve_world",
     "run_benchmark",
+    "run_manifest",
     "submit_limit_action",
     "twap_port",
+    "validate_family_id",
 ]

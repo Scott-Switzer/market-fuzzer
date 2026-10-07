@@ -7,7 +7,7 @@ from datetime import date
 
 import pytest
 
-from app.benchmark.universe import _family_for
+from app.benchmark.process_registry import ProcessNodeRole, default_process_registry
 from app.market.calendar import trading_days
 from app.market.engine import GjrGarchT
 from app.market.process import (
@@ -23,9 +23,17 @@ from app.market.process import (
 )
 from app.world.rng import SemanticRNG
 
+#: The published registry is the authoritative construction path for the public
+#: families, so these variance tests exercise exactly what a benchmark world uses.
+_REGISTRY = default_process_registry()
+
 
 def _sessions(count: int = 30) -> tuple[date, ...]:
     return tuple(trading_days(date(2020, 1, 2), date(2030, 12, 31))[:count])
+
+
+def _family_for(family: ProcessFamilyKind, role: str, scale: float) -> ProcessFamily:
+    return _REGISTRY.build(str(family), role=ProcessNodeRole(role), volatility_scale=scale)
 
 
 def _sv() -> StochasticVolFactorT:
