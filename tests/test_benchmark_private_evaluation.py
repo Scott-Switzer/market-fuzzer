@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any, ClassVar
 
@@ -42,6 +42,7 @@ from app.benchmark.plan import (
     is_trainable,
     plan_worlds,
     require_trainable,
+    validate_plan,
 )
 from app.benchmark.plan import (
     EvaluationWorldTemplate as Template,
@@ -419,6 +420,88 @@ def test_a_sealed_evaluation_plan_fails_against_the_public_registry() -> None:
     # Fail-fast: the plan resolves before any world is generated, so the agent was
     # never even asked for a port.
     assert calls == []
+
+
+def test_a_run_shorter_than_the_plan_cycle_is_still_rejected_by_the_public_registry() -> None:
+    """A short world count must not weaken the plan it belongs to.
+
+    The private family sits in the *third* template of the sealed plan, so a
+    prefix-only check would accept the plan for a two-world run and quietly score
+    a campaign that contains no sealed world at all.
+    """
+
+    public = default_process_registry()
+    with pytest.raises(UnknownProcessFamilyError) as excinfo:
+        plan_worlds(plan=_sealed_plan(), registry=public, count=1, base_seed=1)
+    assert excinfo.value.family_id == PRIVATE_FAMILY_ID
+    with pytest.raises(UnknownProcessFamilyError):
+        run_benchmark(
+            kind=TaskKind.EXECUTION,
+            port_factory=lambda _index: twap_port(slice_quantity=500),
+            worlds=2,
+            security_count=2,
+            days=1,
+            steps_per_day=4,
+            target_quantity=2_000,
+            plan=_sealed_plan(),
+            registry=public,
+        )
+    # The trusted registry validates the same short run and produces it.
+    report = _sealed_run(registry=_trusted_registry(), worlds=2)
+    assert report.evaluation_worlds == 2
+    assert report.sealed_worlds == 0  # only the familiar and distribution templates
+
+
+def test_validating_a_plan_checks_every_family_and_ecology_it_names() -> None:
+    registry = _trusted_registry()
+    validate_plan(plan=_sealed_plan(), registry=registry)
+    with pytest.raises(UnknownProcessFamilyError):
+        validate_plan(plan=_sealed_plan(), registry=default_process_registry())
+    with pytest.raises(KeyError):
+        validate_plan(
+            plan=EvaluationPlan(
+                plan_id="unknown_ecology_v1",
+                version="v1",
+                worlds=(Template(EvaluationPartition.FAMILIAR, FAMILIAR_FAMILY.value, "missing-ecology"),),
+            ),
+            registry=registry,
+        )
+
+
+def test_a_plan_can_name_a_custom_ecology_through_the_evaluator_registry() -> None:
+    custom = replace(FAMILIAR_ECOLOGY, label="evaluator-custom", depth_scale=0.8)
+    ecologies = default_ecology_registry()
+    ecologies.register(custom)
+    plan = EvaluationPlan(
+        plan_id="custom_ecology_plan_v1",
+        version="v1",
+        worlds=(Template(EvaluationPartition.FAMILIAR, FAMILIAR_FAMILY.value, custom.label),),
+    )
+    report = run_benchmark(
+        kind=TaskKind.EXECUTION,
+        port_factory=lambda _index: twap_port(slice_quantity=500),
+        worlds=1,
+        security_count=2,
+        days=1,
+        steps_per_day=4,
+        target_quantity=2_000,
+        plan=plan,
+        ecologies=ecologies,
+    )
+    assert report.scoreable is True
+    assert report.outcomes[0].ecology_label == custom.label
+    # Without the evaluator's ecology registry the same plan cannot run.
+    with pytest.raises(KeyError):
+        run_benchmark(
+            kind=TaskKind.EXECUTION,
+            port_factory=lambda _index: twap_port(slice_quantity=500),
+            worlds=1,
+            security_count=2,
+            days=1,
+            steps_per_day=4,
+            target_quantity=2_000,
+            plan=plan,
+        )
 
 
 def test_the_plan_itself_names_the_private_family_as_its_mechanism_generator() -> None:

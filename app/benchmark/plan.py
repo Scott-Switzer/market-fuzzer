@@ -58,6 +58,7 @@ __all__ = [
     "plan_worlds",
     "require_trainable",
     "resolve_world",
+    "validate_plan",
     "world_seed",
 ]
 
@@ -367,6 +368,32 @@ def resolve_world(
     )
 
 
+def validate_plan(
+    *,
+    plan: EvaluationPlan,
+    registry: MarketProcessRegistry,
+    ecologies: EcologyRegistry | None = None,
+) -> None:
+    """Resolve *every* family and ecology ``plan`` names, not just a prefix.
+
+    A plan is a declaration about a whole campaign, so a world count shorter than
+    the cycle must not weaken it: with a three-template sealed plan and two
+    requested worlds, checking only the prefix would let the private family go
+    unverified and the run would silently contain only public worlds.
+
+    Resolving a family also computes its commitment, which builds its nodes for
+    every role, so a definition that cannot construct a node fails here rather
+    than part-way through a campaign. Neither an unregistered family nor an
+    unregistered ecology can therefore be discovered late.
+    """
+
+    ecology_registry = ecologies or default_ecology_registry()
+    for family_id in plan.family_ids():
+        registry.commitment(family_id)
+    for ecology_id in plan.ecology_ids():
+        ecology_registry.resolve(ecology_id)
+
+
 def plan_worlds(
     *,
     plan: EvaluationPlan,
@@ -377,13 +404,15 @@ def plan_worlds(
 ) -> tuple[PlannedWorld, ...]:
     """Resolve the first ``count`` worlds of ``plan``.
 
-    Every world is resolved before any of them is returned, so an unknown family
-    or ecology raises :class:`UnknownProcessFamilyError` (or ``KeyError`` for an
-    ecology) instead of producing a half-built campaign.
+    The whole plan is validated first, and every requested world is resolved before
+    any of them is returned, so an unknown family or ecology raises
+    :class:`UnknownProcessFamilyError` (or ``KeyError`` for an ecology) instead of
+    producing a half-built campaign.
     """
 
     if count < 1:
         raise ValueError("a plan needs at least one world")
+    validate_plan(plan=plan, registry=registry, ecologies=ecologies)
     return tuple(
         resolve_world(
             plan=plan,

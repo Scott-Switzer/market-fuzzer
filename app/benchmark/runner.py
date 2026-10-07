@@ -65,7 +65,9 @@ from app.benchmark.model import (
 from app.benchmark.plan import (
     SEALED_PLAN_LABEL,
     DatasetSplit,
+    EcologyRegistry,
     EvaluationPlan,
+    default_ecology_registry,
     default_evaluation_plan,
     plan_worlds,
 )
@@ -344,12 +346,14 @@ def run_benchmark(
     session_config: SessionConfig | None = None,
     plan: EvaluationPlan | None = None,
     registry: MarketProcessRegistry | None = None,
+    ecologies: EcologyRegistry | None = None,
 ) -> BenchmarkReport:
     """Generate sealed worlds, run the agent, and score it across all worlds.
 
-    ``plan`` and ``registry`` are the campaign and the families it may use. Both
-    default to the published open benchmark; an evaluator passes its own registry
-    to run a sealed campaign on an evaluator-private family.
+    ``plan``, ``registry``, and ``ecologies`` are the campaign, the families it
+    may use, and the tradable environments it may use. All three default to the
+    published open benchmark; an evaluator passes its own registries to run a
+    sealed campaign on an evaluator-private family or a custom ecology.
     """
 
     if worlds < 1:
@@ -358,11 +362,18 @@ def run_benchmark(
         session_config = SessionConfig(steps_per_day=steps_per_day, agent_cash_cents=_AGENT_CASH_CENTS[kind])
     campaign = plan if plan is not None else default_evaluation_plan()
     families = registry if registry is not None else default_process_registry()
+    environments = ecologies if ecologies is not None else default_ecology_registry()
     sessions = _calendar(start_date, days)
-    # Resolve every world before generating the first one, so a plan that names a
-    # family the registry does not hold raises UNKNOWN_PROCESS_FAMILY up front
-    # instead of producing a half-built campaign.
-    planned_worlds = plan_worlds(plan=campaign, registry=families, count=worlds, base_seed=base_seed)
+    # Validate the whole plan and resolve every world before generating the first
+    # one, so a plan that names a family or ecology the registries do not hold
+    # raises up front instead of producing a half-built campaign.
+    planned_worlds = plan_worlds(
+        plan=campaign,
+        registry=families,
+        ecologies=environments,
+        count=worlds,
+        base_seed=base_seed,
+    )
     outcomes: list[WorldOutcome] = []
     replay_worlds: list[dict[str, Any]] = []
     symbols_seen: set[str] = set()
