@@ -10,9 +10,11 @@ event ledger is totally ordered regardless of which agent acted first.
 
 Sealed-evaluation rules enforced here:
 
-* Model-facing identifiers never reveal the world index, the public/hidden
-  partition, the holdout family, the seed, or generator parameters. The agent
-  session identifier is an opaque digest over evaluator-private seed material.
+* Model-facing identifiers never reveal the world index, the evaluation
+  partition, the process family, the ecology, the seed, or generator parameters.
+  The agent session identifier is an opaque digest over evaluator-private seed
+  material, and the process family is *evaluator-private*: it is recorded in the
+  run manifest and the replay package but never reaches an observation.
 * Order ownership is tracked explicitly; maker/taker attribution never relies on
   parsing an order-ID string.
 * The external agent only ever holds and trades the task's tradable instruments.
@@ -35,7 +37,7 @@ from app.benchmark.agents import (
 from app.benchmark.hashing import digest, digest_many
 from app.benchmark.model import FillRecord, SessionResult, TaskKind, TaskSpec
 from app.benchmark.port import StrategyDecisionPort
-from app.benchmark.universe import BenchmarkUniverse, HoldoutProfile, Security
+from app.benchmark.universe import BenchmarkUniverse, EcologyProfile, Security
 from app.exchange.v2 import (
     CancelOrderCommandV2,
     EventKernelV2,
@@ -89,13 +91,13 @@ class BenchmarkSession:
         self,
         *,
         universe: BenchmarkUniverse,
-        profile: HoldoutProfile,
+        ecology: EcologyProfile,
         task: TaskSpec,
         port: StrategyDecisionPort,
         config: SessionConfig | None = None,
     ) -> None:
         self.universe = universe
-        self.profile = profile
+        self.ecology = ecology
         self.task = task
         self.port = port
         self.config = config or SessionConfig()
@@ -105,7 +107,7 @@ class BenchmarkSession:
         securities = tuple(self.universe.securities)
         instruments = tuple(security.symbol for security in securities)
         rng = SemanticRNG(self.universe.world_id, self.universe.seed)
-        agents = build_background_agents(self.profile)
+        agents = build_background_agents(self.ecology)
         # Instrument-specific streams: a given agent must not make an identical
         # random decision in every security at the same step.
         agent_streams: dict[tuple[str, str], SemanticStream] = {
@@ -121,22 +123,30 @@ class BenchmarkSession:
                 {
                     "universe": self.universe.universe_id,
                     "task": self.task.kind.value,
-                    "profile": self.profile.label,
+                    "partition": self.universe.partition,
+                    "ecology": self.ecology.label,
+                    "process_family": self.universe.process_family,
                     "target_quantity": self.task.target_quantity,
                 }
             ),
             strategy_artifact_digest=digest({"port": self.port.name}),
             generator_bundle_digest=digest(
-                {"generator": "benchmark-session-v1", "market": self.universe.market_logical_sha256}
+                {
+                    "generator": "benchmark-session-v2",
+                    "process_family": self.universe.process_family,
+                    "market": self.universe.market_logical_sha256,
+                }
             ),
             campaign_commitment=digest({"world": self.universe.world_id, "seed": self.universe.seed}),
-            seed_material_digest=digest({"seed": self.universe.seed, "profile": self.profile.label}),
+            seed_material_digest=digest(
+                {"seed": self.universe.seed, "process_family": self.universe.process_family}
+            ),
         )
         exchange = MatchingExchangeV2(
             EventKernelV2(manifest),
             tick_size_cents=cfg.tick_size_cents,
-            maker_fee_bps=self.profile.maker_fee_bps,
-            taker_fee_bps=self.profile.taker_fee_bps,
+            maker_fee_bps=self.ecology.maker_fee_bps,
+            taker_fee_bps=self.ecology.taker_fee_bps,
         )
         for agent in agents:
             exchange.register(
@@ -226,7 +236,8 @@ class BenchmarkSession:
         return SessionResult(
             world_id=self.universe.world_id,
             universe_id=self.universe.universe_id,
-            holdout=self.universe.holdout,
+            partition=self.universe.partition,
+            process_family=self.universe.process_family,
             sessions=tuple(session.isoformat() for session in self.universe.sessions),
             ledger_digest=exchange.kernel.ledger.digest,
             market_logical_sha256=self.universe.market_logical_sha256,
@@ -277,8 +288,10 @@ class BenchmarkSession:
         """An opaque, deterministic, non-informative agent-facing session ID.
 
         Derived from evaluator-private seed material only, so it is stable for
-        replay yet reveals nothing about the world index, the partition, the
-        holdout family, or the generator parameters.
+        replay yet reveals nothing about the world index, the evaluation
+        partition, the process family, or the generator parameters. It does not
+        depend on the process family at all, so two worlds that differ only by
+        their generator family share an identity.
         """
 
         return (
@@ -368,7 +381,7 @@ class BenchmarkSession:
                     last_price_ticks=self._mark.get(instrument),
                     recent_prices=tuple(self._recent[instrument]),
                     open_order_ids=open_ids,
-                    depth_scale=self.profile.depth_scale,
+                    depth_scale=self.ecology.depth_scale,
                 )
                 for intent in agent.act(view, streams[(agent.agent_id, instrument)]):
                     self._apply_background_intent(agent.account_id, instrument, intent, day_index)

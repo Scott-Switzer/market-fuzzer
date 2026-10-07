@@ -4,7 +4,9 @@ from typing import Any
 
 from app.benchmark.model import TaskKind
 from app.benchmark.port import InProcessPort, StrategyDecisionPort
-from app.benchmark.runner import builtin_port_factory, run_benchmark
+from app.benchmark.runner import builtin_port_factory, run_benchmark, world_design
+from app.benchmark.universe import EvaluationPartition
+from app.market.process import FAMILIAR_FAMILY, MECHANISM_FAMILIES
 
 
 def _run(worlds: int = 6):
@@ -37,18 +39,65 @@ def test_a_healthy_run_is_scoreable() -> None:
     assert all(outcome.scoreable for outcome in report.outcomes)
 
 
-def test_worlds_are_partitioned_into_public_and_hidden() -> None:
+def test_worlds_are_partitioned_into_familiar_distribution_and_mechanism() -> None:
     report = _run()
-    holdouts = [outcome.holdout for outcome in report.outcomes]
-    assert holdouts == ["public", "hidden", "public", "hidden", "public", "hidden"]
+    partitions = [outcome.partition for outcome in report.outcomes]
+    assert partitions == ["familiar", "distribution", "mechanism", "familiar", "distribution", "mechanism"]
 
 
-def test_the_gap_is_a_distribution_generalization_gap() -> None:
+def test_the_familiar_and_distribution_partitions_share_the_familiar_family() -> None:
     report = _run()
-    assert report.generalization_gap == report.hidden_score - report.public_score
-    assert report.generalization_scope == "distribution"
-    # M10.5 is a parameter/distribution holdout, not a process-family holdout.
-    assert all("mechanism" not in outcome.profile_label for outcome in report.outcomes)
+    for outcome in report.outcomes:
+        if outcome.partition in (EvaluationPartition.FAMILIAR, EvaluationPartition.DISTRIBUTION):
+            assert outcome.process_family == FAMILIAR_FAMILY.value
+
+
+def test_mechanism_worlds_use_only_held_out_families() -> None:
+    report = _run(worlds=12)
+    held_out = {family.value for family in MECHANISM_FAMILIES}
+    seen: set[str] = set()
+    for outcome in report.outcomes:
+        if outcome.partition == EvaluationPartition.MECHANISM:
+            assert outcome.process_family in held_out
+            assert outcome.process_family != FAMILIAR_FAMILY.value
+            seen.add(outcome.process_family)
+    # The mechanism partition rotates through every held-out family.
+    assert seen == held_out
+    assert set(report.mechanism_families) == held_out
+
+
+def test_complete_world_assignment_covers_every_partition() -> None:
+    expected = (
+        EvaluationPartition.FAMILIAR,
+        EvaluationPartition.DISTRIBUTION,
+        EvaluationPartition.MECHANISM,
+    )
+    for index in range(12):
+        partition, family, _ecology = world_design(index)
+        assert partition is expected[index % 3]
+        if partition is EvaluationPartition.MECHANISM:
+            assert family in MECHANISM_FAMILIES
+        else:
+            assert family is FAMILIAR_FAMILY
+
+
+def test_the_distribution_gap_isolates_the_ecology_shift() -> None:
+    report = _run()
+    assert report.distribution_gap == report.distribution_score - report.familiar_score
+
+
+def test_the_mechanism_gap_compares_unseen_families_to_the_familiar_one() -> None:
+    report = _run()
+    assert report.mechanism_gap == report.mechanism_score - report.familiar_score
+    assert report.generalization_scope == "process-family"
+
+
+def test_the_process_family_gap_isolates_the_generator_at_a_fixed_ecology() -> None:
+    report = _run()
+    # mechanism and distribution share the same shifted ecology, so their
+    # difference is a pure process-family effect.
+    assert report.process_family_gap == report.mechanism_score - report.distribution_score
+    assert report.process_family_gap == report.mechanism_gap - report.distribution_gap
 
 
 def test_a_run_is_reproducible() -> None:
@@ -68,6 +117,8 @@ def test_the_replay_package_records_every_world() -> None:
         assert entry["event_count"] > 0
         assert entry["scoreable"] is True
         assert entry["agent_failure"] is None
+        assert entry["partition"] in {"familiar", "distribution", "mechanism"}
+        assert len(entry["process_family"]) > 0
 
 
 def test_the_report_renders_the_headline_story() -> None:
@@ -75,7 +126,12 @@ def test_the_report_renders_the_headline_story() -> None:
     text = report.render()
     assert "FINANCIAL WORLD FACTORY BENCHMARK" in text
     assert "Optimal Execution" in text
+    assert "Familiar worlds score" in text
+    assert "Distribution worlds score" in text
+    assert "Mechanism worlds score" in text
     assert "Distribution generalization gap" in text
+    assert "Mechanism generalization gap" in text
+    assert "Process-family generalization gap" in text
     assert "Weakest environment" in text
     assert "Validity: VALID" in text
     assert "existed" in text
@@ -129,8 +185,9 @@ def test_invalid_worlds_are_excluded_from_official_means() -> None:
     assert "Official benchmark score: WITHHELD" in report.render()
     # The healthy worlds still produce non-zero summaries, but an invalid world
     # means the run carries no official score at all.
-    assert report.public_score > 0.0
-    assert report.hidden_score > 0.0
+    assert report.familiar_score > 0.0
+    assert report.distribution_score == 0.0  # the only distribution world failed
+    assert report.mechanism_score > 0.0
 
 
 def test_the_replay_package_records_validity() -> None:
@@ -168,12 +225,17 @@ def test_a_run_with_no_valid_worlds_presents_no_numeric_scores() -> None:
     )
     assert report.scoreable is False
     assert report.valid_worlds == 0
-    assert report.valid_public_worlds == 0
-    assert report.valid_hidden_worlds == 0
+    assert report.valid_familiar_worlds == 0
+    assert report.valid_distribution_worlds == 0
+    assert report.valid_mechanism_worlds == 0
     text = report.render()
-    assert "Public worlds score      n/a (no valid worlds)" in text
-    assert "Hidden worlds score      n/a (no valid worlds)" in text
-    assert "Distribution generalization gap n/a (both partitions required)" in text
+    assert "Familiar worlds score" in text and "n/a (no valid worlds)" in text
+    assert "Distribution worlds score" in text
+    assert "Mechanism worlds score" in text
+    assert "Distribution generalization gap" in text
+    assert "Mechanism generalization gap" in text
+    assert "Process-family generalization gap" in text
+    assert text.count("n/a (both partitions required)") == 3
     assert "Task metrics             withheld (no valid worlds)" in text
     assert "withheld (no valid worlds)" in text
     assert "Official benchmark score: WITHHELD" in text

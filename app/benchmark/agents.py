@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.benchmark.universe import HoldoutProfile
+from app.benchmark.universe import EcologyProfile
 from app.exchange.v2 import OrderTypeV2, SideV2, TimeInForceV2
 from app.world.rng import SemanticStream
 
@@ -178,8 +178,8 @@ class NoiseTraderAgent:
         return [SubmitIntent(side, quantity, price)]
 
 
-def build_background_agents(profile: HoldoutProfile) -> tuple[BackgroundAgent, ...]:
-    """Instantiate the profile's agent population in a stable order."""
+def build_background_agents(profile: EcologyProfile) -> tuple[BackgroundAgent, ...]:
+    """Instantiate the ecology's background-agent population in a stable order."""
 
     agents: list[BackgroundAgent] = []
     for index in range(profile.market_makers):

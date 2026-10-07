@@ -85,7 +85,8 @@ class SessionResult:
 
     world_id: str
     universe_id: str
-    holdout: str
+    partition: str
+    process_family: str
     sessions: tuple[str, ...]
     ledger_digest: str
     market_logical_sha256: str

@@ -6,6 +6,7 @@ passing for the wrong reason, the sealed-evaluation claim is broken.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
@@ -105,8 +106,18 @@ def test_an_invalid_order_spammer_cannot_avoid_violations() -> None:
 
 
 def test_taker_flow_cannot_receive_maker_credit() -> None:
-    def decide(observation: dict[str, Any]) -> dict[str, Any]:
-        return crossing_limit_action(observation, 200)
+    # An IOC ("market") order never rests, so the agent can only ever be the
+    # taker. A crossing *limit* order would legitimately rest and could later be
+    # hit, so it is the wrong instrument for this invariant.
+    def decide(_observation: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "schema_version": "2.0",
+            "action_type": "submit",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": 200,
+            "rationale_code": "ioc_taker",
+        }
 
     report = _run(TaskKind.MARKET_MAKING, InProcessPort("taker-only", decide))
     for outcome in report.outcomes:
@@ -119,14 +130,14 @@ def test_maker_then_flatten_still_reports_peak_inventory() -> None:
 
     from app.benchmark.session import BenchmarkSession, SessionConfig
     from app.benchmark.tasks import build_task_spec
-    from app.benchmark.universe import PUBLIC_PROFILE, build_universe
+    from app.benchmark.universe import FAMILIAR_ECOLOGY, build_universe
     from app.market.calendar import trading_days
 
     universe = build_universe(
         universe_id="u-adversarial",
         world_id="w-adversarial",
         seed=99,
-        profile=PUBLIC_PROFILE,
+        ecology=FAMILIAR_ECOLOGY,
         security_count=2,
         sessions=tuple(trading_days(date(2026, 6, 1), date(2026, 6, 30))[:1]),
     )
@@ -142,7 +153,7 @@ def test_maker_then_flatten_still_reports_peak_inventory() -> None:
 
     result = BenchmarkSession(
         universe=universe,
-        profile=PUBLIC_PROFILE,
+        ecology=FAMILIAR_ECOLOGY,
         task=task,
         port=InProcessPort("maker-then-flatten", decide),
         config=SessionConfig(steps_per_day=6),
@@ -178,8 +189,8 @@ def test_a_dead_http_agent_cannot_receive_an_official_score(
     assert report.run_status == INVALID_AGENT_UNAVAILABLE
     assert report.valid_worlds == 0
     assert len(report.invalid_worlds) == _SMALL["worlds"]
-    assert report.public_score == 0.0
-    assert report.hidden_score == 0.0
+    assert report.familiar_score == 0.0
+    assert report.distribution_score == 0.0
     assert "Official benchmark score: WITHHELD" in report.render()
 
 
@@ -217,6 +228,94 @@ def test_a_valid_hold_agent_stays_scoreable() -> None:
     assert report.valid_worlds == _SMALL["worlds"]
     assert report.run_status == "VALID"
     assert all(outcome.score == 0.0 for outcome in report.outcomes)
+
+
+# -- evaluator-private process family ----------------------------------------------
+
+
+def test_the_process_family_never_reaches_an_agent_observation() -> None:
+    observations: list[dict[str, Any]] = []
+
+    def decide(observation: dict[str, Any]) -> dict[str, Any]:
+        observations.append(dict(observation))
+        return hold_action()
+
+    report = run_benchmark(
+        kind=TaskKind.EXECUTION,
+        port_factory=lambda _index: InProcessPort("recorder", decide),
+        worlds=3,
+        security_count=2,
+        days=1,
+        steps_per_day=3,
+        base_seed=8_675_309,
+    )
+    assert {outcome.partition for outcome in report.outcomes} == {
+        "familiar",
+        "distribution",
+        "mechanism",
+    }
+    assert observations
+    payload = json.dumps(observations, sort_keys=True)
+    for token in (
+        "gjr_factor_t_v1",
+        "stochastic_vol_factor_t_v1",
+        "markov_regime_jump_factor_t_v1",
+        "process_family",
+        "familiar",
+        "distribution",
+        "mechanism",
+        "holdout",
+    ):
+        assert token not in payload
+    # The family is evaluator-private: it must never be the reason the agent
+    # failed or the run went non-scoreable.
+    assert report.scoreable is True
+    assert report.run_status == "VALID"
+
+
+def test_a_family_agnostic_agent_has_zero_generalization_gaps() -> None:
+    # Holding does nothing in every world, so every partition mean is identical:
+    # the gaps are pure differences and inject no family-specific noise.
+    report = _run(TaskKind.EXECUTION, InProcessPort("agnostic", lambda _o: hold_action()))
+    assert report.scoreable is True
+    assert report.familiar_score == report.distribution_score == report.mechanism_score == 0.0
+    assert report.distribution_gap == 0.0
+    assert report.mechanism_gap == 0.0
+    assert report.process_family_gap == 0.0
+
+
+def test_a_family_sensitive_agent_earns_a_nonzero_process_family_gap() -> None:
+    # An agent whose sizing keys off recent mid-price volatility must be scored
+    # differently when the underlying process family changes. The mechanism and
+    # distribution partitions share an ecology, so any difference is the family.
+    def port_factory(_index: int) -> StrategyDecisionPort:
+        last: dict[str, int] = {}
+
+        def decide(observation: dict[str, Any]) -> dict[str, Any]:
+            symbol = str(observation["symbol"])
+            mid = int(observation.get("mid_ticks") or 1)
+            previous = last.get(symbol)
+            last[symbol] = mid
+            quantity = 400
+            if previous is not None and previous > 0 and abs(mid - previous) / previous >= 0.002:
+                quantity = 80
+            return crossing_limit_action(observation, quantity)
+
+        return InProcessPort("vol-reactive", decide)
+
+    report = run_benchmark(
+        kind=TaskKind.EXECUTION,
+        port_factory=port_factory,
+        worlds=9,
+        security_count=2,
+        days=2,
+        steps_per_day=8,
+        base_seed=31337,
+        target_quantity=5_000,
+    )
+    assert report.valid_distribution_worlds > 0
+    assert report.valid_mechanism_worlds > 0
+    assert report.process_family_gap != 0.0
 
 
 # -- CLI exit-code semantics -------------------------------------------------------
@@ -261,6 +360,8 @@ def test_cli_allow_invalid_preserves_exit_zero_but_labels_the_run(monkeypatch: p
     assert "INVALID_AGENT_UNAVAILABLE" in result.output
     # The smoke path must stay labelled non-scoreable rather than printing a
     # numeric official score for an agent that never answered.
-    assert "Public worlds score      n/a (no valid worlds)" in result.output
-    assert "Hidden worlds score      n/a (no valid worlds)" in result.output
+    assert "Familiar worlds score" in result.output
+    assert "Distribution worlds score" in result.output
+    assert "Mechanism worlds score" in result.output
+    assert "n/a (no valid worlds)" in result.output
     assert "Valid worlds: 0" in result.output

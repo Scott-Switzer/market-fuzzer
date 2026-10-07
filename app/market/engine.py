@@ -1,9 +1,14 @@
 """Deterministic daily market engine (Milestone 10).
 
 This is the first slice of the M10 daily market: a close-price path driven by a
-cross-sectional factor structure whose innovations come from a GJR-GARCH-t
-process, and Brownian-bridge OHLC bars whose bound invariants are enforced at
-construction.
+cross-sectional factor structure whose innovations come from a pluggable
+*process family* (M10.5 shipped GJR-GARCH-t; M10.6 adds stochastic-volatility and
+regime-jump families in :mod:`app.market.process`), and Brownian-bridge OHLC bars
+whose bound invariants are enforced at construction.
+
+:class:`ProcessFamily` is the seam: every node (market factor, sector factor,
+company idiosyncratic) exposes ``innovations(stream, sessions, variable)``, so
+the engine's factor arithmetic is identical for every generator family.
 
 Determinism rests on two things:
 
@@ -26,7 +31,9 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
+from typing import ClassVar
 
+from app.market.process import GJR_FACTOR_T_V1, ProcessFamily
 from app.world.rng import SemanticStream
 
 __all__ = [
@@ -36,6 +43,7 @@ __all__ = [
     "MarketResult",
     "MarketWorld",
     "OhlcBoundError",
+    "ProcessFamily",
     "SimulatedSeries",
     "brownian_bridge_bar",
     "logical_sha256",
@@ -50,8 +58,8 @@ class OhlcBoundError(ValueError):
 
 
 @dataclass(frozen=True)
-class GjrGarchT:
-    """GJR-GARCH-t parameters.
+class GjrGarchT(ProcessFamily):
+    """GJR-GARCH-t parameters -- the ``gjr_factor_t_v1`` process family.
 
     ``sigma2_t = omega + alpha*eps2_{t-1} + gamma*I[eps_{t-1}<0]*eps2_{t-1}
     + beta*sigma2_{t-1}`` with unit-variance Student-t innovations.
@@ -62,6 +70,8 @@ class GjrGarchT:
     gamma: float
     beta: float
     nu: float
+
+    name: ClassVar[str] = GJR_FACTOR_T_V1
 
     def __post_init__(self) -> None:
         if self.omega <= 0:
@@ -81,6 +91,13 @@ class GjrGarchT:
 
     def unconditional_variance(self) -> float:
         return self.omega / (1.0 - self.persistence)
+
+    def innovations(
+        self, stream: SemanticStream, sessions: Sequence[date], variable: str
+    ) -> tuple[float, ...]:
+        """Per-session innovations for the GJR-GARCH-t recursion."""
+
+        return tuple(_gjr_garch_t_path(stream, self, sessions, variable))
 
 
 def _chi_square_draw(stream: SemanticStream, variable: str, ordinal: int, nu: float) -> float:
@@ -208,14 +225,14 @@ def brownian_bridge_bar(
 
 @dataclass(frozen=True)
 class EntitySpec:
-    """One tradable entity and its factor loadings."""
+    """One tradable entity, its factor loadings, and its idiosyncratic family."""
 
     symbol: str
     sector: str
     beta: float
     sector_beta: float
     drift: float
-    garch: GjrGarchT
+    process: ProcessFamily
 
 
 @dataclass(frozen=True)
@@ -225,8 +242,8 @@ class MarketWorld:
     world_id: str
     seed: int
     sessions: tuple[date, ...]
-    market: GjrGarchT
-    sectors: Mapping[str, GjrGarchT]
+    market: ProcessFamily
+    sectors: Mapping[str, ProcessFamily]
     entities: tuple[EntitySpec, ...]
     jumps: Mapping[str, Mapping[date, float]] = field(default_factory=dict)
     sigma_open: float = 0.004
@@ -297,21 +314,19 @@ def simulate_daily_market(world: MarketWorld) -> MarketResult:
     rng = SemanticRNG(world.world_id, world.seed)
 
     market_stream = rng.stream("WORLD", "market.factor")
-    market_factor = _gjr_garch_t_path(market_stream, world.market, world.sessions, "market_factor")
+    market_factor = list(world.market.innovations(market_stream, world.sessions, "market_factor"))
 
     sector_factors: dict[str, tuple[float, ...]] = {}
     for sector in sorted(world.sectors):
         stream = rng.stream(f"SECTOR:{sector}", "sector.factor")
-        sector_factors[sector] = tuple(
-            _gjr_garch_t_path(stream, world.sectors[sector], world.sessions, "sector_factor")
-        )
+        sector_factors[sector] = world.sectors[sector].innovations(stream, world.sessions, "sector_factor")
 
     series: dict[str, SimulatedSeries] = {}
     for entity in world.entities:
         if entity.sector not in sector_factors:
             raise ValueError(f"{entity.symbol} references unknown sector {entity.sector!r}")
         idio_stream = rng.stream(f"COMPANY:{entity.symbol}", "market.idiosyncratic")
-        idio = _gjr_garch_t_path(idio_stream, entity.garch, world.sessions, "idiosyncratic")
+        idio = entity.process.innovations(idio_stream, world.sessions, "idiosyncratic")
         ohlc_stream = rng.stream(f"COMPANY:{entity.symbol}", "market.ohlc")
         jumps = world.jumps.get(entity.symbol, {})
         closes: list[float] = []

@@ -258,7 +258,7 @@ def run_example() -> None:
     )
 
 
-benchmark_app = typer.Typer(help="Synthetic exchange benchmark (M10.5)")
+benchmark_app = typer.Typer(help="Synthetic exchange benchmark (M10.6 process-family holdout)")
 
 
 @benchmark_app.command("run")
