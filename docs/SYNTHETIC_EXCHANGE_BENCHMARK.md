@@ -50,13 +50,19 @@ arithmetic is identical for all of them.
 |---|---|---|
 | `gjr_factor_t_v1` | GJR-GARCH-t: `sigma2_t = omega + alpha·eps2 + gamma·[eps<0]·eps2 + beta·sigma2`, unit-variance Student-t shocks. Volatility is a function of past squared returns. | familiar |
 | `stochastic_vol_factor_t_v1` | Log-normal stochastic volatility: a latent AR(1) log-variance `h_t` with its own Gaussian shock, and `eps_t = exp(h_t/2)·z_t`. Volatility has an independent shock source. | held out (mechanism) |
-| `markov_regime_jump_factor_t_v1` | A hidden two-state Markov chain with regime-specific drift and volatility, plus compound-Poisson jumps whose size is regime dependent. Stressed regimes jump harder. | held out (mechanism) |
+| `markov_regime_jump_factor_t_v1` | A hidden two-state Markov chain with regime-specific drift and volatility, plus a one-shot (Bernoulli) jump per session whose size is regime dependent. Stressed regimes jump harder. | held out (mechanism) |
 
 Every family is **normalized to the same unconditional per-session variance per
 node role**, so the family axis changes the *dynamics* of the path (volatility
-clustering, tails, drift regimes), not its level. `variance_scale` is a pure scale
-that multiplies the unconditional variance by `scale²` without touching the
+clustering, tails, drift regimes), not its level. `volatility_scale` is a pure
+scale that multiplies the unconditional variance by `scale²` without touching the
 dynamics — this is what keeps the ecology axis orthogonal to the family axis.
+Each family is stationary from its first session (the stochastic-volatility path
+starts in the stationary distribution of its latent log-variance, the regime-jump
+path in the stationary regime distribution) and mean-centred, and
+`unconditional_variance()` equals the variance the family actually generates — a
+regression test checks the realized variance of every family at every ecology
+level.
 
 ## Evaluation partitions
 
@@ -194,7 +200,7 @@ Every world's score is reduced by 25 points per constraint violation.
 
 ## Example output
 
-`--worlds 32 --securities 8 --days 5 --steps-per-day 30` (≈78 s, 1.72 M exchange
+`--worlds 32 --securities 8 --days 5 --steps-per-day 30` (1,719,614 exchange
 events, 32/32 distinct per-world ledger digests, two runs byte-identical):
 
 ```
@@ -205,34 +211,34 @@ Task: Optimal Execution
 Evaluation worlds: 32 sealed synthetic worlds
 Valid worlds: 32
 Securities encountered: 8
-Exchange events: 1,721,028
+Exchange events: 1,719,614
 
 Completion                 97.4%
-Implementation shortfall   125.1 bps
+Implementation shortfall   121.4 bps
 Tail shortfall            534.8 bps
 Peak inventory exposure   50000
 Constraint violations         0
 
 Familiar worlds score       80.6  (11 valid worlds)
 Distribution worlds score   67.4  (11 valid worlds)
-Mechanism worlds score      82.3  (10 valid worlds)
+Mechanism worlds score      81.9  (10 valid worlds)
 
 Distribution generalization gap      -13.2
-Mechanism generalization gap          +1.7
-Process-family generalization gap    +14.9
+Mechanism generalization gap          +1.3
+Process-family generalization gap    +14.5
 
 Weakest environment:
 distribution / gjr_factor_t_v1 / distribution-shift (world bench-0025-distribution)
 
-Replay package: 32 worlds, digest a6c1ee65ff10281d7d9e403d0c1045d9
+Replay package: 32 worlds, digest 262bc7e638374b94d84879ff24b775c0
 
 Validity: VALID
 ```
 
 For this non-modeling TWAP baseline the isolated process-family gap is *positive*:
 it does not overfit the familiar generator. The two held-out families are still
-scored apart from each other (per-world means ≈73.9 for the regime-jump family and
-≈90.8 for stochastic volatility), which is direct evidence that the instrument
+scored apart from each other (per-world means ≈73.8 for the regime-jump family and
+≈90.0 for stochastic volatility), which is direct evidence that the instrument
 resolves generator-dependent behaviour rather than injecting family noise.
 
 ## Layout

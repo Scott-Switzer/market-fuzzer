@@ -25,7 +25,7 @@ from app.world.rng import SemanticRNG
 
 
 def _sessions(count: int = 30) -> tuple[date, ...]:
-    return tuple(trading_days(date(2026, 6, 1), date(2026, 9, 30))[:count])
+    return tuple(trading_days(date(2020, 1, 2), date(2030, 12, 31))[:count])
 
 
 def _sv() -> StochasticVolFactorT:
@@ -108,11 +108,31 @@ def test_every_family_is_normalized_to_the_same_unconditional_variance() -> None
         assert max(variances) / min(variances) == pytest.approx(1.0, rel=1e-9)
 
 
-def test_variance_scale_is_a_pure_scale_that_preserves_dynamics() -> None:
+def test_volatility_scale_multiplies_variance_by_its_square() -> None:
     for family in ProcessFamilyKind:
         base = _family_for(family, "market", 1.0).unconditional_variance()
         scaled = _family_for(family, "market", 2.0).unconditional_variance()
         assert scaled == pytest.approx(4.0 * base, rel=1e-9)
+
+
+def test_reported_variance_matches_the_realized_variance() -> None:
+    # The whole mechanism holdout rests on this: a family must actually generate
+    # the variance it reports, at every ecology level, or the mechanism partition
+    # would mix a volatility shift into the process-family effect.
+    sessions = _sessions(1200)
+    for scale in (1.0, 1.7):
+        for role in ("market", "sector", "entity"):
+            for family in ProcessFamilyKind:
+                node = _family_for(family, role, scale)
+                ratios = []
+                for seed in range(6):
+                    stream = SemanticRNG(f"w-{seed}", 9000 + seed).stream("WORLD", "market.factor")
+                    path = node.innovations(stream, sessions, "market_factor")
+                    mean = sum(path) / len(path)
+                    realized = sum((value - mean) ** 2 for value in path) / (len(path) - 1)
+                    ratios.append(realized / node.unconditional_variance())
+                average = sum(ratios) / len(ratios)
+                assert 0.8 < average < 1.25, (family.value, role, scale, round(average, 4))
 
 
 def test_stochastic_vol_unconditional_variance_matches_the_closed_form() -> None:
@@ -121,6 +141,27 @@ def test_stochastic_vol_unconditional_variance_matches_the_closed_form() -> None
     assert family.unconditional_variance() == pytest.approx(
         math.exp(family.mu + 0.5 * log_variance), rel=1e-12
     )
+
+
+def test_regime_jump_innovations_are_mean_centred() -> None:
+    # The raw regime-jump process drifts; the emitted innovations must not, so the
+    # family axis carries no accidental drift shift relative to zero-mean families.
+    family = _mrj()
+    assert family.stationary_mean() != 0.0
+    stream = SemanticRNG("w-centred", 5).stream("WORLD", "market.factor")
+    path = family.innovations(stream, _sessions(4000), "market_factor")
+    assert abs(sum(path) / len(path)) < 1e-3
+
+
+def test_regime_jump_starts_in_the_stationary_regime_distribution() -> None:
+    # The initial regime is drawn from the stationary distribution (0.8 / 0.2),
+    # not uniformly (0.5 / 0.5), so the first session already has the variance the
+    # family reports.
+    family = _mrj()
+    assert family.stationary_distribution() == pytest.approx((0.8, 0.2))
+    starts = [family._stationary_regime(step / 1000) for step in range(1000)]
+    assert starts.count(0) == 800
+    assert starts.count(1) == 200
 
 
 def test_regime_stationary_distribution_is_solved_correctly() -> None:
@@ -150,7 +191,7 @@ def test_stochastic_vol_rejects_invalid_parameters() -> None:
     with pytest.raises(ValueError):
         StochasticVolFactorT(mu=0.0, phi=0.9, sigma_eta=0.1, nu=2.0)
     with pytest.raises(ValueError):
-        StochasticVolFactorT(mu=0.0, phi=0.9, sigma_eta=0.1, nu=5.0, variance_scale=0.0)
+        StochasticVolFactorT(mu=0.0, phi=0.9, sigma_eta=0.1, nu=5.0, volatility_scale=0.0)
 
 
 def test_regime_jump_rejects_invalid_parameters() -> None:

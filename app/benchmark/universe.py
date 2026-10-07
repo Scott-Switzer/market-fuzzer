@@ -199,15 +199,16 @@ def _scaled_garch(scale: float, *, role: str) -> GjrGarchT:
     )
 
 
-def _stochastic_vol(*, role: str, variance_scale: float) -> StochasticVolFactorT:
+def _stochastic_vol(*, role: str, volatility_scale: float) -> StochasticVolFactorT:
     phi, sigma_eta, nu = _SV_SHAPE[role]
     log_variance = sigma_eta**2 / (1.0 - phi**2)
-    # E[eps^2] = exp(mu + log_variance / 2), so match the GJR baseline exactly.
+    # E[eps^2] = volatility_scale^2 * exp(mu + log_variance / 2), so matching the
+    # GJR baseline's variance fixes mu exactly.
     mu = math.log(_gjr_base_variance(role)) - 0.5 * log_variance
-    return StochasticVolFactorT(mu=mu, phi=phi, sigma_eta=sigma_eta, nu=nu, variance_scale=variance_scale)
+    return StochasticVolFactorT(mu=mu, phi=phi, sigma_eta=sigma_eta, nu=nu, volatility_scale=volatility_scale)
 
 
-def _markov_regime_jump(*, role: str, variance_scale: float) -> MarkovRegimeJumpFactorT:
+def _markov_regime_jump(*, role: str, volatility_scale: float) -> MarkovRegimeJumpFactorT:
     """A regime-jump family rescaled to the GJR baseline's unconditional variance.
 
     Every innovation component (regime mean, regime volatility, and jump size) is
@@ -237,7 +238,7 @@ def _markov_regime_jump(*, role: str, variance_scale: float) -> MarkovRegimeJump
         jump_mean=_MRJ_TEMPLATE["jump_mean"] * factor,
         jump_sigma=_MRJ_TEMPLATE["jump_sigma"] * factor,
         nu=_MRJ_TEMPLATE["nu"],
-        variance_scale=variance_scale,
+        volatility_scale=volatility_scale,
     )
 
 
@@ -247,8 +248,8 @@ def _family_for(family: ProcessFamilyKind, role: str, scale: float) -> ProcessFa
     if family is ProcessFamilyKind.GJR_FACTOR_T_V1:
         return _scaled_garch(scale, role=role)
     if family is ProcessFamilyKind.STOCHASTIC_VOL_FACTOR_T_V1:
-        return _stochastic_vol(role=role, variance_scale=scale)
-    return _markov_regime_jump(role=role, variance_scale=scale)
+        return _stochastic_vol(role=role, volatility_scale=scale)
+    return _markov_regime_jump(role=role, volatility_scale=scale)
 
 
 @dataclass(frozen=True, slots=True)

@@ -11,15 +11,20 @@ benchmark can measure a *market-process generalization gap*:
 * ``stochastic_vol_factor_t_v1``    log-normal stochastic volatility (an AR(1)
   latent log-variance) with unit-variance Student-t innovations.
 * ``markov_regime_jump_factor_t_v1`` a hidden two-state Markov chain with
-  regime-specific drift and volatility plus compound-Poisson jumps whose size is
-  regime dependent.
+  regime-specific drift and volatility plus a one-shot jump per session whose size
+  is regime dependent.
 
 The families differ *structurally* -- in how volatility clusters, how tails are
 generated, and whether the distribution switches between regimes -- while their
 unconditional per-session variance is matched by construction. That keeps the
-*ecology* axis (volatility level) orthogonal to the *family* axis (dynamics), so
-a score drop on the mechanism partition reflects the process family rather than a
+*ecology* axis (volatility level) orthogonal to the *family* axis (dynamics), so a
+score drop on the mechanism partition reflects the process family rather than a
 simple scaling difference.
+
+``volatility_scale`` is a pure volatility multiplier, identical in meaning to the
+GJR family's variance scaling: it multiplies variance by ``volatility_scale**2``
+and leaves the dynamics untouched. Every family reports the same number through
+:meth:`ProcessFamily.unconditional_variance` as it actually generates.
 
 Families are immutable and draw only from the keyed
 :class:`~app.world.rng.SemanticStream`, so every draw is addressed by
@@ -78,7 +83,8 @@ class ProcessFamily(ABC):
 
     ``name`` is the stable evaluator-private identifier recorded in the replay
     package. ``innovations`` returns one log-return innovation per session for a
-    single node.
+    single node, and ``unconditional_variance`` must equal the stationary variance
+    of those innovations.
     """
 
     name: ClassVar[str]
@@ -91,7 +97,7 @@ class ProcessFamily(ABC):
 
     @abstractmethod
     def unconditional_variance(self) -> float:
-        """The stationary per-session variance of the innovations."""
+        """The stationary per-session variance of :meth:`innovations`."""
 
 
 @dataclass(frozen=True)
@@ -99,17 +105,19 @@ class StochasticVolFactorT(ProcessFamily):
     """Log-normal stochastic volatility with unit-variance Student-t shocks.
 
     ``h_t = mu + phi * (h_{t-1} - mu) + sigma_eta * eta_t`` is the latent log
-    variance and ``eps_t = exp(h_t / 2) * z_t`` with ``z_t`` unit-variance
-    Student-t. Volatility therefore has its own shock source instead of being a
-    function of past squared returns, which is the structural difference from the
-    GJR-GARCH-t family.
+    variance and ``eps_t = volatility_scale * exp(h_t / 2) * z_t`` with ``z_t``
+    unit-variance Student-t. Volatility therefore has its own shock source instead
+    of being a function of past squared returns, which is the structural
+    difference from the GJR-GARCH-t family. The path starts in the stationary
+    distribution of ``h``, so its variance matches
+    :meth:`unconditional_variance` from the first session.
     """
 
     mu: float
     phi: float
     sigma_eta: float
     nu: float
-    variance_scale: float = 1.0
+    volatility_scale: float = 1.0
 
     name: ClassVar[str] = STOCHASTIC_VOL_FACTOR_T_V1
 
@@ -120,8 +128,8 @@ class StochasticVolFactorT(ProcessFamily):
             raise ValueError("sigma_eta must be positive")
         if self.nu <= 2.0:
             raise ValueError("nu must exceed 2 for a finite variance")
-        if self.variance_scale <= 0.0:
-            raise ValueError("variance_scale must be positive")
+        if self.volatility_scale <= 0.0:
+            raise ValueError("volatility_scale must be positive")
 
     @property
     def log_variance(self) -> float:
@@ -130,7 +138,7 @@ class StochasticVolFactorT(ProcessFamily):
         return self.sigma_eta**2 / (1.0 - self.phi**2)
 
     def unconditional_variance(self) -> float:
-        return self.variance_scale**2 * math.exp(self.mu + 0.5 * self.log_variance)
+        return self.volatility_scale**2 * math.exp(self.mu + 0.5 * self.log_variance)
 
     def innovations(
         self, stream: SemanticStream, sessions: Sequence[date], variable: str
@@ -138,10 +146,8 @@ class StochasticVolFactorT(ProcessFamily):
         # Imported lazily so engine.py can import this module without a cycle.
         from app.market.engine import standardized_t_draw
 
-        scale = math.sqrt(self.variance_scale)
-        level = self.mu + self.sigma_eta * math.sqrt(self.log_variance) * stream.normal(
-            f"{variable}.sv.level", 0, 0
-        )
+        # The stationary log-volatility has standard deviation sqrt(log_variance).
+        level = self.mu + math.sqrt(self.log_variance) * stream.normal(f"{variable}.sv.level", 0, 0)
         innovations: list[float] = []
         for ordinal in range(len(sessions)):
             if ordinal > 0:
@@ -151,18 +157,25 @@ class StochasticVolFactorT(ProcessFamily):
                     + self.sigma_eta * stream.normal(f"{variable}.sv.level", ordinal, 0)
                 )
             shock = standardized_t_draw(stream, f"{variable}.sv", ordinal, self.nu)
-            innovations.append(scale * math.exp(0.5 * level) * shock)
+            innovations.append(self.volatility_scale * math.exp(0.5 * level) * shock)
         return tuple(innovations)
 
 
 @dataclass(frozen=True)
 class MarkovRegimeJumpFactorT(ProcessFamily):
-    """A hidden Markov chain with regime drift/volatility and Poisson jumps.
+    """A hidden Markov chain with regime drift/volatility and a session jump.
 
     Each session's innovation is ``mean(state) + sigma(state) * z_t`` plus, with
-    probability ``jump_prob``, a normal jump scaled by ``jump_scale(state)``.
-    The regime therefore changes both the drift and the volatility, and stressed
-    regimes jump harder -- a structure none of the other families can express.
+    probability ``jump_prob``, at most one normal jump scaled by
+    ``jump_scale(state)``. The regime therefore changes both the drift and the
+    volatility, and stressed regimes jump harder -- a structure none of the other
+    families can express.
+
+    The path starts in the stationary regime distribution and the innovations are
+    mean-centred on the stationary mean, so ``E[eps] = 0`` and
+    ``Var(eps) = unconditional_variance()`` exactly. Centring keeps the family axis
+    free of an accidental drift shift relative to the zero-mean GJR and
+    stochastic-volatility families.
     """
 
     means: tuple[float, ...]
@@ -173,7 +186,7 @@ class MarkovRegimeJumpFactorT(ProcessFamily):
     jump_mean: float
     jump_sigma: float
     nu: float
-    variance_scale: float = 1.0
+    volatility_scale: float = 1.0
 
     name: ClassVar[str] = MARKOV_REGIME_JUMP_FACTOR_T_V1
 
@@ -200,8 +213,8 @@ class MarkovRegimeJumpFactorT(ProcessFamily):
             raise ValueError("jump_sigma must be non-negative")
         if self.nu <= 2.0:
             raise ValueError("nu must exceed 2 for a finite variance")
-        if self.variance_scale <= 0.0:
-            raise ValueError("variance_scale must be positive")
+        if self.volatility_scale <= 0.0:
+            raise ValueError("volatility_scale must be positive")
 
     @property
     def regime_count(self) -> int:
@@ -221,7 +234,16 @@ class MarkovRegimeJumpFactorT(ProcessFamily):
         total = sum(probabilities)
         return tuple(probability / total for probability in probabilities)
 
-    def unconditional_variance(self) -> float:
+    def stationary_mean(self) -> float:
+        """The stationary mean of the uncentred innovations."""
+
+        probabilities = self.stationary_distribution()
+        return sum(
+            probability * (self.means[index] + self.jump_prob * self.jump_mean * self.jump_scale[index])
+            for index, probability in enumerate(probabilities)
+        )
+
+    def _raw_second_moment(self) -> float:
         probabilities = self.stationary_distribution()
         regime = sum(
             probability * (self.sigmas[index] ** 2 + self.means[index] ** 2)
@@ -234,7 +256,21 @@ class MarkovRegimeJumpFactorT(ProcessFamily):
                 probability * self.jump_scale[index] ** 2 for index, probability in enumerate(probabilities)
             )
         )
-        return self.variance_scale**2 * (regime + jump)
+        # E[mean(state) * jump] is not zero when both are nonzero.
+        cross = (
+            2.0
+            * self.jump_prob
+            * self.jump_mean
+            * sum(
+                probability * self.means[index] * self.jump_scale[index]
+                for index, probability in enumerate(probabilities)
+            )
+        )
+        return regime + jump + cross
+
+    def unconditional_variance(self) -> float:
+        centred_second_moment = self._raw_second_moment() - self.stationary_mean() ** 2
+        return self.volatility_scale**2 * centred_second_moment
 
     def _next_regime(self, regime: int, draw: float) -> int:
         cumulative = 0.0
@@ -245,16 +281,22 @@ class MarkovRegimeJumpFactorT(ProcessFamily):
                 return target
         return len(row) - 1
 
+    def _stationary_regime(self, draw: float) -> int:
+        cumulative = 0.0
+        for index, probability in enumerate(self.stationary_distribution()):
+            cumulative += probability
+            if draw < cumulative:
+                return index
+        return self.regime_count - 1
+
     def innovations(
         self, stream: SemanticStream, sessions: Sequence[date], variable: str
     ) -> tuple[float, ...]:
         # Imported lazily so engine.py can import this module without a cycle.
         from app.market.engine import standardized_t_draw
 
-        scale = math.sqrt(self.variance_scale)
-        regime = min(
-            self.regime_count - 1, int(stream.uniform(f"{variable}.mrj.init", 0, 0) * self.regime_count)
-        )
+        centre = self.stationary_mean()
+        regime = self._stationary_regime(stream.uniform(f"{variable}.mrj.init", 0, 0))
         innovations: list[float] = []
         for ordinal in range(len(sessions)):
             if ordinal > 0:
@@ -266,5 +308,5 @@ class MarkovRegimeJumpFactorT(ProcessFamily):
                     f"{variable}.mrj.jump_size", ordinal, 0
                 )
                 value += self.jump_scale[regime] * jump
-            innovations.append(scale * value)
+            innovations.append(self.volatility_scale * (value - centre))
         return tuple(innovations)
