@@ -31,6 +31,7 @@ from app.corpus.validate import (
     ValidationError,
     validate_corpus,
 )
+from app.corpus.writer import WriterLimits, canonical_row_bytes
 
 
 def _small_release(tmp_path: Path, name: str = "release", worlds: int = 2):
@@ -219,8 +220,12 @@ def test_a_small_buffer_guarantees_multiple_flushes(tmp_path: Path) -> None:
     )
     for index in range(30):
         writer.append(_event_row(index))
-    # The pending buffer never exceeded the bound (flush happens at 5).
-    assert writer.max_buffered_rows <= 5
+    # The Arrow builder buffer never exceeded batch_target_rows (flushes at 5),
+    # but rows do stage in the row-group accumulator before close.
+    assert writer.builder.pending() == 0 or writer.builder.pending() <= 5
+    assert writer.max_buffered_rows == max(writer.builder.max_buffered_rows, writer.max_staged_rows)
+    assert writer.builder.max_buffered_rows <= 5
+    assert writer.max_staged_rows == 30
     stat = writer.close()
     assert stat["row_count"] == 30
     # 30 rows / 12-per-file = 3 shards exactly.
@@ -752,3 +757,414 @@ def _three_days():
 
     start = date(2026, 6, 1)
     return tuple(trading_days(start, start + timedelta(days=20))[:3])
+
+
+# --- row-group control is real, not a Python counter ---------------------------
+
+
+def test_row_group_bounds_produce_small_actual_parquet_row_groups(tmp_path: Path) -> None:
+    """Writer limits must be reflected in the Parquet metadata, not only in
+
+    Python counters. A deliberately small row_group_rows cap forces multiple
+    row groups even for a tiny table.
+    """
+
+    from app.corpus.writer import TableWriter, WriterLimits
+
+    table = TABLE_SCHEMAS["agent_decisions"]
+    writer = TableWriter(
+        table,
+        tmp_path / "agent_decisions",
+        limits=WriterLimits(batch_target_rows=3, row_group_rows=9, max_rows_per_file=20),
+    )
+    for index in range(20):
+        writer.append(
+            {
+                "corpus_schema_version": CORPUS_SCHEMA_VERSION,
+                "episode_id": f"ep-{index % 2}",
+                "decision_index": index,
+                "global_step": index,
+                "day_index": index % 5,
+                "instrument_id": "SYN001",
+                "observation_schema_version": "2.0",
+                "action_schema_version": "2.0",
+                "observation_json": json.dumps(
+                    {
+                        "schema_version": "2.0",
+                        "session_id": "s",
+                        "step": index,
+                        "symbol": "SYN001",
+                        "side": "buy",
+                        "mid_ticks": 100,
+                        "spread_bps": 0.0,
+                        "observed_volume": 0,
+                        "inventory": 0,
+                        "remaining_quantity": 0,
+                        "exchange_latency_profile": "normal",
+                        "intervention_active": False,
+                    },
+                    sort_keys=True,
+                ),
+                "action_json": json.dumps(
+                    {"schema_version": "2.0", "action_type": "hold", "rationale_code": "test"},
+                    sort_keys=True,
+                ),
+                "action_type": "hold",
+                "side": None,
+                "order_type": None,
+                "quantity": None,
+                "limit_price_ticks": None,
+                "order_id": None,
+                "decision_status": "executed",
+                "ledger_event_index_before": 0,
+                "ledger_event_index_after": 0,
+                "book_snapshot_id": None,
+            }
+        )
+    stat = writer.close()
+    assert stat["row_count"] == 20
+    # 20 rows under a row_group cap of 9 should produce multiple row groups
+    # split across the file(s).
+    shards = sorted((tmp_path / "agent_decisions").glob("*.parquet"))
+    assert shards
+    total_row_groups = 0
+    for shard in shards:
+        metadata = pq.ParquetFile(shard).metadata
+        total_row_groups += metadata.num_row_groups
+        for group in range(metadata.num_row_groups):
+            for column in range(metadata.num_columns):
+                assert metadata.row_group(group).column(column).compression.lower().startswith("zstd"), shard
+    assert total_row_groups >= 2
+
+
+def test_row_group_cap_does_not_release_immediate_batches(tmp_path: Path) -> None:
+    """Small batch_target_rows alone must not force a row-group flush; the
+
+    row_group_rows cap governs actual Parquet row-group boundaries.
+    """
+
+    from app.corpus.writer import TableWriter, WriterLimits
+
+    table = TABLE_SCHEMAS["exchange_commands"]
+    writer = TableWriter(
+        table,
+        tmp_path / "exchange_commands",
+        limits=WriterLimits(batch_target_rows=4, row_group_rows=12, max_rows_per_file=20),
+    )
+    for index in range(10):
+        writer.append(
+            {
+                "corpus_schema_version": CORPUS_SCHEMA_VERSION,
+                "episode_id": "ep-1",
+                "command_ordinal": index,
+                "command_id": f"cmd-{index}",
+                "command_type": "submit",
+                "account_id": "acc-a",
+                "order_id": f"ord-{index}",
+                "instrument_id": "SYN001",
+                "side": None,
+                "order_type": "market",
+                "time_in_force": None,
+                "quantity": 100,
+                "price_ticks": None,
+                "exchange_time_ns": index,
+                "venue_sequence": index,
+            }
+        )
+    stat = writer.close()
+    assert stat["row_count"] == 10
+    metadata = pq.ParquetFile(sorted((tmp_path / "exchange_commands").glob("*.parquet"))[0]).metadata
+    assert metadata.num_row_groups == 1
+
+
+# --- writer memory bound reflects all staging ----------------------------------
+
+
+def test_writer_memory_bound_includes_staged_row_groups(tmp_path: Path) -> None:
+    """TableWriter.max_buffered_rows must account for rows staged in the
+
+    row-group accumulator, not only the Arrow builder's own buffer.
+    """
+
+    from app.corpus.writer import TableWriter, WriterLimits
+
+    table = TABLE_SCHEMAS["exchange_events"]
+    writer = TableWriter(
+        table,
+        tmp_path / "exchange_events",
+        limits=WriterLimits(batch_target_rows=20, row_group_rows=12, max_rows_per_file=20),
+    )
+    for index in range(30):
+        writer.append(
+            {
+                "corpus_schema_version": CORPUS_SCHEMA_VERSION,
+                "episode_id": "ep-1",
+                "event_ordinal": index,
+                "event_id": f"evt-{index}",
+                "kind": "session_opened",
+                "exchange_time_ns": index,
+                "venue_sequence": index,
+                "event_priority": 15,
+                "command_id": "control:session",
+                "order_id": "control:session",
+                "payload_json": '{"target":"session"}',
+            }
+        )
+    # 30 rows with batch_target_rows=20 flush in two 20-row batches; the
+    # row-group cap (12) flushes each 20-row batch immediately once staged,
+    # so the peak staged rows equals the batch size.
+    assert writer.builder.max_buffered_rows == 20
+    assert writer.max_staged_rows == 20
+    writer.close()
+
+
+# --- bounded memory survives a long episode ----------------------------------
+
+
+def test_a_long_episode_does_not_stage_per_episode_decision_lists(tmp_path: Path) -> None:
+    """A single world that generates more decisions than the row-group cap
+
+    must not accumulate them in a per-episode list. The sink streams each
+    decision directly into the bounded writer.
+    """
+
+    # Two securities x enough steps to blow past a small row group cap.
+    config = CorpusConfig(
+        output=tmp_path / "long",
+        worlds=1,
+        securities=2,
+        days=2,
+        steps_per_day=40,
+        seed=20261007,
+        book_depth=3,
+        limits=WriterLimits(batch_target_rows=200, row_group_rows=80, max_rows_per_file=200),
+    )
+    _, stats = build_corpus(config)
+    # Decisions/snapshots streamed through the bounded writer, not buffered in a
+    # per-episode list. The writer's peak buffered rows stays within the
+    # batch_target_rows + row_group_rows envelope.
+    assert stats.row_counts["agent_decisions"] == stats.row_counts["book_snapshots"]
+    assert stats.row_counts["agent_decisions"] > 0
+    assert stats.max_buffered_rows["agent_decisions"] <= 200 + 80
+    assert stats.max_buffered_rows["book_snapshots"] <= 200 + 80
+
+
+# --- manifest integrity rejects duplicates and schema-version drift -----------
+
+
+def test_a_duplicate_manifest_table_entry_fails_validation(tmp_path: Path) -> None:
+    _small_release(tmp_path, name="gold")
+    work = tmp_path / "dup"
+    shutil.copytree(tmp_path / "gold", work)
+    blob = json.loads((work / "manifest.json").read_text())
+    securities = next(entry for entry in blob["tables"] if entry["name"] == "securities")
+    blob["tables"].append(dict(securities))
+    (work / "manifest.json").write_text(json.dumps(blob))
+    with pytest.raises(ValidationError) as excinfo:
+        validate_corpus(work)
+    assert excinfo.value.code == "MANIFEST_SCHEMA_UNKNOWN"
+    assert "securities" in str(excinfo.value)
+
+
+def test_a_table_schema_version_mismatch_fails_validation(tmp_path: Path) -> None:
+    _small_release(tmp_path, name="gold")
+    work = tmp_path / "ver"
+    shutil.copytree(tmp_path / "gold", work)
+    blob = json.loads((work / "manifest.json").read_text())
+    for entry in blob["tables"]:
+        if entry["name"] == "daily_bars":
+            entry["schema_version"] = "daily-bars-v999"
+    (work / "manifest.json").write_text(json.dumps(blob))
+    with pytest.raises(ValidationError) as excinfo:
+        validate_corpus(work)
+    assert excinfo.value.code == "MANIFEST_SCHEMA_UNKNOWN"
+    assert "schema_version" in str(excinfo.value)
+
+
+# --- protocol and payload corruption ------------------------------------------
+
+
+def test_malformed_observation_json_is_rejected(tmp_path: Path) -> None:
+    _small_release(tmp_path, name="gold")
+    work = tmp_path / "obs"
+    shutil.copytree(tmp_path / "gold", work)
+    _rewrite_table_rows_and_refresh_hashes(
+        work,
+        "agent_decisions",
+        lambda rows: rows[0].__setitem__("observation_json", "{bad json"),
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        validate_corpus(work)
+    assert excinfo.value.code == "JSON_INVALID"
+
+
+def test_invalid_observation_protocol_is_rejected(tmp_path: Path) -> None:
+    _small_release(tmp_path, name="gold")
+    work = tmp_path / "proto"
+    shutil.copytree(tmp_path / "gold", work)
+    _rewrite_table_rows_and_refresh_hashes(
+        work,
+        "agent_decisions",
+        lambda rows: rows[0].__setitem__(
+            "observation_json",
+            json.dumps(
+                {
+                    "schema_version": "2.0",
+                    "session_id": "x",
+                    "step": -1,
+                    "symbol": "SYN",
+                    "side": "buy",
+                    "mid_ticks": 1,
+                    "spread_bps": 0.0,
+                    "observed_volume": 0,
+                    "inventory": 0,
+                    "remaining_quantity": 0,
+                    "exchange_latency_profile": "normal",
+                    "intervention_active": False,
+                },
+                sort_keys=True,
+            ),
+        ),
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        validate_corpus(work)
+    assert excinfo.value.code == "PROTOCOL_INVALID"
+
+
+def test_wrong_observation_schema_version_is_rejected(tmp_path: Path) -> None:
+    _small_release(tmp_path, name="gold")
+    work = tmp_path / "ver"
+    shutil.copytree(tmp_path / "gold", work)
+    _rewrite_table_rows_and_refresh_hashes(
+        work,
+        "agent_decisions",
+        lambda rows: rows[0].__setitem__("observation_schema_version", "9.0"),
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        validate_corpus(work)
+    assert excinfo.value.code == "PROTOCOL_INVALID"
+
+
+def test_scalar_action_type_must_match_action_json(tmp_path: Path) -> None:
+    _small_release(tmp_path, name="gold")
+    work = tmp_path / "scalar"
+    shutil.copytree(tmp_path / "gold", work)
+    _rewrite_table_rows_and_refresh_hashes(
+        work,
+        "agent_decisions",
+        lambda rows: rows[0].__setitem__("action_type", "limit"),
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        validate_corpus(work)
+    assert excinfo.value.code == "PROTOCOL_INVALID"
+
+
+def test_scalar_order_id_must_match_action_json(tmp_path: Path) -> None:
+    """A decision whose scalar order_id disagrees with its action_json must fail."""
+
+    _small_release(tmp_path, name="gold")
+    work = tmp_path / "scalar"
+    shutil.copytree(tmp_path / "gold", work)
+    # Plant an order on a hold decision so there is an order_id to mismatch.
+    _rewrite_table_rows_and_refresh_hashes(
+        work,
+        "agent_decisions",
+        lambda rows: (
+            rows[0].__setitem__("order_id", "ord-planted-1"),
+            rows[0].__setitem__(
+                "action_json",
+                json.dumps(
+                    {
+                        "schema_version": "2.0",
+                        "action_type": "submit",
+                        "side": "buy",
+                        "order_type": "market",
+                        "quantity": 100,
+                        "order_id": "ord-planted-1",
+                        "rationale_code": "test",
+                    },
+                    sort_keys=True,
+                ),
+            ),
+        ),
+    )
+    # Now change only the scalar, leaving the document alone.
+    _rewrite_table_rows_and_refresh_hashes(
+        work,
+        "agent_decisions",
+        lambda rows: rows[0].__setitem__("order_id", "ord-mismatched"),
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        validate_corpus(work)
+    assert excinfo.value.code == "PROTOCOL_INVALID"
+
+
+def test_non_object_payload_json_is_rejected(tmp_path: Path) -> None:
+    _small_release(tmp_path, name="gold")
+    work = tmp_path / "payload"
+    shutil.copytree(tmp_path / "gold", work)
+    _rewrite_table_rows_and_refresh_hashes(
+        work,
+        "exchange_events",
+        lambda rows: rows[0].__setitem__("payload_json", "[1, 2, 3]"),
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        validate_corpus(work)
+    assert excinfo.value.code == "JSON_INVALID"
+
+
+# --- daily-bar foreign key into securities -----------------------------------
+
+
+def test_daily_bars_must_reference_a_known_security(tmp_path: Path) -> None:
+    _small_release(tmp_path, name="gold")
+    work = tmp_path / "fk"
+    shutil.copytree(tmp_path / "gold", work)
+    _rewrite_table_rows_and_refresh_hashes(
+        work,
+        "daily_bars",
+        lambda rows: rows[0].__setitem__("symbol", "SYN-NOT-IN-SECURITIES"),
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        validate_corpus(work)
+    assert excinfo.value.code == "FOREIGN_KEY"
+
+
+# --- helpers for corruption edits ---------------------------------------------
+
+
+def _read_table(work: Path, table: str) -> pa.Table:
+    blob = json.loads((work / "manifest.json").read_text())
+    entry = next(item for item in blob["tables"] if item["name"] == table)
+    return pa.concat_tables([pq.read_table(work / shard["relative_path"]) for shard in entry["shards"]])
+
+
+def _rewrite_table_rows_and_refresh_hashes(work: Path, table: str, mutate_rows) -> None:
+    """Rewrite one table's rows and refresh manifest physical/logical hashes
+
+    so the validator reaches the row-level semantic checks instead of stopping
+    at FILE_SHA_MISMATCH.
+    """
+
+    path = next((work / table).glob("*.parquet"))
+    schema = pq.ParquetFile(path).schema_arrow
+    rows = pq.read_table(path).to_pylist()
+    mutate_rows(rows)
+    pq.write_table(pa.Table.from_pylist(rows, schema=schema), path)
+    data = path.read_bytes()
+    digest = hashlib.sha256()
+    for row in rows:
+        digest.update(canonical_row_bytes(row))
+        digest.update(b"\n")
+    blob = json.loads((work / "manifest.json").read_text())
+    for entry in blob["tables"]:
+        if entry["name"] != table:
+            continue
+        for shard in entry["shards"]:
+            if shard["relative_path"].endswith(path.name):
+                shard["sha256"] = hashlib.sha256(data).hexdigest()
+                shard["bytes"] = len(data)
+        entry["logical_sha256"] = digest.hexdigest()
+        entry["row_count"] = len(rows)
+    blob["release_digest"] = _recomputed_release_digest(blob)
+    (work / "manifest.json").write_text(json.dumps(blob))

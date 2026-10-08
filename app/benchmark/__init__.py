@@ -41,6 +41,8 @@ from app.benchmark.plan import (
     DEFAULT_PLAN_VERSION,
     DEFAULT_TRAINING_PLAN_ID,
     DEFAULT_TRAINING_PLAN_VERSION,
+    INVALID_PLAN_SPLIT,  # noqa: F401 - re-exported for ``from app.benchmark import *``
+    TRAINABLE_PLAN_IN_BENCHMARK,  # noqa: F401 - re-exported for ``from app.benchmark import *``
     DatasetSplit,
     EcologyRegistry,
     EvaluationPlan,

@@ -12,6 +12,7 @@ from __future__ import annotations
 import inspect
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 from test_benchmark_private_evaluation import _sealed_plan, _trusted_registry
@@ -323,3 +324,25 @@ def test_the_corpus_cli_cannot_be_asked_to_load_evaluator_code() -> None:
     parameters = {name.lower() for name in inspect.signature(corpus_build).parameters}
     for forbidden in ("family", "registry", "plan", "module", "import", "ecolog", "python"):
         assert not any(forbidden in name for name in parameters), forbidden
+
+
+# --- package exports are importable ------------------------------------------
+
+
+def test_the_benchmark_package_exports_the_plan_error_codes() -> None:
+    """Documented public error codes must be importable from the package,
+
+    both directly and via wildcard import. They are part of the participant-
+    facing contract, so removing them from ``__all__`` without import would
+    still be a defect.
+    """
+
+    from app.benchmark import INVALID_PLAN_SPLIT, TRAINABLE_PLAN_IN_BENCHMARK
+
+    assert INVALID_PLAN_SPLIT == "INVALID_PLAN_SPLIT"
+    assert TRAINABLE_PLAN_IN_BENCHMARK == "TRAINABLE_PLAN_IN_BENCHMARK"
+
+    namespace: dict[str, Any] = {}
+    exec("from app.benchmark import *", namespace)
+    assert namespace["INVALID_PLAN_SPLIT"] == "INVALID_PLAN_SPLIT"
+    assert namespace["TRAINABLE_PLAN_IN_BENCHMARK"] == "TRAINABLE_PLAN_IN_BENCHMARK"

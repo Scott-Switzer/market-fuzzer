@@ -163,6 +163,7 @@ class TableWriter:
         self._shard_path: Path | None = None
         self._pending_group: list[pa.RecordBatch] = []
         self._pending_group_rows = 0
+        self._max_staged_rows = 0
         directory.mkdir(parents=True, exist_ok=True)
 
     # -- row ingestion -----------------------------------------------------------
@@ -204,14 +205,19 @@ class TableWriter:
         self._write_batch(batch)
 
     def _staged_group_rows(self) -> int:
-        return sum(batch.num_rows for batch in self._pending_group) + self._pending_group_rows
+        """Rows currently staged in the row-group accumulator (single source of truth)."""
+
+        return self._pending_group_rows
 
     def _write_batch(self, batch: pa.RecordBatch) -> None:
         """Stage one flushed batch into the row-group accumulator."""
 
         self._pending_group.append(batch)
         self._pending_group_rows += batch.num_rows
-        if self._staged_group_rows() >= self.limits.row_group_rows:
+        staged = self._pending_group_rows
+        if staged > self._max_staged_rows:
+            self._max_staged_rows = staged
+        if staged >= self.limits.row_group_rows:
             self._flush_row_group()
 
     def _flush_row_group(self) -> None:
@@ -286,7 +292,22 @@ class TableWriter:
 
     @property
     def max_buffered_rows(self) -> int:
-        return self.builder.max_buffered_rows
+        """Peak in-memory rows staged by this writer over its lifetime.
+
+        This is the bounded-memory metric a release build is accountable to:
+        the larger of the Arrow builder's buffered rows and the row-group
+        accumulator's staged rows. For tables whose rows arrive already batched
+        into the accumulator (commands, events), this reflects the accumulator,
+        not an empty builder buffer.
+        """
+
+        return max(self.builder.max_buffered_rows, self._max_staged_rows)
+
+    @property
+    def max_staged_rows(self) -> int:
+        """Peak rows held in the row-group accumulator over the writer's lifetime."""
+
+        return self._max_staged_rows
 
     @property
     def shard_count(self) -> int:

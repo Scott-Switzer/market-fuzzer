@@ -213,8 +213,6 @@ class _RecordingSink:
         self.writers = writers
         self.snapshot_depth = snapshot_depth
         self.policy_id = policy_id
-        self.decision_rows: list[dict[str, Any]] = []
-        self.snapshot_rows: list[dict[str, Any]] = []
         self.command_ordinal = 0
         self.commands_streamed = 0
         self.events_recorded = 0
@@ -238,28 +236,25 @@ class _RecordingSink:
         if snapshot_id:
             bid_levels = book_snapshot.get("bids") or []
             ask_levels = book_snapshot.get("asks") or []
-            self.snapshot_rows.append(
-                {
-                    "corpus_schema_version": CORPUS_SCHEMA_VERSION,
-                    "snapshot_id": str(snapshot_id),
-                    "episode_id": episode_id,
-                    "decision_index": decision_index,
-                    "global_step": int(book_snapshot.get("global_step", step)),
-                    "instrument_id": str(book_snapshot.get("instrument_id", instrument)),
-                    "book_depth": int(book_snapshot.get("book_depth", self.snapshot_depth)),
-                    "best_bid_ticks": book_snapshot.get("best_bid_ticks"),
-                    "best_ask_ticks": book_snapshot.get("best_ask_ticks"),
-                    "bids": [
-                        {"price_ticks": int(price), "quantity": int(quantity)}
-                        for price, quantity in bid_levels
-                    ],
-                    "asks": [
-                        {"price_ticks": int(price), "quantity": int(quantity)}
-                        for price, quantity in ask_levels
-                    ],
-                }
-            )
-        self.decision_rows.append(
+            snapshot_row = {
+                "corpus_schema_version": CORPUS_SCHEMA_VERSION,
+                "snapshot_id": str(snapshot_id),
+                "episode_id": episode_id,
+                "decision_index": decision_index,
+                "global_step": int(book_snapshot.get("global_step", step)),
+                "instrument_id": str(book_snapshot.get("instrument_id", instrument)),
+                "book_depth": int(book_snapshot.get("book_depth", self.snapshot_depth)),
+                "best_bid_ticks": book_snapshot.get("best_bid_ticks"),
+                "best_ask_ticks": book_snapshot.get("best_ask_ticks"),
+                "bids": [
+                    {"price_ticks": int(price), "quantity": int(quantity)} for price, quantity in bid_levels
+                ],
+                "asks": [
+                    {"price_ticks": int(price), "quantity": int(quantity)} for price, quantity in ask_levels
+                ],
+            }
+            self.writers["book_snapshots"].append(snapshot_row)
+        self.writers["agent_decisions"].append(
             {
                 "corpus_schema_version": CORPUS_SCHEMA_VERSION,
                 "episode_id": episode_id,
@@ -519,12 +514,10 @@ def _build_into(
                     policy_id=sink.policy_id,
                 )
             )
-            for row in sink.decision_rows:
-                writers["agent_decisions"].append(row)
-            for row in sink.snapshot_rows:
-                writers["book_snapshots"].append(row)
-            # Commands were already streamed into the bounded writer by the
-            # sink as they were created; nothing to stage here.
+            # Decisions, snapshots, commands, and events were all streamed
+            # into the bounded writers as they were observed; nothing to flush
+            # per episode. Commands and events never staged per episode; the M10.7
+            # streaming change removed the per-episode decision/snapshot lists.
             total_events += result.event_count
 
         table_entries = [writers[name].close() for name in table_names()]

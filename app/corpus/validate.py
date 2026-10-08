@@ -38,6 +38,7 @@ import pyarrow.parquet as pq
 
 from app.corpus.schema import CORPUS_SCHEMA_VERSION, TABLE_SCHEMAS, table_names
 from app.corpus.writer import canonical_row_bytes
+from app.strategy_protocol import StrategyActionV2, StrategyObservationV2
 
 __all__ = ["ValidationError", "validate_corpus"]
 
@@ -62,6 +63,7 @@ NUMERIC_INVALID = "NUMERIC_INVALID"
 LEAKAGE_DETECTED = "LEAKAGE_DETECTED"
 RELEASE_DIGEST_MISMATCH = "RELEASE_DIGEST_MISMATCH"
 JSON_INVALID = "JSON_INVALID"
+PROTOCOL_INVALID = "PROTOCOL_INVALID"
 
 #: Strings that must not appear in any persisted structural field of a
 #: TRAINABLE-only release.
@@ -221,23 +223,17 @@ def validate_corpus(path: Path) -> ValidationResult:
             LEAKAGE_DETECTED, f"manifest declares dataset_split {declared_split!r}, not trainable"
         )
 
-    # All seven canonical tables must be declared (a manifest that drops one
-    # would otherwise validate as a 'complete' release).
-    declared = {entry["name"] for entry in manifest["tables"]}
-    missing_tables = sorted(set(table_names()) - declared)
-    if missing_tables:
-        raise ValidationError(
-            MANIFEST_SCHEMA_UNKNOWN, f"manifest does not declare required tables: {missing_tables}"
-        )
-    extra_tables = sorted(declared - set(table_names()))
-    if extra_tables:
-        raise ValidationError(MANIFEST_SCHEMA_UNKNOWN, f"manifest declares unknown tables: {extra_tables}")
+    # All seven canonical tables must be declared exactly once, in the
+    # canonical order. A manifest that drops, duplicates, reorders, or renames
+    # a table is a schema-level defect, not a complete release.
+    _validate_manifest_tables(manifest["tables"])
 
     episode_ids: set[str] = set()
     table_rows: dict[str, int] = {}
 
     for entry in manifest["tables"]:
         name = entry["name"]
+        _validate_table_schema_version(entry, name)
         _validate_table_directory(path, name, entry, manifest, episode_ids, table_rows)
 
     # The corpus-level identity is recomputed from verified inputs, not
@@ -245,7 +241,8 @@ def validate_corpus(path: Path) -> ValidationResult:
     # re-derived. A forged release_digest, base_seed, plan id, etc., is caught.
     _recompute_release_digest(manifest)
 
-    # Cross-table referential closure: every child row resolves (spec 30).
+    # Cross-table referential closure: every child row resolves (spec 30),
+    # including daily_bars -> securities FK and expected bar cardinality.
     _validate_foreign_keys(path, manifest, episode_ids, table_rows)
 
     release_digest = str(manifest["release_digest"])
@@ -460,26 +457,105 @@ def _validate_decisions(name: str, table: pa.Table, episode_ids: set[str], _unus
                 DECISION_ORDER,
                 f"episode {episode_id!r}: decision_index not unique and contiguous from zero",
             )
-    # A decision's snapshot reference must exist exactly once (spec 30).
-    if rows:
-        pass
     for row in rows:
         status = row["decision_status"]
         if status not in {"executed"}:
             raise ValidationError(DECISION_ORDER, f"unknown decision_status {status!r}")
         if not row["observation_json"] or not row["action_json"]:
             raise ValidationError(DECISION_ORDER, f"episode {row['episode_id']!r}: empty observation/action")
-        # The stored protocol documents must be real JSON (a bad string that
-        # later breaks a consumer is corruption, not data).
-        for json_field in ("observation_json", "action_json"):
-            try:
-                json.loads(row[json_field])
-            except json.JSONDecodeError as exc:
-                raise ValidationError(
-                    JSON_INVALID,
-                    f"episode {row['episode_id']!r} decision {row['decision_index']}: "
-                    f"{json_field} is not valid JSON ({exc})",
-                ) from exc
+        _validate_decision_document(row)
+
+
+def _validate_decision_document(row: dict[str, Any]) -> None:
+    """The stored observation/action documents must be the published protocol.
+
+    The Parquet convenience columns are a projection of the same canonical
+    action; a release whose scalar fields disagree with its action_json is
+    corrupt even when both are individually well-formed.
+    """
+
+    episode_id = row["episode_id"]
+    decision_index = row["decision_index"]
+
+    # -- observation -----------------------------------------------------------
+
+    try:
+        observation = json.loads(row["observation_json"])
+    except json.JSONDecodeError as exc:
+        raise ValidationError(
+            JSON_INVALID,
+            f"episode {episode_id!r} decision {decision_index}: observation_json is not valid JSON ({exc})",
+        ) from exc
+    if not isinstance(observation, dict):
+        raise ValidationError(
+            JSON_INVALID,
+            f"episode {episode_id!r} decision {decision_index}: observation_json is not a JSON object",
+        )
+    if observation.get("schema_version") != row.get("observation_schema_version"):
+        raise ValidationError(
+            PROTOCOL_INVALID,
+            f"episode {episode_id!r} decision {decision_index}: observation_schema_version "
+            f"{row.get('observation_schema_version')!r} disagrees with the document",
+        )
+    try:
+        StrategyObservationV2.model_validate(observation)
+    except Exception as exc:
+        raise ValidationError(
+            PROTOCOL_INVALID,
+            f"episode {episode_id!r} decision {decision_index}: observation_json is not a valid "
+            f"StrategyObservationV2 ({exc})",
+        ) from exc
+
+    # -- action ----------------------------------------------------------------
+
+    try:
+        action = json.loads(row["action_json"])
+    except json.JSONDecodeError as exc:
+        raise ValidationError(
+            JSON_INVALID,
+            f"episode {episode_id!r} decision {decision_index}: action_json is not valid JSON ({exc})",
+        ) from exc
+    if not isinstance(action, dict):
+        raise ValidationError(
+            JSON_INVALID,
+            f"episode {episode_id!r} decision {decision_index}: action_json is not a JSON object",
+        )
+    if action.get("schema_version") != row.get("action_schema_version"):
+        raise ValidationError(
+            PROTOCOL_INVALID,
+            f"episode {episode_id!r} decision {decision_index}: action_schema_version "
+            f"{row.get('action_schema_version')!r} disagrees with the document",
+        )
+    try:
+        validated = StrategyActionV2.model_validate(action)
+    except Exception as exc:
+        raise ValidationError(
+            PROTOCOL_INVALID,
+            f"episode {episode_id!r} decision {decision_index}: action_json is not a valid "
+            f"StrategyActionV2 ({exc})",
+        ) from exc
+
+    # -- scalar/document consistency --------------------------------------------
+
+    if row.get("action_type") != validated.action_type:
+        raise ValidationError(
+            PROTOCOL_INVALID,
+            f"episode {episode_id!r} decision {decision_index}: scalar action_type "
+            f"{row.get('action_type')!r} disagrees with action_json",
+        )
+    if validated.order_id is None:
+        if row.get("order_id") is not None:
+            raise ValidationError(
+                PROTOCOL_INVALID,
+                f"episode {episode_id!r} decision {decision_index}: scalar order_id present "
+                f"but action_json has none",
+            )
+    elif row.get("order_id") != validated.order_id:
+        raise ValidationError(
+            PROTOCOL_INVALID,
+            f"episode {episode_id!r} decision {decision_index}: scalar order_id "
+            f"{row.get('order_id')!r} disagrees with action_json",
+        )
 
 
 def _validate_commands(name: str, table: pa.Table, episode_ids: set[str], _unused: set[str]) -> None:
@@ -522,12 +598,17 @@ def _validate_events(name: str, table: pa.Table, episode_ids: set[str], _unused:
             if not row["payload_json"]:
                 raise ValidationError(EVENT_ORDER, f"episode {episode_id!r}: empty payload_json")
             try:
-                json.loads(row["payload_json"])
+                payload = json.loads(row["payload_json"])
             except json.JSONDecodeError as exc:
                 raise ValidationError(
                     JSON_INVALID,
                     f"episode {episode_id!r} event {row['event_id']!r}: payload not valid JSON ({exc})",
                 ) from exc
+            if not isinstance(payload, dict):
+                raise ValidationError(
+                    JSON_INVALID,
+                    f"episode {episode_id!r} event {row['event_id']!r}: payload_json is valid JSON but not a JSON object",
+                )
 
 
 def _validate_book_snapshots(name: str, table: pa.Table, episode_ids: set[str], _unused: set[str]) -> None:
@@ -587,17 +668,21 @@ def _validate_foreign_keys(
     episode_ids: set[str],
     table_rows: dict[str, int],
 ) -> None:
-    """Cross-table closure: snapshots, event-count reconciliation, decision FKs."""
+    """Cross-table closure: snapshots, events, decisions, and daily-bar FKs."""
 
     episodes_entry = _entry(manifest, "episodes")
     decisions_entry = _entry(manifest, "agent_decisions")
     snapshots_entry = _entry(manifest, "book_snapshots")
     events_entry = _entry(manifest, "exchange_events")
+    securities_entry = _entry(manifest, "securities")
+    bars_entry = _entry(manifest, "daily_bars")
 
     decisions = _load_table(directory, "agent_decisions", decisions_entry)
     snapshots = _load_table(directory, "book_snapshots", snapshots_entry)
     events = _load_table(directory, "exchange_events", events_entry)
     episodes = _load_table(directory, "episodes", episodes_entry)
+    securities = _load_table(directory, "securities", securities_entry)
+    bars = _load_table(directory, "daily_bars", bars_entry)
 
     snapshot_ids = set(snapshots.column("snapshot_id").to_pylist())
     decision_snapshot_refs = decisions.column("book_snapshot_id").to_pylist()
@@ -648,10 +733,77 @@ def _validate_foreign_keys(
     # Every decision's per-episode step must be increasing (spec 31 ordering
     # analogue for decisions) -- already covered by contiguity; here we pin the
     # decision/episode count consistency the reader smoke test relies on.
-    decision_counts: dict[str, int] = {}
-    for episode_id in decisions.column("episode_id").to_pylist():
-        decision_counts[episode_id] = decision_counts.get(episode_id, 0) + 1
-    _ = decision_counts, table_rows
+    _ = (
+        sum(1 for _ in decisions.column("episode_id").to_pylist()),
+        table_rows,
+    )
+
+    # Daily bars carry a foreign key into securities: every (episode_id, symbol)
+    # must name a security that exists in that episode, and the expected bar
+    # cardinality (security_count x session_count per episode) must hold.
+    _validate_daily_bar_security_foreign_keys(
+        episodes=episodes,
+        securities=securities,
+        bars=bars,
+        episode_securities=_security_index_by_episode(securities),
+    )
+
+
+def _security_index_by_episode(securities: pa.Table) -> dict[str, set[str]]:
+    """episode_id -> set of symbols admitted for that episode."""
+
+    by_episode: dict[str, set[str]] = {}
+    for episode_id, symbol in zip(
+        securities.column("episode_id").to_pylist(),
+        securities.column("symbol").to_pylist(),
+        strict=True,
+    ):
+        by_episode.setdefault(episode_id, set()).add(symbol)
+    return by_episode
+
+
+def _validate_daily_bar_security_foreign_keys(
+    *,
+    episodes: pa.Table,
+    securities: pa.Table,
+    bars: pa.Table,
+    episode_securities: dict[str, set[str]],
+) -> None:
+    """Reject a bar whose (episode_id, symbol) is not a declared security."""
+
+    bar_episodes = bars.column("episode_id").to_pylist()
+    bar_symbols = bars.column("symbol").to_pylist()
+    for index, (episode_id, symbol) in enumerate(zip(bar_episodes, bar_symbols, strict=True)):
+        allowed = episode_securities.get(episode_id)
+        if allowed is None or symbol not in allowed:
+            raise ValidationError(
+                FOREIGN_KEY,
+                f"daily_bars row {index}: ({episode_id!r}, {symbol!r}) is not a security in that episode",
+            )
+
+    # Expected grain cardinality: security_count x session_count per episode.
+    episode_session_count = dict(
+        zip(
+            episodes.column("episode_id").to_pylist(),
+            episodes.column("session_count").to_pylist(),
+            strict=True,
+        )
+    )
+    expected: dict[str, int] = {}
+    for episode_id in set(bar_episodes):
+        sec_count = len(episode_securities.get(episode_id, ()))
+        session_count = episode_session_count.get(episode_id, 0)
+        expected[episode_id] = sec_count * session_count
+    counted: dict[str, int] = {}
+    for episode_id in bar_episodes:
+        counted[episode_id] = counted.get(episode_id, 0) + 1
+    for episode_id, want in expected.items():
+        if want and counted.get(episode_id, 0) != want:
+            raise ValidationError(
+                ROW_COUNT_MISMATCH,
+                f"daily_bars episode {episode_id!r}: {counted.get(episode_id, 0)} bars but "
+                f"expected {want} (security_count x session_count)",
+            )
 
 
 def _entry(manifest: dict[str, Any], name: str) -> dict[str, Any]:
@@ -659,6 +811,54 @@ def _entry(manifest: dict[str, Any], name: str) -> dict[str, Any]:
         if entry["name"] == name:
             return entry
     raise ValidationError(MANIFEST_MISSING, f"manifest does not declare table {name!r}")
+
+
+def _validate_manifest_tables(tables: list[dict[str, Any]]) -> None:
+    """Require each canonical table exactly once, in canonical order.
+
+    A manifest that duplicates, omits, reorders, or injects an unknown table
+    fails at the schema level before any table data is read.
+    """
+
+    seen: dict[str, int] = {}
+    order: list[str] = []
+    for entry in tables:
+        name = entry["name"]
+        if name not in table_names():
+            raise ValidationError(MANIFEST_SCHEMA_UNKNOWN, f"manifest declares unknown table {name!r}")
+        seen[name] = seen.get(name, 0) + 1
+        order.append(name)
+    for name in table_names():
+        if name not in seen:
+            raise ValidationError(
+                MANIFEST_SCHEMA_UNKNOWN, f"manifest does not declare required table {name!r}"
+            )
+        if seen[name] != 1:
+            raise ValidationError(
+                MANIFEST_SCHEMA_UNKNOWN,
+                f"manifest declares table {name!r} {seen[name]} times (expected exactly once)",
+            )
+    if order != list(table_names()):
+        raise ValidationError(
+            MANIFEST_SCHEMA_UNKNOWN,
+            f"manifest table order {order!r} does not match canonical order {list(table_names())!r}",
+        )
+
+
+def _validate_table_schema_version(entry: dict[str, Any], name: str) -> None:
+    """Every manifest table entry must declare the schema version the table was
+
+    built against. A release whose Parquet Arrow schema happens to match while
+    its manifest claims a different unsupported table-schema version must fail.
+    """
+
+    expected = TABLE_SCHEMAS[name].schema_version
+    declared = entry.get("schema_version")
+    if declared != expected:
+        raise ValidationError(
+            MANIFEST_SCHEMA_UNKNOWN,
+            f"table {name!r} manifest schema_version {declared!r} does not match the supported {expected!r}",
+        )
 
 
 def _recompute_release_digest(manifest: dict[str, Any]) -> None:
