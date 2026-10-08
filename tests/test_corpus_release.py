@@ -1060,32 +1060,33 @@ def test_scalar_action_type_must_match_action_json(tmp_path: Path) -> None:
 
 
 def test_scalar_order_id_must_match_action_json(tmp_path: Path) -> None:
-    """A decision whose scalar order_id disagrees with its action_json must fail."""
+    """A decision whose scalar order_id disagrees with its action_json must fail.
+
+    The test uses a valid ``cancel`` action (which requires only order_id) so
+    that the document passes protocol validation and the scalar/document
+    comparison is the code path that fires.
+    """
 
     _small_release(tmp_path, name="gold")
     work = tmp_path / "scalar"
     shutil.copytree(tmp_path / "gold", work)
-    # Plant an order on a hold decision so there is an order_id to mismatch.
     _rewrite_table_rows_and_refresh_hashes(
         work,
         "agent_decisions",
         lambda rows: (
-            rows[0].__setitem__("order_id", "ord-planted-1"),
             rows[0].__setitem__(
                 "action_json",
                 json.dumps(
                     {
                         "schema_version": "2.0",
-                        "action_type": "submit",
-                        "side": "buy",
-                        "order_type": "market",
-                        "quantity": 100,
+                        "action_type": "cancel",
                         "order_id": "ord-planted-1",
                         "rationale_code": "test",
                     },
                     sort_keys=True,
                 ),
-            ),
+            )
+            or rows[0].__setitem__("order_id", "ord-planted-1")
         ),
     )
     # Now change only the scalar, leaving the document alone.

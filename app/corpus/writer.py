@@ -163,6 +163,7 @@ class TableWriter:
         self._shard_path: Path | None = None
         self._pending_group: list[pa.RecordBatch] = []
         self._pending_group_rows = 0
+        self._max_buffered_rows = 0
         self._max_staged_rows = 0
         directory.mkdir(parents=True, exist_ok=True)
 
@@ -172,6 +173,7 @@ class TableWriter:
         """Buffer one row; flush/shard-roll happens as bounds are reached."""
 
         self.builder.append(row)
+        self._update_max_buffered()
         self._hash.update(canonical_row_bytes(row))
         self._hash.update(b"\n")
         self._rows_total += 1
@@ -203,6 +205,7 @@ class TableWriter:
         batch = self.builder.take_batch()
         assert batch is not None
         self._write_batch(batch)
+        self._update_max_buffered()
 
     def _staged_group_rows(self) -> int:
         """Rows currently staged in the row-group accumulator (single source of truth)."""
@@ -214,10 +217,8 @@ class TableWriter:
 
         self._pending_group.append(batch)
         self._pending_group_rows += batch.num_rows
-        staged = self._pending_group_rows
-        if staged > self._max_staged_rows:
-            self._max_staged_rows = staged
-        if staged >= self.limits.row_group_rows:
+        self._update_max_buffered()
+        if self._pending_group_rows >= self.limits.row_group_rows:
             self._flush_row_group()
 
     def _flush_row_group(self) -> None:
@@ -295,13 +296,13 @@ class TableWriter:
         """Peak in-memory rows staged by this writer over its lifetime.
 
         This is the bounded-memory metric a release build is accountable to:
-        the larger of the Arrow builder's buffered rows and the row-group
-        accumulator's staged rows. For tables whose rows arrive already batched
-        into the accumulator (commands, events), this reflects the accumulator,
-        not an empty builder buffer.
+        the combined live count of rows in the Arrow builder buffer plus rows
+        staged in the row-group accumulator, tracked as a peak over the
+        writer's lifetime. This reflects both at once, unlike a max-of-peaks
+        that can understate when both hold rows simultaneously.
         """
 
-        return max(self.builder.max_buffered_rows, self._max_staged_rows)
+        return self._max_buffered_rows
 
     @property
     def max_staged_rows(self) -> int:
@@ -312,3 +313,13 @@ class TableWriter:
     @property
     def shard_count(self) -> int:
         return len(self._shards)
+
+    def _update_max_buffered(self) -> None:
+        """Track peak combined live rows (builder buffer + staged row-group rows)."""
+
+        combined = self.builder.pending() + self._pending_group_rows
+        if combined > self._max_buffered_rows:
+            self._max_buffered_rows = combined
+        staged = self._pending_group_rows
+        if staged > self._max_staged_rows:
+            self._max_staged_rows = staged
