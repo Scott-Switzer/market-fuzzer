@@ -38,6 +38,7 @@ from app.benchmark.hashing import digest, digest_many
 from app.benchmark.model import FillRecord, SessionResult, TaskKind, TaskSpec
 from app.benchmark.port import StrategyDecisionPort
 from app.benchmark.universe import BenchmarkUniverse, EcologyProfile, Security
+from app.corpus.recorder import NullSessionRecorder, RecorderHooks, SessionRecorder
 from app.exchange.v2 import (
     CancelOrderCommandV2,
     EventKernelV2,
@@ -55,6 +56,9 @@ from app.strategy_protocol import StrategyActionV2, StrategyObservationV2, Strat
 from app.world.rng import SemanticRNG, SemanticStream
 
 __all__ = ["BenchmarkSession", "SessionConfig", "run_manifest"]
+
+#: The per-episode identity a recording session stamps on its hooks.
+_RECORDING_SESSION_NAMESPACE = "fwf-corpus-recording-v1"
 
 AGENT_ACCOUNT = "agent"
 AGENT_SESSION_NAMESPACE = "fwf-benchmark-agent-session-v1"
@@ -135,12 +139,25 @@ class BenchmarkSession:
         task: TaskSpec,
         port: StrategyDecisionPort,
         config: SessionConfig | None = None,
+        recorder: SessionRecorder | None = None,
+        snapshot_depth: int = 10,
     ) -> None:
         self.universe = universe
         self.ecology = ecology
         self.task = task
         self.port = port
         self.config = config or SessionConfig()
+        # M10.7 recording seam: a pure observer installed by the corpus builder.
+        # The default never allocates recording state, so the M10.6.1 execution
+        # path is byte-identical when nothing records.
+        self.recorder: SessionRecorder = recorder or NullSessionRecorder()
+        self.recorder_hooks = RecorderHooks()
+        self._episode_id = ""
+        # Snapshot depth: corpus callers may pin it (default 10 levels). A
+        # plain benchmark run records nothing, so this only shapes the
+        # depth_snapshot the recorder observes.
+        self._snapshot_depth = snapshot_depth
+        self._record_session_label = ""
 
     def run(self) -> SessionResult:
         cfg = self.config
@@ -224,13 +241,30 @@ class BenchmarkSession:
         self._initial_value_cents: int | None = None
         global_step = 0
 
+        # Recording state: only touched when a real recorder is installed.
+        recording = not isinstance(self.recorder, NullSessionRecorder)
+        self._recording = recording
+        self._recorded_event_frontier = 0
+        self._recorded_command_ordinal = 0
+        if recording:
+            self._episode_id = self._episode_identifier()
+            self.recorder.on_session_start(
+                episode_id=self._episode_id,
+                universe=self.universe,
+                exchange=exchange,
+                securities=self._instruments,
+            )
+            self._drain_events_to_recorder()
+
         for day_index in range(len(self.universe.sessions)):
             if day_index > 0:
                 exchange.open_session(exchange_time_ns=self._tick(), venue_sequence=self._tick())
+                self._drain_events_to_recorder()
             for step in range(cfg.steps_per_day):
                 self._current_step = global_step
                 self._advance_marks(day_index, step, securities)
                 self._run_background_agents(agents, agent_streams, global_step, day_index)
+                self._drain_events_to_recorder()
                 if global_step == 0:
                     self._arrival_price_ticks = self._mid_price(self.task.focus_symbol)
                     self._initial_value_cents = self._agent_value()
@@ -241,6 +275,7 @@ class BenchmarkSession:
                 self._equity.append(self._agent_value())
                 global_step += 1
             self._expired_day_order_count += self._close_day(exchange)
+            self._drain_events_to_recorder()
 
         account = exchange.accounts[AGENT_ACCOUNT]
         arrival = self._arrival_price_ticks or self._mid_price(self.task.focus_symbol)
@@ -330,6 +365,56 @@ class BenchmarkSession:
     def _tick(self) -> int:
         self._clock += 1
         return self._clock
+
+    # -- recording seam (M10.7) -----------------------------------------------
+
+    def _episode_identifier(self) -> str:
+        """A stable corpus-facing episode identity.
+
+        Deliberately distinct from world_id: an episode is one recorded *run* of a
+        world for a corpus release, and the id depends on the recorder's own
+        namespace plus the world identity. Deterministic, so a rebuilt corpus
+        reproduces the same episode ids (reproducibility tests rely on this).
+        """
+
+        return (
+            "ep-"
+            + digest(
+                {
+                    "namespace": _RECORDING_SESSION_NAMESPACE,
+                    "world_id": self.universe.world_id,
+                    "universe_id": self.universe.universe_id,
+                    "seed": self.universe.seed,
+                }
+            )[:32]
+        )
+
+    def _drain_events_to_recorder(self) -> None:
+        """Persist every ledger event appended since the previous delta.
+
+        Uses the narrow ``events_since`` cursor (M10.7 spec 15) so a drain never
+        materializes the whole ledger.
+        """
+
+        if not self._recording:
+            return
+        ledger = self._exchange.kernel.ledger
+        frontier = self._recorded_event_frontier
+        if ledger.event_count == frontier:
+            return
+        delta = ledger.events_since(frontier)
+        self.recorder.on_events(episode_id=self._episode_id, events=delta)
+        self.recorder_hooks.events += len(delta)
+        self._recorded_event_frontier += len(delta)
+
+    def _record_command(self, command: OrderCommandV2 | CancelOrderCommandV2 | ReplaceOrderCommandV2) -> None:
+        """Hand one canonical command to the recorder at creation time."""
+
+        if not self._recording:
+            return
+        self.recorder.on_command(episode_id=self._episode_id, command=command)
+        self.recorder_hooks.commands += 1
+        self._recorded_command_ordinal += 1
 
     def _next_order_id(self, account_id: str) -> str:
         self._order_sequence += 1
@@ -434,6 +519,7 @@ class BenchmarkSession:
                 exchange_time_ns=self._tick(),
                 venue_sequence=self._tick(),
             )
+            self._record_command(cancel_command)
             self._safe_cancel(cancel_command)
             return
         if not isinstance(intent, SubmitIntent):
@@ -452,6 +538,7 @@ class BenchmarkSession:
             price_ticks=intent.price_ticks,
             time_in_force=intent.time_in_force,
         )
+        self._record_command(submit_command)
         try:
             trades = self._exchange.submit(submit_command)
         except (OrderRejectedError, ExchangeValidationError):
@@ -469,14 +556,55 @@ class BenchmarkSession:
     def _run_external_agent(self, step: int, day_index: int) -> None:
         for instrument in self.task.agent_instruments:
             observation = self._observation(instrument, step)
+            # M10.7: capture the aggregate L10 depth of exactly the book state
+            # the observation was built from, before the action touches it.
+            record = self._recording
+            snapshot_id: str | None = None
+            bid_levels: list[list[int]] = []
+            ask_levels: list[list[int]] = []
+            if record:
+                bids, asks = self._exchange.depth_snapshot(instrument, levels=self._snapshot_depth)
+                snapshot_id = f"{self._episode_id}-d{self._eligible_steps:06d}"
+                bid_levels = [[price, quantity] for price, quantity in bids]
+                ask_levels = [[price, quantity] for price, quantity in asks]
             self._eligible_steps += 1
+            event_index_before = self._exchange.kernel.ledger.event_count
             try:
                 action = StrategyActionV2.model_validate(self.port.decide(observation))
             except (ValueError, TypeError):
                 self._violations.add("invalid_action_document")
+                if record:
+                    self._drain_events_to_recorder()
                 continue
             self._action_digests.append(digest(action.model_dump(mode="json")))
             self._apply_agent_action(action, instrument, day_index)
+            if record:
+                self._drain_events_to_recorder()
+                self.recorder.on_decision(
+                    episode_id=self._episode_id,
+                    decision_index=len(self._action_digests) - 1,
+                    step=step,
+                    day_index=day_index,
+                    instrument=instrument,
+                    observation=observation,
+                    action=action.model_dump(mode="json"),
+                    book_snapshot={
+                        "snapshot_id": snapshot_id,
+                        "episode_id": self._episode_id,
+                        "decision_index": len(self._action_digests) - 1,
+                        "global_step": step,
+                        "instrument_id": instrument,
+                        "book_depth": self._snapshot_depth,
+                        "best_bid_ticks": bid_levels[0][0] if bid_levels else None,
+                        "best_ask_ticks": ask_levels[0][0] if ask_levels else None,
+                        "bids": bid_levels,
+                        "asks": ask_levels,
+                        "ledger_event_index_before": event_index_before,
+                        "ledger_event_index_after": self._exchange.kernel.ledger.event_count,
+                    },
+                )
+                self.recorder_hooks.decisions += 1
+                self.recorder_hooks.snapshots += 1
             if self._exchange.open_orders_for(AGENT_ACCOUNT, instrument):
                 self._quote_steps += 1
 
@@ -561,6 +689,7 @@ class BenchmarkSession:
             price_ticks=price_ticks,
             time_in_force=time_in_force,
         )
+        self._record_command(command)
         before = len(self._exchange.kernel.ledger.events)
         try:
             trades = self._exchange.submit(command)
@@ -582,6 +711,7 @@ class BenchmarkSession:
             exchange_time_ns=self._tick(),
             venue_sequence=self._tick(),
         )
+        self._record_command(command)
         before = len(self._exchange.kernel.ledger.events)
         self._safe_cancel(command)
         self._collect_rejections(before, command.command_id)
@@ -600,6 +730,7 @@ class BenchmarkSession:
             quantity=action.quantity,
             price_ticks=action.limit_price_ticks or 0,
         )
+        self._record_command(command)
         before = len(self._exchange.kernel.ledger.events)
         try:
             _, trades = self._exchange.replace_command(command)

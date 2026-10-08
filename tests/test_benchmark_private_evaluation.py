@@ -225,19 +225,22 @@ def _sealed_plan(*, plan_id: str = SEALED_TEST_PLAN_ID, family_id: str = PRIVATE
         version="v1",
         worlds=(
             Template(
-                partition=EvaluationPartition.FAMILIAR,
                 family_id=FAMILIAR_FAMILY.value,
                 ecology_id=FAMILIAR_ECOLOGY.label,
+                split=DatasetSplit.PUBLIC_EVAL,
+                partition=EvaluationPartition.FAMILIAR,
             ),
             Template(
-                partition=EvaluationPartition.DISTRIBUTION,
                 family_id=FAMILIAR_FAMILY.value,
                 ecology_id=DISTRIBUTION_ECOLOGY.label,
+                split=DatasetSplit.PUBLIC_EVAL,
+                partition=EvaluationPartition.DISTRIBUTION,
             ),
             Template(
-                partition=EvaluationPartition.MECHANISM,
                 family_id=family_id,
                 ecology_id=DISTRIBUTION_ECOLOGY.label,
+                split=DatasetSplit.SEALED_EVAL,
+                partition=EvaluationPartition.MECHANISM,
             ),
         ),
     )
@@ -485,7 +488,14 @@ def test_validating_a_plan_checks_every_family_and_ecology_it_names() -> None:
             plan=EvaluationPlan(
                 plan_id="unknown_ecology_v1",
                 version="v1",
-                worlds=(Template(EvaluationPartition.FAMILIAR, FAMILIAR_FAMILY.value, "missing-ecology"),),
+                worlds=(
+                    Template(
+                        family_id=FAMILIAR_FAMILY.value,
+                        ecology_id="missing-ecology",
+                        split=DatasetSplit.PUBLIC_EVAL,
+                        partition=EvaluationPartition.FAMILIAR,
+                    ),
+                ),
             ),
             registry=registry,
         )
@@ -498,7 +508,14 @@ def test_a_plan_can_name_a_custom_ecology_through_the_evaluator_registry() -> No
     plan = EvaluationPlan(
         plan_id="custom_ecology_plan_v1",
         version="v1",
-        worlds=(Template(EvaluationPartition.FAMILIAR, FAMILIAR_FAMILY.value, custom.label),),
+        worlds=(
+            Template(
+                family_id=FAMILIAR_FAMILY.value,
+                ecology_id=custom.label,
+                split=DatasetSplit.PUBLIC_EVAL,
+                partition=EvaluationPartition.FAMILIAR,
+            ),
+        ),
     )
     report = run_benchmark(
         kind=TaskKind.EXECUTION,
@@ -665,14 +682,16 @@ def _sealed_canary_run() -> tuple[BenchmarkReport, list[dict[str, Any]]]:
         description=CANARY_METADATA,
         worlds=(
             Template(
-                partition=EvaluationPartition.FAMILIAR,
                 family_id=FAMILIAR_FAMILY.value,
                 ecology_id=FAMILIAR_ECOLOGY.label,
+                split=DatasetSplit.PUBLIC_EVAL,
+                partition=EvaluationPartition.FAMILIAR,
             ),
             Template(
-                partition=EvaluationPartition.MECHANISM,
                 family_id=CANARY_FAMILY_ID,
                 ecology_id=DISTRIBUTION_ECOLOGY.label,
+                split=DatasetSplit.SEALED_EVAL,
+                partition=EvaluationPartition.MECHANISM,
             ),
         ),
     )
@@ -784,15 +803,90 @@ def test_a_sealed_world_is_classified_sealed_and_is_not_trainable() -> None:
     assert all(world.family_visibility is FamilyVisibility.EVALUATOR_PRIVATE for world in sealed)
 
 
-def test_an_open_world_is_public_eval_and_never_trainable_by_accident() -> None:
-    worlds = plan_worlds(
-        plan=_sealed_plan(family_id=FAMILIAR_FAMILY.value),
-        registry=default_process_registry(),
-        count=3,
-        base_seed=99,
+def test_a_public_family_cannot_be_tagged_sealed_eval() -> None:
+    """Since M10.7 the split is declared, so this combination is a plan error."""
+
+    from app.benchmark.plan import InvalidPlanSplitError
+
+    plan = _sealed_plan(family_id=FAMILIAR_FAMILY.value)
+    with pytest.raises(InvalidPlanSplitError) as excinfo:
+        plan_worlds(plan=plan, registry=default_process_registry(), count=3, base_seed=99)
+    assert "SEALED_EVAL" in str(excinfo.value)
+    assert "public" in str(excinfo.value)
+
+
+def test_the_whole_plan_is_split_validated_not_just_a_prefix() -> None:
+    """A private family tagged TRAINABLE fails even when it is not in world 0."""
+
+    from app.benchmark.plan import InvalidPlanSplitError
+
+    plan = EvaluationPlan(
+        plan_id="late_private_training_plan_v1",
+        version="v1",
+        worlds=(
+            Template(
+                family_id=FAMILIAR_FAMILY.value,
+                ecology_id=FAMILIAR_ECOLOGY.label,
+                split=DatasetSplit.TRAINABLE,
+                partition=EvaluationPartition.TRAINING,
+            ),
+            Template(
+                family_id=PRIVATE_FAMILY_ID,
+                ecology_id=FAMILIAR_ECOLOGY.label,
+                split=DatasetSplit.TRAINABLE,
+                partition=EvaluationPartition.TRAINING,
+            ),
+        ),
     )
-    assert {world.split for world in worlds} == {DatasetSplit.PUBLIC_EVAL}
-    assert all(world.trainable is False for world in worlds)
+    # Even a one-world request must fail: the plan is a whole-campaign statement.
+    with pytest.raises(InvalidPlanSplitError):
+        plan_worlds(plan=plan, registry=_trusted_registry(), count=1, base_seed=99)
+
+
+def test_trainable_worlds_cannot_run_evaluation_partitions() -> None:
+    from app.benchmark.plan import InvalidPlanSplitError
+
+    for partition in (
+        EvaluationPartition.FAMILIAR,
+        EvaluationPartition.DISTRIBUTION,
+        EvaluationPartition.MECHANISM,
+    ):
+        plan = EvaluationPlan(
+            plan_id="mispartitioned_training_plan_v1",
+            version="v1",
+            worlds=(
+                Template(
+                    family_id=FAMILIAR_FAMILY.value,
+                    ecology_id=FAMILIAR_ECOLOGY.label,
+                    split=DatasetSplit.TRAINABLE,
+                    partition=partition,
+                ),
+            ),
+        )
+        with pytest.raises(InvalidPlanSplitError) as excinfo:
+            plan_worlds(plan=plan, registry=default_process_registry(), count=1, base_seed=1)
+        assert "TRAINING partition" in str(excinfo.value)
+
+
+def test_a_public_family_cannot_be_tagged_trainable_on_an_evaluation_partition() -> None:
+    """A private family tagged PUBLIC_EVAL fails the same way."""
+
+    from app.benchmark.plan import InvalidPlanSplitError
+
+    plan = EvaluationPlan(
+        plan_id="private_public_eval_plan_v1",
+        version="v1",
+        worlds=(
+            Template(
+                family_id=PRIVATE_FAMILY_ID,
+                ecology_id=DISTRIBUTION_ECOLOGY.label,
+                split=DatasetSplit.PUBLIC_EVAL,
+                partition=EvaluationPartition.MECHANISM,
+            ),
+        ),
+    )
+    with pytest.raises(InvalidPlanSplitError):
+        plan_worlds(plan=plan, registry=_trusted_registry(), count=1, base_seed=1)
 
 
 def test_the_export_gate_admits_only_trainable_worlds() -> None:
@@ -827,11 +921,17 @@ def test_a_template_weight_repeats_a_world_in_the_plan_cycle() -> None:
         plan_id="weighted_test_plan_v1",
         version="v1",
         worlds=(
-            Template(EvaluationPartition.FAMILIAR, FAMILIAR_FAMILY.value, FAMILIAR_ECOLOGY.label),
             Template(
-                EvaluationPartition.MECHANISM,
-                FAMILIAR_FAMILY.value,
-                DISTRIBUTION_ECOLOGY.label,
+                family_id=FAMILIAR_FAMILY.value,
+                ecology_id=FAMILIAR_ECOLOGY.label,
+                split=DatasetSplit.PUBLIC_EVAL,
+                partition=EvaluationPartition.FAMILIAR,
+            ),
+            Template(
+                family_id=FAMILIAR_FAMILY.value,
+                ecology_id=DISTRIBUTION_ECOLOGY.label,
+                split=DatasetSplit.PUBLIC_EVAL,
+                partition=EvaluationPartition.MECHANISM,
                 weight=3,
             ),
         ),
@@ -847,11 +947,22 @@ def test_a_template_weight_repeats_a_world_in_the_plan_cycle() -> None:
 
 def test_a_template_rejects_a_non_positive_weight() -> None:
     with pytest.raises(ValueError):
-        Template(EvaluationPartition.FAMILIAR, FAMILIAR_FAMILY.value, FAMILIAR_ECOLOGY.label, weight=0)
+        Template(
+            family_id=FAMILIAR_FAMILY.value,
+            ecology_id=FAMILIAR_ECOLOGY.label,
+            split=DatasetSplit.PUBLIC_EVAL,
+            partition=EvaluationPartition.FAMILIAR,
+            weight=0,
+        )
 
 
 def test_a_plan_needs_a_template_an_identifier_and_a_version() -> None:
-    template = Template(EvaluationPartition.FAMILIAR, FAMILIAR_FAMILY.value, FAMILIAR_ECOLOGY.label)
+    template = Template(
+        family_id=FAMILIAR_FAMILY.value,
+        ecology_id=FAMILIAR_ECOLOGY.label,
+        split=DatasetSplit.PUBLIC_EVAL,
+        partition=EvaluationPartition.FAMILIAR,
+    )
     with pytest.raises(ValueError):
         EvaluationPlan(plan_id="empty_v1", version="v1", worlds=())
     with pytest.raises(ValueError):
@@ -864,7 +975,14 @@ def test_an_unknown_ecology_is_rejected_when_the_plan_is_resolved() -> None:
     plan = EvaluationPlan(
         plan_id="unknown_ecology_test_v1",
         version="v1",
-        worlds=(Template(EvaluationPartition.FAMILIAR, FAMILIAR_FAMILY.value, "not-an-ecology"),),
+        worlds=(
+            Template(
+                family_id=FAMILIAR_FAMILY.value,
+                ecology_id="not-an-ecology",
+                split=DatasetSplit.PUBLIC_EVAL,
+                partition=EvaluationPartition.FAMILIAR,
+            ),
+        ),
     )
     with pytest.raises(KeyError) as excinfo:
         plan_worlds(plan=plan, registry=default_process_registry(), count=1, base_seed=1)

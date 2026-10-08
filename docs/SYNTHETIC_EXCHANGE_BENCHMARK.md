@@ -410,23 +410,56 @@ scored apart from each other (per-world means ≈73.8 for the regime-jump family
 ≈90.0 for stochastic volatility), which is direct evidence that the instrument
 resolves generator-dependent behaviour rather than injecting family noise.
 
+## Training corpus (M10.7)
+
+The same world machinery now has a guarded *training* side. Every
+`EvaluationWorldTemplate` declares its `DatasetSplit` (there is no inference
+from family visibility), the `training` partition joins the three evaluation
+partitions, and the published plan `m10_7_training_v1` declares every world
+`TRAINABLE` across all three public process families and both published
+ecologies -- familiar-baseline and distribution-shift.
+
+The two paths are mutually explicit:
+
+* the **benchmark** raises `TRAINABLE_PLAN_IN_BENCHMARK` if a plan contains
+  TRAINABLE worlds;
+* the **corpus builder** raises `SEALED_EVAL_NOT_TRAINABLE` (the M10.6.1 gate,
+  now covering any non-TRAINABLE world) before generating, building a port, or
+  touching the filesystem when a plan contains PUBLIC_EVAL or SEALED_EVAL
+  worlds.
+
+A successful corpus build is an immutable, hash-committed Apache Parquet
+release under the `fwf-corpus-v1` contract: seven tables (episodes, securities,
+daily bars, agent decisions, exchange commands, exchange events, decision-time
+aggregate L10 book snapshots), a `SessionRecorder` observation seam on the
+session, a streaming bounded-memory sharded writer (ZSTD, deterministic
+`part-NNNNN.parquet` names), per-table logical SHA-256 hashes plus per-shard
+physical hashes, a non-environmental release digest, and an independent
+validator (`fwf corpus validate`) that re-derives every claim from the persisted
+bytes.
+
+```bash
+python -m app.cli corpus build --output artifacts/corpora/m10-7-smoke \
+  --task execution --policy twap --worlds 32 --securities 8 \
+  --days 5 --steps-per-day 30 --seed 20261007
+python -m app.cli corpus validate artifacts/corpora/m10-7-smoke
+```
+
+Full format, schema, guarantees, scale numbers, and limitations:
+[SYNTHETIC_TRAINING_CORPUS.md](SYNTHETIC_TRAINING_CORPUS.md).
+
 ## Layout
 
 ```
 app/market/
   process.py      ProcessFamily interface + stochastic-volatility and regime-jump families
   engine.py       factor engine; GjrGarchT is the gjr_factor_t_v1 family
-app/benchmark/
-  model.py        shared contracts (TaskSpec, SessionResult, TaskOutcome, validity)
-  hashing.py      canonical JSON + SHA-256 helpers
-  process_registry.py  family definitions, the registry, family commitments, visibility
-  plan.py         evaluation plans, planned worlds, ecology registry, dataset splits
-  universe.py     ecology profiles, planned-world materialization, securities
-  agents.py       background-agent archetypes emitting V2 order intents
-  port.py         in-process + HTTP decision ports, failure classification, built-ins
-  session.py      the multi-security LOB session (the join point)
-  tasks.py        task specs and deterministic scorers
-  runner.py       plan resolution, multi-world runner, validity, report, replay package
+app/corpus/
+  schema.py       explicit fwf-corpus-v1 Arrow schemas (seven tables, grains)
+  recorder.py     SessionRecorder seam protocol + null default
+  writer.py       bounded buffered -> ZSTD sharded Parquet + streaming logical hash
+  builder.py      the guarded build path, recorder sink, manifest, dataset card
+  validate.py     independent validator with stable failure codes
 ```
 
 ## Limitations
@@ -446,9 +479,11 @@ app/benchmark/
 - Redaction covers the public rendering and the agent boundary. `BenchmarkReport`
   itself is the evaluator's artifact and holds the real identifiers; code that
   serialized the whole report to a participant would leak them.
-- The dataset-split classification and the export gate exist for M10.7, but no
-  training corpus exporter exists yet, so the gate is currently only exercised by
-  tests.
+- M10.7 closes the split loop: the exporter exists, the training plan shipped,
+  the session records non-intrusively, and the corpus CLI validates releases.
+  Remaining corpus limitations (logical clock, archetype agents, decision-time
+  snapshots only, reference exchange) are listed in
+  [SYNTHETIC_TRAINING_CORPUS.md](SYNTHETIC_TRAINING_CORPUS.md).
 - One session clock tick per exchange command; there is no wall-clock latency
   simulation inside the slice.
 - Marks are last-traded-price; an aggressively filled order can therefore show a

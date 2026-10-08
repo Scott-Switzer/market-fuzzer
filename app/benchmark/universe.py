@@ -64,11 +64,18 @@ SECTORS: tuple[str, ...] = (
 
 
 class EvaluationPartition(StrEnum):
-    """The three M10.6 evaluation partitions."""
+    """The world roles a plan assigns.
+
+    ``familiar``, ``distribution``, and ``mechanism`` are the M10.6 evaluation
+    partitions. M10.7 adds ``training``: a *training* world is not an evaluation
+    world at all -- it is generated for a training corpus, and both the evaluator
+    and the corpus builder refuse the other's partition/split combination.
+    """
 
     FAMILIAR = "familiar"
     DISTRIBUTION = "distribution"
     MECHANISM = "mechanism"
+    TRAINING = "training"
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,7 +148,13 @@ HIDDEN_PROFILE = DISTRIBUTION_ECOLOGY
 
 @dataclass(frozen=True, slots=True)
 class Security:
-    """One synthetic security and its generated daily fundamentals."""
+    """One synthetic security and its generated daily fundamentals.
+
+    The intraday mark ladder interpolates open->close per day. M10.7 additionally
+    retails the engine's real daily high/low ticks so a training corpus can emit
+    honest OHLC bars; they are *not* used by the session, so world behaviour in
+    M10.5-M10.6.1 is unchanged.
+    """
 
     symbol: str
     sector: str
@@ -153,6 +166,8 @@ class Security:
     shares_outstanding: int
     daily_open_ticks: tuple[int, ...]
     daily_close_ticks: tuple[int, ...]
+    daily_high_ticks: tuple[int, ...] = ()
+    daily_low_ticks: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,6 +307,8 @@ def build_universe(
         base = float(security.initial_price_ticks)
         opens = tuple(_scaled_ticks(base, bar.open / 100.0) for bar in series.bars)
         closes = tuple(_scaled_ticks(base, bar.close / 100.0) for bar in series.bars)
+        highs = tuple(_scaled_ticks(base, bar.high / 100.0) for bar in series.bars)
+        lows = tuple(_scaled_ticks(base, bar.low / 100.0) for bar in series.bars)
         securities.append(
             Security(
                 symbol=security.symbol,
@@ -304,6 +321,8 @@ def build_universe(
                 shares_outstanding=security.shares_outstanding,
                 daily_open_ticks=opens,
                 daily_close_ticks=closes,
+                daily_high_ticks=highs,
+                daily_low_ticks=lows,
             )
         )
 

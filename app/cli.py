@@ -334,6 +334,101 @@ def benchmark_run(
 cli.add_typer(benchmark_app, name="benchmark")
 
 
+corpus_app = typer.Typer(help="Leakage-safe synthetic training corpus (M10.7)")
+
+
+@corpus_app.command("build")
+def corpus_build(
+    output: Annotated[Path, typer.Option(help="release directory to create (must not exist)")],
+    task: Annotated[str, typer.Option(help="execution | market_making | portfolio")] = "execution",
+    policy: Annotated[str, typer.Option(help="twap | maker | accumulate")] = "twap",
+    worlds: Annotated[int, typer.Option(min=1, help="TRAINABLE worlds to generate")] = 32,
+    securities: Annotated[int, typer.Option(min=1)] = 8,
+    days: Annotated[int, typer.Option(min=1)] = 5,
+    steps_per_day: Annotated[int, typer.Option(min=1)] = 30,
+    seed: Annotated[int, typer.Option(help="base seed; world seeds derive from it")] = 20_261_007,
+    book_depth: Annotated[int, typer.Option(min=1, help="aggregate depth levels per decision snapshot")] = 10,
+) -> None:
+    """Build one immutable fwf-corpus-v1 training release.
+
+    The release always uses the published training plan (m10_7_training_v1), the
+    public process registry, and the published ecologies. Evaluation and
+    evaluator-private plans cannot be named from the participant-facing CLI.
+    """
+
+    from app.benchmark.model import TaskKind
+    from app.corpus.builder import CORPUS_POLICIES, CorpusConfig, build_corpus
+
+    try:
+        kind = TaskKind(task)
+    except ValueError as exc:
+        raise typer.BadParameter(f"unknown task {task!r}") from exc
+    if policy not in CORPUS_POLICIES:
+        raise typer.BadParameter(f"unknown policy {policy!r}")
+    config = CorpusConfig(
+        output=output,
+        task=kind,
+        policy=policy,
+        worlds=worlds,
+        securities=securities,
+        days=days,
+        steps_per_day=steps_per_day,
+        seed=seed,
+        book_depth=book_depth,
+    )
+    try:
+        manifest, stats = build_corpus(config)
+    except FileExistsError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    except Exception as exc:  # internal build failure maps to exit 1
+        typer.echo(f"corpus build failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        json.dumps(
+            {
+                "release_digest": manifest.release_digest,
+                "training_plan": manifest.data["training_plan_id"],
+                "dataset_split": manifest.data["dataset_split"],
+                "episodes": stats.episode_count,
+                "row_counts": stats.row_counts,
+                "parquet_shards": stats.total_shards,
+                "compressed_bytes": stats.total_bytes,
+                "duration_seconds": stats.duration_seconds,
+                "events_per_second": stats.events_per_second,
+            },
+            indent=2,
+        )
+    )
+
+
+@corpus_app.command("validate")
+def corpus_validate(path: Path) -> None:
+    """Independently validate one corpus release; exit 1 on any defect."""
+
+    from app.corpus.validate import validate_corpus
+
+    try:
+        result = validate_corpus(path)
+    except Exception as exc:
+        typer.echo(f"corpus invalid: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        json.dumps(
+            {
+                "valid": True,
+                "release_digest": result.release_digest,
+                "table_rows": result.tables,
+                "total_rows": result.total_rows,
+            },
+            indent=2,
+        )
+    )
+
+
+cli.add_typer(corpus_app, name="corpus")
+
+
 def entrypoint() -> None:
     cli()
 

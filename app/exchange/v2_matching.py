@@ -138,6 +138,32 @@ class MatchingExchangeV2:
         asks = self._levels(instrument_id, SideV2.SELL)
         return (max(bids) if bids else None, min(asks) if asks else None)
 
+    def depth_snapshot(
+        self, instrument_id: str, *, levels: int = 10
+    ) -> tuple[tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
+        """Read-only aggregate depth: ``((bid_price, qty)...), ((ask_price, qty)...)``.
+
+        The corpus-facing depth API (M10.7). Bids come back highest-price-first,
+        asks lowest-price-first, each truncated to ``levels`` price levels, and
+        each quantity is the *aggregate displayed quantity* resting at that price
+        across all accounts. No order ids, no queue positions, no account identity
+        is exposed -- the same information a public depth feed carries. The
+        exchange state is not touched: this reads the book only.
+        """
+
+        if levels < 1:
+            raise ExchangeValidationError("a depth snapshot needs at least one level")
+
+        def aggregate(side: SideV2, *, descending: bool) -> tuple[tuple[int, int], ...]:
+            book = self._levels(instrument_id, side)
+            aggregated: list[tuple[int, int]] = []
+            for price in sorted(book, reverse=descending)[:levels]:
+                quantity = sum(self._orders[order_id].remaining_quantity for order_id in book[price])
+                aggregated.append((price, quantity))
+            return tuple(aggregated)
+
+        return aggregate(SideV2.BUY, descending=True), aggregate(SideV2.SELL, descending=False)
+
     def open_orders_for(self, account_id: str, instrument_id: str) -> tuple[OpenOrderSnapshotV2, ...]:
         """Return only the caller's own resting orders, without queue position or other account data."""
         return tuple(

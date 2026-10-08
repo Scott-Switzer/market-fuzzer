@@ -70,6 +70,7 @@ from app.benchmark.plan import (
     default_ecology_registry,
     default_evaluation_plan,
     plan_worlds,
+    require_evaluation,
 )
 from app.benchmark.port import (
     AGENT_PROTOCOL,
@@ -364,6 +365,11 @@ def run_benchmark(
     families = registry if registry is not None else default_process_registry()
     environments = ecologies if ecologies is not None else default_ecology_registry()
     sessions = _calendar(start_date, days)
+    # M10.7: evaluation and training are mutually explicit. A scored campaign
+    # must not contain TRAINABLE worlds, and the guard fires before any world is
+    # generated -- the declared split is a template field, so this is a pure
+    # metadata check with no side effects to undo.
+    require_evaluation(tuple(template.split for template in campaign.worlds))
     # Validate the whole plan and resolve every world before generating the first
     # one, so a plan that names a family or ecology the registries do not hold
     # raises up front instead of producing a half-built campaign.
