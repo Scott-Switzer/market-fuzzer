@@ -323,6 +323,7 @@ def run_simulation(
     target_mid_series: list[int] = []
     target_spread_series: list[int | None] = []
     trade_cursor = 0
+    cumulative_strategy_fills = 0
     initial_cash_cents = exchange.total_cash_cents()
     initial_inventory = {symbol: exchange.total_inventory(symbol) for symbol in exchange.books}
     event_map: dict[int, list] = {}
@@ -610,8 +611,9 @@ def run_simulation(
                                 agent.resting_order_ids.discard(order_id)
             for asset in spec.assets:
                 book = exchange.books[asset.ticker]
-                snapshot = book.snapshot()
-                bid, ask = snapshot["best_bid_ticks"], snapshot["best_ask_ticks"]
+                # Agent decisions need the touch only. Full depth snapshots are
+                # reserved for timeline frames and queue-reactive flow.
+                bid, ask = book.best_bid, book.best_ask
                 mid = (
                     round((bid + ask) / 2)
                     if bid is not None and ask is not None
@@ -771,10 +773,23 @@ def run_simulation(
                         continue
 
         asset_states: dict[str, dict] = {}
+        step_trades = exchange.trade_log[trade_cursor:]
+        volume_by_symbol: dict[str, int] = {}
+        exec_id = execution.agent_id
+        for row in step_trades:
+            qty = int(row["quantity"])
+            volume_by_symbol[row["symbol"]] = volume_by_symbol.get(row["symbol"], 0) + qty
+            if row["buyer_id"] == exec_id or row["seller_id"] == exec_id:
+                cumulative_strategy_fills += qty
         for asset in spec.assets:
             book = exchange.books[asset.ticker]
-            snapshot = book.snapshot(spec.exchange.book_depth_levels)
-            bid, ask = snapshot["best_bid_ticks"], snapshot["best_ask_ticks"]
+            # Depth frames are only consumed by the timeline. BBO is enough for
+            # the price path, circuit breaker, and summary series.
+            snapshot = book.snapshot(spec.exchange.book_depth_levels) if collect_timeline else None
+            if snapshot is not None:
+                bid, ask = snapshot["best_bid_ticks"], snapshot["best_ask_ticks"]
+            else:
+                bid, ask = book.best_bid, book.best_ask
             mid = (
                 round((bid + ask) / 2)
                 if bid is not None and ask is not None
@@ -787,27 +802,26 @@ def run_simulation(
                 and abs(book.last_price_ticks / reference - 1) * 100 >= spec.exchange.circuit_breaker_pct
             ):
                 book.halt(step, spec.exchange.halt_steps)
-            asset_states[asset.ticker] = {
-                "mid_ticks": mid,
-                "fundamental_ticks": fundamentals[asset.ticker],
-                "best_bid_ticks": bid,
-                "best_ask_ticks": ask,
-                "spread_ticks": ask - bid if bid is not None and ask is not None else None,
-                "bid_depth": sum(level["quantity"] for level in snapshot["bids"]),
-                "ask_depth": sum(level["quantity"] for level in snapshot["asks"]),
-                "volume": sum(
-                    row["quantity"]
-                    for row in exchange.trade_log[trade_cursor:]
-                    if row["symbol"] == asset.ticker
-                ),
-                "halted": book.is_halted(step),
-                "book": snapshot,
-            }
-        cumulative_strategy_fills = sum(
-            int(trade["quantity"])
-            for trade in exchange.trade_log
-            if trade["buyer_id"] == execution.agent_id or trade["seller_id"] == execution.agent_id
-        )
+            spread = ask - bid if bid is not None and ask is not None else None
+            if asset.ticker == spec.experiment.target_asset:
+                target_mid_series.append(int(mid))
+                target_spread_series.append(spread)
+            if collect_timeline:
+                assert snapshot is not None
+                asset_states[asset.ticker] = {
+                    "mid_ticks": mid,
+                    "fundamental_ticks": fundamentals[asset.ticker],
+                    "best_bid_ticks": bid,
+                    "best_ask_ticks": ask,
+                    "spread_ticks": spread,
+                    "bid_depth": sum(level["quantity"] for level in snapshot["bids"]),
+                    "ask_depth": sum(level["quantity"] for level in snapshot["asks"]),
+                    "volume": volume_by_symbol.get(asset.ticker, 0),
+                    "halted": book.is_halted(step),
+                    "book": snapshot,
+                }
+        # Strategy fills above count only this step's trades. The invariant
+        # below still compares the running total with execution.executed_quantity.
         strategy_direction = 1 if execution.side == Side.BUY else -1
         strategy_inventory = exchange.accounts[execution.agent_id].inventory.get(
             spec.experiment.target_asset, 0
@@ -828,9 +842,6 @@ def run_simulation(
             or not parent_capacity_ties
         ):
             raise AssertionError(f"execution inventory invariant failed at step {step}")
-        target_state = asset_states[spec.experiment.target_asset]
-        target_mid_series.append(int(target_state["mid_ticks"]))
-        target_spread_series.append(target_state["spread_ticks"])
         if collect_timeline:
             timeline.append(
                 {

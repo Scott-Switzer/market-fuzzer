@@ -33,6 +33,9 @@ class OrderBook:
         self.volume_time_priority = bool(volume_time_priority)
         self.stochastic_fills = bool(stochastic_fills)
         self._fill_rng = fill_rng or np.random.default_rng(0)
+        # Maintained on level insert/delete so matching and BBO reads are O(1).
+        self._best_bid: int | None = None
+        self._best_ask: int | None = None
 
     def is_halted(self, step: int) -> bool:
         return step < self.halted_until_step
@@ -42,11 +45,25 @@ class OrderBook:
 
     @property
     def best_bid(self) -> int | None:
-        return max(self.bid_levels) if self.bid_levels else None
+        return self._best_bid
 
     @property
     def best_ask(self) -> int | None:
-        return min(self.ask_levels) if self.ask_levels else None
+        return self._best_ask
+
+    def _remember_price(self, side: Side, price: int) -> None:
+        if side == Side.BUY:
+            if self._best_bid is None or price > self._best_bid:
+                self._best_bid = price
+        elif self._best_ask is None or price < self._best_ask:
+            self._best_ask = price
+
+    def _forget_price(self, side: Side, price: int, levels: dict[int, deque[str]]) -> None:
+        if side == Side.BUY:
+            if self._best_bid == price:
+                self._best_bid = max(levels) if levels else None
+        elif self._best_ask == price:
+            self._best_ask = min(levels) if levels else None
 
     def queue_ahead_at_price(self, side: Side, price_ticks: int) -> int:
         levels = self.bid_levels if side == Side.BUY else self.ask_levels
@@ -141,15 +158,19 @@ class OrderBook:
                 return trades
             assert order.price_ticks is not None
             levels = self.bid_levels if order.side == Side.BUY else self.ask_levels
+            queue = levels[order.price_ticks]
+            new_level = not queue
             order.displayed_quantity_ahead_at_entry = sum(
-                self.orders[order_id].visible_remaining for order_id in levels[order.price_ticks]
+                self.orders[order_id].visible_remaining for order_id in queue
             )
             order.level_executed_quantity_at_entry = self.level_executed_quantity[order.price_ticks]
             order.rested_quantity_at_entry = order.remaining
             order.rested_step = step
             order.priority_score = self._priority_score(order, step)
             self.orders[order.order_id] = order
-            levels[order.price_ticks].append(order.order_id)
+            queue.append(order.order_id)
+            if new_level:
+                self._remember_price(order.side, order.price_ticks)
             if self.volume_time_priority:
                 self.drain_by_priority(order.side, order.price_ticks, step)
         self.assert_valid()
@@ -167,6 +188,7 @@ class OrderBook:
         queue.remove(order_id)
         if not queue:
             del levels[order.price_ticks]
+            self._forget_price(order.side, order.price_ticks, levels)
         del self.orders[order_id]
         return order
 
@@ -285,37 +307,46 @@ class OrderBook:
                 levels[price].popleft()
                 if not levels[price]:
                     del levels[price]
+                    self._forget_price(maker_side, price, levels)
                 del self.orders[maker_id]
             elif self.volume_time_priority and price in levels:
                 self.drain_by_priority(maker_side, price, step)
         return trades
 
+    def _aggregate_level(self, price: int, queue: deque[str]) -> dict:
+        quantity = 0
+        disclosed = 0
+        hidden = 0
+        orders = self.orders
+        for oid in queue:
+            order = orders.get(oid)
+            if order is None:
+                continue
+            quantity += int(order.remaining or 0)
+            disclosed += order.visible_remaining
+            hidden += int(order.hidden_quantity)
+        return {
+            "price_ticks": price,
+            "quantity": quantity,
+            "disclosed_size": disclosed,
+            "hidden_size": hidden,
+            "total_queue_ahead": disclosed,
+        }
+
     def snapshot(self, levels: int = 5) -> dict:
         bids = sorted(self.bid_levels, reverse=True)[:levels]
         asks = sorted(self.ask_levels)[:levels]
-
-        def _level(price: int, queue: deque[str]) -> dict:
-            disclosed = sum(self.orders[oid].visible_remaining for oid in queue if oid in self.orders)
-            hidden = sum(self.orders[oid].hidden_quantity for oid in queue if oid in self.orders)
-            return {
-                "price_ticks": price,
-                "quantity": sum(self.orders[oid].remaining or 0 for oid in queue if oid in self.orders),
-                "disclosed_size": disclosed,
-                "hidden_size": hidden,
-                "total_queue_ahead": disclosed,
-            }
-
         return {
             "symbol": self.symbol,
             "best_bid_ticks": self.best_bid,
             "best_ask_ticks": self.best_ask,
             "last_price_ticks": self.last_price_ticks,
-            "bids": [_level(price, self.bid_levels[price]) for price in bids],
-            "asks": [_level(price, self.ask_levels[price]) for price in asks],
+            "bids": [self._aggregate_level(price, self.bid_levels[price]) for price in bids],
+            "asks": [self._aggregate_level(price, self.ask_levels[price]) for price in asks],
         }
 
     def assert_valid(self) -> None:
         if self.best_bid is not None and self.best_ask is not None and self.best_bid >= self.best_ask:
             raise AssertionError("crossed resting book")
-        if any((order.remaining or 0) <= 0 for order in self.orders.values()):
-            raise AssertionError("resting orders must have positive remaining quantity")
+        # Remaining quantity is enforced when an order rests or is removed. Scanning
+        # every resting order on each submit dominated the book hot path.

@@ -59,6 +59,50 @@ def test_cash_inventory_and_fees_reconcile():
     assert exchange.accounts["seller1"].inventory["NOVA"] == -100
 
 
+def test_cached_bbo_tracks_rest_fill_and_cancel():
+    exchange = make_exchange()
+    book = exchange.books["NOVA"]
+    exchange.submit(limit("b1", "buyer", Side.BUY, 100, 100), 0)
+    exchange.submit(limit("b2", "buyer", Side.BUY, 99, 50), 0)
+    exchange.submit(limit("s1", "seller1", Side.SELL, 105, 80), 0)
+    exchange.submit(limit("s2", "seller2", Side.SELL, 107, 40), 0)
+    assert book.best_bid == max(book.bid_levels)
+    assert book.best_ask == min(book.ask_levels)
+    exchange.submit(Order("m1", "buyer", "NOVA", Side.BUY, OrderType.MARKET, 80, 1), 1)
+    assert "s1" not in book.orders
+    assert book.best_ask == 107
+    assert book.best_ask == min(book.ask_levels)
+    exchange.cancel(CancelRequest("b1", "buyer", 2), "NOVA")
+    assert book.best_bid == 99
+    assert book.best_bid == max(book.bid_levels)
+    snapshot = book.snapshot(5)
+    manual_qty = sum(book.orders[oid].remaining or 0 for oid in book.bid_levels[99])
+    assert snapshot["bids"][0]["quantity"] == manual_qty
+    assert snapshot["best_bid_ticks"] == 99
+    assert snapshot["best_ask_ticks"] == 107
+
+
+def test_snapshot_aggregates_iceberg_size_in_one_pass():
+    exchange = make_exchange()
+    hidden = Order(
+        "ice",
+        "seller1",
+        "NOVA",
+        Side.SELL,
+        OrderType.LIMIT,
+        100,
+        0,
+        110,
+        display_quantity=40,
+    )
+    exchange.submit(hidden, 0)
+    level = exchange.books["NOVA"].snapshot(1)["asks"][0]
+    assert level["quantity"] == 100
+    assert level["disclosed_size"] == 40
+    assert level["hidden_size"] == 60
+    assert level["total_queue_ahead"] == level["disclosed_size"]
+
+
 def test_halt_rejects_orders_but_allows_cancel():
     exchange = make_exchange()
     exchange.submit(limit("s1", "seller1", Side.SELL, 101), 0)

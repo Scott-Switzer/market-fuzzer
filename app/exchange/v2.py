@@ -182,9 +182,18 @@ class OrderEventV2:
         return (self.exchange_time_ns, self.venue_sequence, self.event_priority, self.event_id)
 
     def canonical_dict(self) -> dict[str, Any]:
-        data = asdict(self)
-        data["kind"] = self.kind.value
-        return data
+        # Same keys and JSON as dataclasses.asdict, without a recursive copy of
+        # every ledger event at digest time. Payload values are JSON scalars/dicts.
+        return {
+            "event_id": self.event_id,
+            "kind": self.kind.value,
+            "exchange_time_ns": self.exchange_time_ns,
+            "venue_sequence": self.venue_sequence,
+            "event_priority": self.event_priority,
+            "command_id": self.command_id,
+            "order_id": self.order_id,
+            "payload": self.payload,
+        }
 
 
 @dataclass(frozen=True, slots=True)
