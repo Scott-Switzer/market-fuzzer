@@ -186,6 +186,14 @@ def _ensure_campaign(campaign_id: str) -> dict[str, Any]:
     return _campaign_registry[campaign_id]
 
 
+def lookup_public_campaign(campaign_id: str) -> dict[str, Any] | None:
+    """Public campaign view for report generation. Hidden fields stay stripped."""
+    row = _campaign_registry.get(campaign_id)
+    if row is None:
+        return None
+    return _public_campaign(row)
+
+
 @router.post("/campaigns")
 def create_campaign(body: CampaignCreateRequest) -> dict[str, Any]:
     campaign_id = _next_campaign_id(body)

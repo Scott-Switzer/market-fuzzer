@@ -9,6 +9,12 @@ from app.strategy_lab.historical.data_contracts import HistoricalDataContract
 from app.strategy_lab.historical.engine import run_historical_backtest
 
 router = APIRouter()
+_BACKTEST_STORE: dict[str, dict[str, Any]] = {}
+
+
+def clear_backtest_store() -> None:
+    """Test helper. Lookup state is process-local and deterministic by backtest id."""
+    _BACKTEST_STORE.clear()
 
 
 class HistoricalBacktestRequest(BaseModel):
@@ -69,9 +75,14 @@ def run_backtest(body: dict[str, Any]) -> HistoricalBacktestResponse:
 
     from app.strategy_lab.historical.engine import backtest_report_to_dict
 
-    return HistoricalBacktestResponse.model_validate(backtest_report_to_dict(report))
+    stored_report = backtest_report_to_dict(report)
+    _BACKTEST_STORE[str(stored_report["backtest_id"])] = stored_report
+    return HistoricalBacktestResponse.model_validate(stored_report)
 
 
-@router.get("/backtests/{backtest_id}")
-def get_backtest(backtest_id: str) -> dict[str, Any]:
-    raise HTTPException(status_code=501, detail="Backtest lookup not implemented for historical engine stub")
+@router.get("/backtests/{backtest_id}", response_model=HistoricalBacktestResponse)
+def get_backtest(backtest_id: str) -> HistoricalBacktestResponse:
+    stored = _BACKTEST_STORE.get(backtest_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="backtest not found")
+    return HistoricalBacktestResponse.model_validate(stored)
