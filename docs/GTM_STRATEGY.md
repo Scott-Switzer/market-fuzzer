@@ -30,20 +30,16 @@ Use the execution-algorithm challenge surface (POV/TWAP/adaptive policies) as th
 - **For the research team:** “Governed calibration, versioned worlds, and exportable validation reports without sending your strategy state to a third party.”
 
 ## Pricing Model
-### Launch pricing (next 24 hours)
-- **Free tier:** Local single-user repo. Unlimited local runs. Full feature set except enterprise API and remote collaboration. No credit card.
-- **Demo tier:** Instructor-led sealed evaluator and Market Fuzzer surfaces for education and recruiting. No payment required; intentionally scoped local auth.
+The shipped product is one tier: a local single-user install of this repository. Unlimited local runs. No credit card, subscription, or remote collaboration service.
 
-### Post-launch monetization
-- **Research license:** $99/month per seat for governed calibration packs, Scenario Studio, and Strategy Stress Lab on local or single-tenant appliance. Targeted at independent quants and small teams.
-- **Team license:** $399/month for 3 seats, shared experiment jobs, audit exports, and HTTP adapter registration. For prop-shop tech leads and quant teams.
-- **Enterprise/private pack:** custom pricing for private calibration evidence, firm-specific hidden worlds, on-prem/private-cloud appliance, and model-risk documentation. For larger prop shops and fintech firms.
+Instructor-led arena sessions use that same install with `ARENA_DEMO_AUTH`. That flag is local demo authentication, not a separate commercial tier.
+
+Calibration packs, Scenario Studio, Strategy Stress Lab, audit export, and HTTP adapter registration are part of the local install. Paid research, team, and private-pack licenses are not offered.
 
 ### Pricing rationale
-- Low enough to remove procurement friction for solo quants.
-- High enough to signal professional/quality tooling to enterprise buyers.
-- Self-hosted model avoids multi-tenant security objections that slow regulated finance procurement.
-- Credit-based limits or local-only enforcement eliminate runaway cloud-cost liability.
+- Self-hosting removes procurement friction for solo quants.
+- The local model avoids multi-tenant security objections that slow regulated finance procurement.
+- Local-only execution keeps cloud cost at zero.
 
 ## Distribution Model
 ### Immediate distribution (next 24 hours)
@@ -52,14 +48,14 @@ Use the execution-algorithm challenge surface (POV/TWAP/adaptive policies) as th
 - **Hackathon/judge package:** HACKATHON_RUNBOOK.md and one-command `make judge-demo` for repeatable evaluations.
 
 ### Growth distribution
-- **PLG motion:** free local repo converts to Research license once users want governed calibration packs or scalable job orchestration.
+- **PLG motion:** the local repository is the product. Governed calibration packs and experiment jobs run on that install.
 - **Community-led:** open-source core, closed enterprise extensions. Encourages quant-education communities and fintech bootcamps to adopt the instructor challenger surface as a teaching benchmark.
 - **Direct outreach:** cold outreach to quant-tech leads at firms running Python execution research; lead with deterministic evidence and sealed evaluation, not simulation prettiness.
 - **Partnership wedge:** integration-ready calibration boundary and external HTTP adapter make it easy for data vendors to certify their OHLCV/MBP/MBO feeds for use inside the platform once their license allows it.
 
 ## Launch Checklist
 1. Publish README with ICP, wedge, and 3-step demo clearly on the front page.
-2. Add pricing page in README or `docs/PRICING.md` with the three tiers above.
+2. Keep the README pricing section limited to the local self-hosted install.
 3. Create `docs/START_HERE.md` for solo quants: install → load demo strategy → run hidden evaluation → export evidence.
 4. Enforce open-core boundary in docs: deterministic engine is MIT, enterprise API extensions may move to a commercial add-on package.
 5. Prepare DM/email template for quant outreach: observable pain → sealed test → 30-minute local demo.
@@ -68,4 +64,4 @@ Use the execution-algorithm challenge surface (POV/TWAP/adaptive policies) as th
 - **“Too educational” objection:** counter with enterprise calibrations, private packs, and governance workflows.
 - **“No live data / no real broker” objection:** make calibration data and external adapter the explicit upgrade, not a missing core feature.
 - **“I can build this internally” objection:** race to governed reports, family-holdout sealed evaluators, and external-adapter ecosystem; these are operational work, not simulation code.
-- **Support burden from free tier:** local-first implementation + README-first support keeps cloud cost near zero.
+- **Support burden:** local-first implementation and README-first support keep cloud cost near zero.

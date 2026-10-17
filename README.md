@@ -14,14 +14,9 @@ Synthetic Market World is a post-backtest validation layer: deterministic, data-
 
 ## Pricing
 
-| Tier | What you get |
-|------|----------------|
-| **Free** | Full local single-user install (this repo) |
-| **Research** | $99/seat/mo — calibration packs, Scenario Studio |
-| **Team** | $399/mo — 3 seats, audit exports, adapter registration |
-| **Enterprise** | Custom — private packs / on-prem |
+Synthetic Market World ships as one tier: the local self-hosted install in this repository. That install includes strategy validation, break testing, the arena, calibration packs, scenario studio, stress lab, audit export, and the HTTP adapter. There is no paid subscription, seat license, or hosted plan.
 
-Local Free use requires no market-data subscription and no OpenAI API key for the core deterministic workflow.
+Local use requires no market-data subscription and no OpenAI API key for the core deterministic workflow.
 
 ## Three-step demo
 
